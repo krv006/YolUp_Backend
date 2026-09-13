@@ -60,3 +60,20 @@ class SendNotificationSerializer(serializers.Serializer):
     description = serializers.CharField()
     target_type = serializers.ChoiceField(choices=Notification.Target.choices)
     user_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class PushSubscribeSerializer(serializers.Serializer):
+    """Brauzerning `PushSubscription.toJSON()` shakli."""
+
+    endpoint = serializers.URLField(max_length=500)
+    keys = serializers.DictField(child=serializers.CharField())
+
+    def validate_keys(self, value):
+        missing = {'p256dh', 'auth'} - set(value)
+        if missing:
+            raise serializers.ValidationError(f"Kalitlar yetishmayapti: {sorted(missing)}")
+        return value
+
+
+class PushUnsubscribeSerializer(serializers.Serializer):
+    endpoint = serializers.URLField(max_length=500)

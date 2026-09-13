@@ -249,6 +249,26 @@ GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')
 # Tekshiruv fonda (thread) yuradi; testlar False qilib sinxron ishlatadi
 HOMEWORK_CHECK_ASYNC = True
 
+# Web Push (ilova/tab yopiq bo'lganda ham bildirishnoma) — apps/notifications.
+# DIQQAT: pastdagi kalitlar faqat DEV/TEST uchun (bir marta generatsiya
+# qilingan, haqiqiy foydalanuvchiga hech qachon push yuborilmagan juftlik).
+# PROD'da albatta o'z kalitingizni generatsiya qilib, env orqali bering:
+#   python -c "from py_vapid import Vapid02; v=Vapid02(); v.generate_keys()"
+VAPID_PUBLIC_KEY = os.getenv(
+    'VAPID_PUBLIC_KEY',
+    'BIPfv2YHJvtqG4Bza0u2VeOKl2PSX7SMOFIld5S-IWnilx1G6LiUjz9qSH7_3Rgp0D1hl6v3zBQ0T3JWO58gOLo',
+)
+VAPID_PRIVATE_KEY = os.getenv(
+    'VAPID_PRIVATE_KEY',
+    '-----BEGIN PRIVATE KEY-----\n'
+    'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgVOCUCEb8935Xkyff\n'
+    'A5Sk3WURt3/fjnGyoG6PblJ+OayhRANCAASD379mByb7ahuAc2tLtlXjipdj0l+0\n'
+    'jDhSJXeUviFp4pcdRui4lI8/akh+/90YKdA9YZer98wUNE9yVjufIDi6\n'
+    '-----END PRIVATE KEY-----\n',
+)
+# Push protokoli talabi — muammo bo'lsa push xizmati shu manzilga yozadi
+VAPID_CLAIM_EMAIL = os.getenv('VAPID_CLAIM_EMAIL', 'mailto:admin@thesofmebel.uz')
+
 # 'uz' — manba til: kodda yozilgan xato/tekshiruv matnlarining o'zi shu (izoh
 # yozilmagan bo'lsa ham gettext ularni "tarjima kerak emas" deb qabul qiladi).
 # Frontend `Accept-Language: ru`/`en` yuborsa, LocaleMiddleware navbatdagi

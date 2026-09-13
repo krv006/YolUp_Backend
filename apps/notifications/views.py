@@ -1,4 +1,5 @@
 """Bildirishnoma views — yupqa qatlam: HTTP <-> service/selector."""
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -12,6 +13,8 @@ from .models import Notification
 from .serializers import (
     InboxItemSerializer,
     NotificationSerializer,
+    PushSubscribeSerializer,
+    PushUnsubscribeSerializer,
     RecipientStatusSerializer,
     SendNotificationSerializer,
     SentNotificationSerializer,
@@ -71,3 +74,32 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     @action(detail=False, url_path='unread-count')
     def unread_count(self, request):
         return Response({'count': selectors.unread_count(request.user)})
+
+    @action(detail=False, url_path='push/vapid-key')
+    def vapid_key(self, request):
+        """Frontend `PushManager.subscribe()` chaqirishdan oldin shu ochiq
+        kalitni so'raydi (`applicationServerKey`)."""
+        return Response({'public_key': settings.VAPID_PUBLIC_KEY})
+
+    @action(detail=False, methods=['post'], url_path='push/subscribe')
+    def push_subscribe(self, request):
+        """Brauzer `subscription.toJSON()` natijasini shu yerga yuboradi —
+        {"endpoint": "...", "keys": {"p256dh": "...", "auth": "..."}}."""
+        serializer = PushSubscribeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.save_push_subscription(
+            user=request.user,
+            endpoint=serializer.validated_data['endpoint'],
+            p256dh=serializer.validated_data['keys']['p256dh'],
+            auth=serializer.validated_data['keys']['auth'],
+        )
+        return Response({'ok': True}, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='push/unsubscribe')
+    def push_unsubscribe(self, request):
+        serializer = PushUnsubscribeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        removed = services.remove_push_subscription(
+            user=request.user, endpoint=serializer.validated_data['endpoint'],
+        )
+        return Response({'removed': removed})
