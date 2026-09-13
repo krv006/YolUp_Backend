@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from apps.accounts.serializers import UserSerializer
+from apps.quizzes.models import Quiz
 
 from . import selectors
 from .models import Attendance, Course, Enrollment, Lesson, LessonRating
@@ -46,13 +47,21 @@ class LessonSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
     avg_rating = serializers.SerializerMethodField()
     rating_count = serializers.SerializerMethodField()
+    # Mavjud testni shu darsga biriktirish — yozish uchun (Quiz'ning o'zida
+    # `lesson` FK bor, Lesson'da emas, shuning uchun bu maydon Lesson modelida
+    # yo'q — `views.perform_create`/`perform_update` uni alohida qo'llaydi).
+    quiz = serializers.PrimaryKeyRelatedField(
+        queryset=Quiz.objects.all(), required=False, allow_null=True, write_only=True,
+    )
+    # O'qish uchun — hozir shu darsga biriktirilgan test (bo'lsa) id'si.
+    quiz_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
         fields = [
             'id', 'course', 'course_title', 'title', 'starts_at',
             'duration_min', 'status', 'room_name', 'created_at',
-            'avg_rating', 'rating_count',
+            'avg_rating', 'rating_count', 'quiz', 'quiz_id',
         ]
         read_only_fields = ['room_name', 'status']
 
@@ -63,10 +72,27 @@ class LessonSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(_("Dars boshlanish vaqti o'tgan bo'lishi mumkin emas."))
         return value
 
+    def validate(self, attrs):
+        quiz = attrs.get('quiz')
+        if quiz is not None:
+            course = attrs.get('course') or (self.instance.course if self.instance else None)
+            if course is not None and quiz.course_id != course.id:
+                raise serializers.ValidationError({'quiz': _("Bu test boshqa kursga tegishli.")})
+            target_lesson_id = self.instance.id if self.instance else None
+            if quiz.lesson_id is not None and quiz.lesson_id != target_lesson_id:
+                raise serializers.ValidationError(
+                    {'quiz': _('Bu test allaqachon boshqa darsga biriktirilgan.')},
+                )
+        return attrs
+
     def get_avg_rating(self, obj) -> float | None:
         from django.db.models import Avg
         result = obj.ratings.aggregate(avg=Avg('stars'))['avg']
         return round(result, 1) if result else None
+
+    def get_quiz_id(self, obj) -> str | None:
+        quiz = obj.quizzes.first()
+        return str(quiz.id) if quiz else None
 
     def get_rating_count(self, obj) -> int:
         return obj.ratings.count()

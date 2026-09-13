@@ -493,6 +493,137 @@ class CourseLessonFlowTests(APITestCase):
         self.assertEqual(resp.status_code, 404)
 
 
+class LessonQuizLinkTests(APITestCase):
+    """Dars yaratish/tahrirlashning o'zidan mavjud testni biriktirish."""
+
+    def setUp(self):
+        register(self.client, 'lq_teacher', 'teacher')
+        self.teacher_token = login(self.client, 'lq_teacher')
+        self.auth(self.teacher_token)
+        self.course_id = self.client.post(
+            '/api/v1/courses/', {'title': 'Fizika', 'subject': 'Fizika'}
+        ).json()['id']
+
+    def auth(self, token):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def create_quiz(self, course_id=None, lesson_id=None):
+        payload = {
+            'course': course_id or self.course_id,
+            'title': 'Bob 1 testi',
+            'questions': [{
+                'text': '2+2=?', 'points': 1,
+                'options': [{'text': '4', 'is_correct': True}, {'text': '5', 'is_correct': False}],
+            }],
+        }
+        if lesson_id:
+            payload['lesson'] = lesson_id
+        return self.client.post('/api/v1/quizzes/', payload, format='json').json()
+
+    def test_create_lesson_with_existing_unlinked_quiz(self):
+        quiz = self.create_quiz()
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        resp = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars 1',
+            'starts_at': starts_at, 'duration_min': 45, 'quiz': quiz['id'],
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.json()['quiz_id'], quiz['id'])
+
+        from apps.quizzes.models import Quiz
+        self.assertEqual(str(Quiz.objects.get(pk=quiz['id']).lesson_id), resp.json()['id'])
+
+    def test_create_lesson_without_quiz_leaves_quiz_id_null(self):
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        resp = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars 2',
+            'starts_at': starts_at, 'duration_min': 45,
+        })
+        self.assertEqual(resp.status_code, 201)
+        self.assertIsNone(resp.json()['quiz_id'])
+
+    def test_cannot_attach_quiz_already_linked_to_another_lesson(self):
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        lesson1 = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars A',
+            'starts_at': starts_at, 'duration_min': 45,
+        }).json()
+        quiz = self.create_quiz(lesson_id=lesson1['id'])  # allaqachon Dars A ga bog'langan
+
+        resp = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars B',
+            'starts_at': starts_at, 'duration_min': 45, 'quiz': quiz['id'],
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_cannot_attach_quiz_from_another_course(self):
+        other_course_id = self.client.post(
+            '/api/v1/courses/', {'title': 'Kimyo', 'subject': 'Kimyo'}
+        ).json()['id']
+        quiz = self.create_quiz(course_id=other_course_id)
+
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        resp = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars 3',
+            'starts_at': starts_at, 'duration_min': 45, 'quiz': quiz['id'],
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    def test_attach_quiz_to_existing_lesson_via_update(self):
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        lesson = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars 4',
+            'starts_at': starts_at, 'duration_min': 45,
+        }).json()
+        quiz = self.create_quiz()
+
+        resp = self.client.patch(f'/api/v1/lessons/{lesson["id"]}/', {'quiz': quiz['id']})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['quiz_id'], quiz['id'])
+
+    def test_detach_quiz_from_lesson_via_update(self):
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        lesson = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars 5',
+            'starts_at': starts_at, 'duration_min': 45,
+        }).json()
+        quiz = self.create_quiz(lesson_id=lesson['id'])
+        self.assertEqual(
+            self.client.get(f'/api/v1/lessons/{lesson["id"]}/').json()['quiz_id'], quiz['id'],
+        )
+
+        resp = self.client.patch(f'/api/v1/lessons/{lesson["id"]}/', {'quiz': None})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.json()['quiz_id'])
+
+        from apps.quizzes.models import Quiz
+        self.assertIsNone(Quiz.objects.get(pk=quiz['id']).lesson_id)
+
+    def test_reattaching_quiz_moves_it_from_previous_lesson(self):
+        """Bitta test faqat bitta darsga tegishli bo'lishi mumkin — mos
+        yozuvlarni tozalash uchun avval o'zi biriktirilgan darsdan ajratiladi,
+        keyin yangisiga qo'shiladi (bir xil dars uchun update orqali)."""
+        starts_at = (timezone.now() + timedelta(days=1)).isoformat()
+        lesson1 = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars X',
+            'starts_at': starts_at, 'duration_min': 45,
+        }).json()
+        lesson2 = self.client.post('/api/v1/lessons/', {
+            'course': self.course_id, 'title': 'Dars Y',
+            'starts_at': starts_at, 'duration_min': 45,
+        }).json()
+        quiz = self.create_quiz(lesson_id=lesson1['id'])
+
+        # lesson1'dan ajratib, lesson2'ga biriktiramiz.
+        resp = self.client.patch(f'/api/v1/lessons/{lesson1["id"]}/', {'quiz': None})
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.patch(f'/api/v1/lessons/{lesson2["id"]}/', {'quiz': quiz['id']})
+        self.assertEqual(resp.status_code, 200)
+
+        self.assertIsNone(self.client.get(f'/api/v1/lessons/{lesson1["id"]}/').json()['quiz_id'])
+        self.assertEqual(self.client.get(f'/api/v1/lessons/{lesson2["id"]}/').json()['quiz_id'], quiz['id'])
+
+
 class FocusSummaryTests(APITestCase):
     """Chiqish-qaytish tahlili: juftlash, jami/eng uzun vaqt, taymlayn."""
 

@@ -186,6 +186,18 @@ class LessonViewSet(viewsets.ModelViewSet):
             teacher=self.request.user, course=course, request=self.request, **data,
         )
 
+    def perform_update(self, serializer):
+        # `quiz` Lesson modelining o'z maydoni emas (Quiz'ning `lesson` FK'si
+        # orqali teskari bog'lanadi) — shuning uchun `serializer.save()`dan
+        # OLDIN chiqarib olib, alohida service orqali qo'llaymiz.
+        has_quiz = 'quiz' in serializer.validated_data
+        quiz = serializer.validated_data.pop('quiz', None)
+        lesson = serializer.save()
+        if has_quiz:
+            services.update_lesson_quiz(
+                teacher=self.request.user, lesson=lesson, quiz=quiz, request=self.request,
+            )
+
     @action(detail=True, methods=['post'])
     def finish(self, request, pk=None):
         """Darsni yakunlash. `recording_title` — video yozuvga o'qituvchi

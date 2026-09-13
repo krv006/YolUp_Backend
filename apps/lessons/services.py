@@ -24,12 +24,40 @@ def create_course(*, teacher: User, request=None, **data) -> Course:
     return course
 
 
+def _set_lesson_quiz(*, lesson: Lesson, quiz) -> None:
+    """`quiz=None` — hozir shu darsga biriktirilgan testni (bo'lsa) ajratadi.
+    Boshqa test berilsa — eskisi ajratilib, yangisi biriktiriladi. Serializer
+    (`LessonSerializer.validate`) allaqachon tekshirgan: berilgan test bo'sh
+    (`lesson=None`) yoki aynan shu darsga tegishli bo'lishi shart edi."""
+    from apps.quizzes.models import Quiz
+
+    current = Quiz.objects.filter(lesson=lesson).first()
+    if current is not None and current != quiz:
+        current.lesson = None
+        current.save(update_fields=['lesson'])
+    if quiz is not None and quiz.lesson_id != lesson.id:
+        quiz.lesson = lesson
+        quiz.save(update_fields=['lesson'])
+
+
 @transaction.atomic
-def schedule_lesson(*, teacher: User, course: Course, request=None, **data) -> Lesson:
+def schedule_lesson(*, teacher: User, course: Course, request=None, quiz=None, **data) -> Lesson:
     if course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs egasi dars qo'sha oladi."))
     lesson = Lesson.objects.create(course=course, **data)
+    if quiz is not None:
+        _set_lesson_quiz(lesson=lesson, quiz=quiz)
     audit.record(action='lesson.schedule', actor=teacher, target=lesson, request=request)
+    return lesson
+
+
+@transaction.atomic
+def update_lesson_quiz(*, teacher: User, lesson: Lesson, quiz, request=None) -> Lesson:
+    """Mavjud darsga testni biriktirish/ajratish (`quiz=None`) — tahrirlashda."""
+    if lesson.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs egasi darsni tahrirlay oladi."))
+    _set_lesson_quiz(lesson=lesson, quiz=quiz)
+    audit.record(action='lesson.set_quiz', actor=teacher, target=lesson, request=request)
     return lesson
 
 
