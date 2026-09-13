@@ -242,6 +242,50 @@ class ApproveTeacherView(APIView):
         return Response(UserSerializer(teacher).data)
 
 
+class TeacherStatsDetailView(APIView):
+    """Admin: bitta o'qituvchi uchun to'liq statistika — reyting, kurslar/
+    darslar/o'quvchilar soni, ishonchlilik va baholar taqsimoti (admin panel)."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def get(self, request, pk):
+        teacher = services.get_teacher(teacher_id=pk)
+        return Response(selectors.teacher_detail_stats(teacher))
+
+
+class TeacherRatingsListView(generics.ListAPIView):
+    """Admin: bitta o'qituvchining barcha darslariga qo'yilgan baholari
+    (o'quvchi fikr-mulohazasi bilan) — o'quvchi tomonidan berilgan reytingni
+    ko'rish uchun."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def get_serializer_class(self):
+        from apps.lessons.serializers import LessonRatingSerializer
+        return LessonRatingSerializer
+
+    def get_queryset(self):
+        from apps.lessons import selectors as lesson_selectors
+
+        teacher = services.get_teacher(teacher_id=self.kwargs['pk'])
+        return lesson_selectors.ratings_for_teacher(teacher)
+
+
+class MyRatingsListView(generics.ListAPIView):
+    """O'qituvchi o'ziga qo'yilgan baholarni (o'quvchi yozgan fikr bilan) ko'radi."""
+
+    permission_classes = [RequirePerm('rating.view_own')]
+
+    def get_serializer_class(self):
+        from apps.lessons.serializers import LessonRatingSerializer
+        return LessonRatingSerializer
+
+    def get_queryset(self):
+        from apps.lessons import selectors as lesson_selectors
+
+        return lesson_selectors.ratings_for_teacher(self.request.user)
+
+
 class CertificateListCreateView(generics.ListCreateAPIView):
     """O'qituvchi profiliga sertifikat yuklaydi — faqat o'ziniki."""
 

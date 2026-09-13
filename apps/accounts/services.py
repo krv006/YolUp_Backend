@@ -30,13 +30,19 @@ def register_user(*, username: str, password: str, role: str, request=None, **ex
     return user
 
 
+def get_teacher(*, teacher_id) -> User:
+    """Admin ko'rinishlarida (statistika/baholar) qayta-qayta kerak bo'lgan
+    "topilmasa 404" qidiruvi — `approve_teacher` bilan bir xil xato xabari."""
+    try:
+        return User.objects.get(pk=teacher_id, role=User.Role.TEACHER)
+    except (User.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_("O'qituvchi topilmadi."))
+
+
 @transaction.atomic
 def approve_teacher(*, admin: User, teacher_id, request=None) -> User:
     """Admin tomonidan tasdiqlash — shundan keyin o'qituvchiga hamma narsa ochiladi."""
-    try:
-        teacher = User.objects.get(pk=teacher_id, role=User.Role.TEACHER)
-    except (User.DoesNotExist, ValueError, TypeError):
-        raise NotFound(_("O'qituvchi topilmadi."))
+    teacher = get_teacher(teacher_id=teacher_id)
     teacher.is_approved = True
     teacher.save(update_fields=['is_approved'])
     audit.record(action='teacher.approve', actor=admin, target=teacher, request=request)

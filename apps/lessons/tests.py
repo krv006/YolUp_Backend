@@ -397,6 +397,101 @@ class CourseLessonFlowTests(APITestCase):
         resp = self.client.get('/api/v1/auth/teachers/')
         self.assertEqual(resp.status_code, 403)
 
+    def test_teacher_sees_own_ratings_with_student_feedback(self):
+        self.auth(self.parent_token)
+        self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
+        self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')
+        self.auth(self.child_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/rate/', {'stars': 4, 'description': 'Yaxshi dars edi'})
+
+        self.auth(self.teacher_token)
+        resp = self.client.get('/api/v1/auth/me/ratings/')
+        self.assertEqual(resp.status_code, 200)
+        results = resp.json()['results'] if isinstance(resp.json(), dict) else resp.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['stars'], 4)
+        self.assertEqual(results[0]['description'], 'Yaxshi dars edi')
+        self.assertEqual(results[0]['student']['username'], 's1')
+
+    def test_student_and_parent_cannot_view_own_ratings_endpoint(self):
+        """`/auth/me/ratings/` faqat o'qituvchiga tegishli — talaba/ota-ona
+        uchun ma'nosiz (ular baho qo'yadi, olmaydi)."""
+        self.auth(self.child_token)
+        self.assertEqual(self.client.get('/api/v1/auth/me/ratings/').status_code, 403)
+        self.auth(self.parent_token)
+        self.assertEqual(self.client.get('/api/v1/auth/me/ratings/').status_code, 403)
+
+    def test_admin_sees_teacher_detail_stats(self):
+        from apps.accounts.models import User
+
+        User.objects.create_user(username='admin2', password=PASSWORD, role=User.Role.ADMIN)
+        admin_token = login(self.client, 'admin2')
+
+        self.auth(self.parent_token)
+        self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
+        self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')
+        self.auth(self.child_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/rate/', {'stars': 5})
+
+        teacher_id = User.objects.get(username='t1').id
+        self.auth(admin_token)
+        resp = self.client.get(f'/api/v1/auth/teachers/{teacher_id}/stats/')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body['avg_rating'], 5.0)
+        self.assertEqual(body['rating_count'], 1)
+        self.assertEqual(body['rating_breakdown'], {'1': 0, '2': 0, '3': 0, '4': 0, '5': 1})
+        self.assertEqual(body['course_count'], 1)
+        self.assertEqual(body['student_count'], 1)
+        self.assertEqual(body['lessons_finished'], 1)
+        self.assertEqual(body['lessons_cancelled'], 0)
+        self.assertEqual(body['reliability'], 100.0)
+
+    def test_admin_sees_teacher_ratings_list(self):
+        from apps.accounts.models import User
+
+        User.objects.create_user(username='admin3', password=PASSWORD, role=User.Role.ADMIN)
+        admin_token = login(self.client, 'admin3')
+
+        self.auth(self.parent_token)
+        self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
+        self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')
+        self.auth(self.child_token)
+        self.client.post(f'/api/v1/lessons/{self.lesson_id}/rate/', {'stars': 2, 'description': "Zerikarli o'tdi"})
+
+        teacher_id = User.objects.get(username='t1').id
+        self.auth(admin_token)
+        resp = self.client.get(f'/api/v1/auth/teachers/{teacher_id}/ratings/')
+        self.assertEqual(resp.status_code, 200)
+        results = resp.json()['results'] if isinstance(resp.json(), dict) else resp.json()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['stars'], 2)
+        self.assertEqual(results[0]['description'], "Zerikarli o'tdi")
+        self.assertEqual(results[0]['student']['username'], 's1')
+
+    def test_non_admin_cannot_view_other_teacher_stats_or_ratings(self):
+        from apps.accounts.models import User
+
+        teacher_id = User.objects.get(username='t1').id
+        self.auth(self.child_token)
+        self.assertEqual(self.client.get(f'/api/v1/auth/teachers/{teacher_id}/stats/').status_code, 403)
+        self.assertEqual(self.client.get(f'/api/v1/auth/teachers/{teacher_id}/ratings/').status_code, 403)
+
+    def test_teacher_stats_404_for_non_teacher_id(self):
+        from apps.accounts.models import User
+
+        User.objects.create_user(username='admin4', password=PASSWORD, role=User.Role.ADMIN)
+        admin_token = login(self.client, 'admin4')
+        self.auth(admin_token)
+        resp = self.client.get(f'/api/v1/auth/teachers/{self.child_id}/stats/')
+        self.assertEqual(resp.status_code, 404)
+
 
 class FocusSummaryTests(APITestCase):
     """Chiqish-qaytish tahlili: juftlash, jami/eng uzun vaqt, taymlayn."""

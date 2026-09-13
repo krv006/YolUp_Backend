@@ -53,6 +53,47 @@ def teacher_rating_stats(teacher: User) -> dict:
     }
 
 
+def teacher_detail_stats(teacher: User) -> dict:
+    """Bitta o'qituvchi uchun to'liq statistika (admin panel) — reyting
+    (`teacher_rating_stats`) ustiga kurslar/darslar/o'quvchilar soni va
+    baholar taqsimoti (1-5 yulduz bo'yicha necha marta qo'yilgani) qo'shiladi.
+    """
+    from django.db.models import Count
+
+    from apps.lessons.models import Course, Enrollment, Lesson, LessonRating
+
+    course_ids = list(Course.objects.filter(teacher=teacher, is_active=True).values_list('id', flat=True))
+    student_count = User.objects.filter(
+        role=User.Role.STUDENT,
+        enrollments__course_id__in=course_ids,
+        enrollments__status=Enrollment.Status.APPROVED,
+    ).distinct().count()
+
+    lessons = Lesson.objects.filter(course_id__in=course_ids)
+    finished = lessons.filter(status=Lesson.Status.FINISHED).count()
+    cancelled = lessons.filter(status=Lesson.Status.CANCELLED).count()
+    scheduled = lessons.filter(status=Lesson.Status.SCHEDULED).count()
+    reliability = round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None
+
+    breakdown = {str(i): 0 for i in range(1, 6)}
+    for row in (
+        LessonRating.objects.filter(lesson__course__teacher=teacher, lesson__is_deleted=False)
+        .values('stars').annotate(count=Count('id'))
+    ):
+        breakdown[str(row['stars'])] = row['count']
+
+    return {
+        **teacher_rating_stats(teacher),
+        'rating_breakdown': breakdown,
+        'course_count': len(course_ids),
+        'student_count': student_count,
+        'lessons_finished': finished,
+        'lessons_cancelled': cancelled,
+        'lessons_scheduled': scheduled,
+        'reliability': reliability,
+    }
+
+
 def teacher_list() -> QuerySet[User]:
     """Admin uchun: barcha o'qituvchilar (reyting statistikasi bilan, UserSerializer orqali)."""
     return User.objects.filter(role=User.Role.TEACHER).order_by('first_name', 'last_name')

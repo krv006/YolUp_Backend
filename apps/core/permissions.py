@@ -39,6 +39,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'child.create',
         'quiz.create', 'quiz.view',
         'certificate.manage',
+        'rating.view_own',
     },
     STUDENT: {
         'course.view', 'course.enroll',

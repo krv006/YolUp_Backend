@@ -7,7 +7,7 @@ from django.db.models import QuerySet
 
 from apps.accounts.models import ParentChildLink, User
 
-from .models import Attendance, Course, Enrollment, Lesson
+from .models import Attendance, Course, Enrollment, Lesson, LessonRating
 
 _APPROVED = ParentChildLink.Status.APPROVED
 _ENROLLED = Enrollment.Status.APPROVED
@@ -25,6 +25,15 @@ def courses_for(user: User) -> QuerySet[Course]:
             enrollments__student__parent_links__status=_APPROVED,
         ).distinct()
     return Course.objects.all()
+
+
+def ratings_for_teacher(teacher: User) -> QuerySet[LessonRating]:
+    """O'qituvchining BARCHA darslariga qo'yilgan baholar (talaba fikri bilan) —
+    eng yangisi birinchi. O'qituvchining o'z profilida ham, admin panelida
+    ham ishlatiladi (apps.accounts.views)."""
+    return LessonRating.objects.filter(
+        lesson__course__teacher=teacher, lesson__is_deleted=False,
+    ).select_related('lesson', 'lesson__course', 'student')
 
 
 def lessons_for(user: User) -> QuerySet[Lesson]:
