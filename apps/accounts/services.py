@@ -15,6 +15,43 @@ from apps.core import audit
 from .models import Consent, ParentChildLink, TeacherCertificate, User
 
 
+def _notify_admins_of_pending_teacher(teacher: User, request=None) -> None:
+    """Yangi o'qituvchi ro'yxatdan o'tganda BARCHA adminlarga bildirishnoma —
+    aks holda admin tasdiqlash kerakligini bilishi uchun ro'yxatni o'zi
+    tekshirib turishga majbur bo'lardi."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    full_name = teacher.get_full_name() or teacher.username
+    admin_ids = User.objects.filter(
+        role__in=[User.Role.ADMIN, User.Role.SUPER_ADMIN],
+    ).values_list('id', flat=True)
+    for admin_id in admin_ids:
+        send_notification(
+            sender=teacher,
+            description=_("Yangi o'qituvchi ro'yxatdan o'tdi: %(name)s (@%(username)s) — tasdiqlash kerak.") % {
+                'name': full_name, 'username': teacher.username,
+            },
+            target_type=Notification.Target.USER, user_id=admin_id,
+            kind='teacher_pending_approval', link_type='teacher', link_id=str(teacher.id),
+            request=request,
+        )
+
+
+def _notify_teacher_approved(teacher: User, request=None) -> None:
+    """Tasdiqlangandan keyin o'qituvchining o'ziga xabar — endi kurs/dars
+    ochish kabi barcha amallar ochilganini bilishi uchun."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    send_notification(
+        sender=teacher,
+        description=_("Sizning hisobingiz admin tomonidan tasdiqlandi — endi kurs va dars yaratishingiz mumkin."),
+        target_type=Notification.Target.USER, user_id=teacher.id,
+        kind='teacher_approved', request=request,
+    )
+
+
 @transaction.atomic
 def register_user(*, username: str, password: str, role: str, request=None, **extra) -> User:
     if role not in (User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT):
@@ -27,6 +64,8 @@ def register_user(*, username: str, password: str, role: str, request=None, **ex
     user.set_password(password)
     user.save()
     audit.record(action='auth.register', actor=user, target=user, meta={'role': role}, request=request)
+    if role == User.Role.TEACHER:
+        transaction.on_commit(lambda: _notify_admins_of_pending_teacher(user, request=request))
     return user
 
 
@@ -46,6 +85,7 @@ def approve_teacher(*, admin: User, teacher_id, request=None) -> User:
     teacher.is_approved = True
     teacher.save(update_fields=['is_approved'])
     audit.record(action='teacher.approve', actor=admin, target=teacher, request=request)
+    transaction.on_commit(lambda: _notify_teacher_approved(teacher, request=request))
     return teacher
 
 

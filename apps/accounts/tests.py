@@ -196,6 +196,68 @@ class TeacherActivationTests(APITestCase):
             self.client.post('/api/v1/courses/', {'title': 'Algebra'}).status_code, 201,
         )
 
+    def test_admin_is_notified_when_teacher_registers(self):
+        from apps.notifications.models import NotificationRecipient
+
+        admin = User.objects.create_user(username='admin_notif', password=PASSWORD, role=User.Role.ADMIN)
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post('/api/v1/auth/register/', {
+                'username': 'notifteacher', 'password': PASSWORD, 'role': 'teacher',
+            })
+        self.assertEqual(resp.status_code, 201)
+        recipients = NotificationRecipient.objects.filter(user=admin).select_related('notification')
+        self.assertEqual(len(recipients), 1)
+        self.assertIn('notifteacher', recipients[0].notification.description)
+        self.assertEqual(recipients[0].notification.kind, 'teacher_pending_approval')
+
+    def test_all_admins_notified_but_not_other_teachers(self):
+        from apps.notifications.models import NotificationRecipient
+
+        admin1 = User.objects.create_user(username='admin_a', password=PASSWORD, role=User.Role.ADMIN)
+        admin2 = User.objects.create_user(username='admin_b', password=PASSWORD, role=User.Role.SUPER_ADMIN)
+        register(self.client, 'bystander_teacher', 'teacher')
+        bystander = User.objects.get(username='bystander_teacher')
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post('/api/v1/auth/register/', {
+                'username': 'scopeteacher', 'password': PASSWORD, 'role': 'teacher',
+            })
+
+        self.assertTrue(NotificationRecipient.objects.filter(user=admin1).exists())
+        self.assertTrue(NotificationRecipient.objects.filter(user=admin2).exists())
+        self.assertFalse(NotificationRecipient.objects.filter(user=bystander).exists())
+
+    def test_student_and_parent_registration_do_not_notify_admins(self):
+        from apps.notifications.models import NotificationRecipient
+
+        admin = User.objects.create_user(username='admin_noteach', password=PASSWORD, role=User.Role.ADMIN)
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post('/api/v1/auth/register/', {
+                'username': 'juststudent', 'password': PASSWORD, 'role': 'student',
+            })
+            self.client.post('/api/v1/auth/register/', {
+                'username': 'justparent', 'password': PASSWORD, 'role': 'parent',
+            })
+        self.assertFalse(NotificationRecipient.objects.filter(user=admin).exists())
+
+    def test_teacher_is_notified_when_approved(self):
+        from apps.notifications.models import NotificationRecipient
+
+        self.client.post('/api/v1/auth/register/', {
+            'username': 'approveteacher', 'password': PASSWORD, 'role': 'teacher',
+        })
+        teacher = User.objects.get(username='approveteacher')
+        User.objects.create_user(username='admin_approve', password=PASSWORD, role=User.Role.ADMIN)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "admin_approve")}')
+
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.client.post(f'/api/v1/auth/teachers/{teacher.id}/approve/')
+        self.assertEqual(resp.status_code, 200)
+
+        recipients = NotificationRecipient.objects.filter(user=teacher).select_related('notification')
+        self.assertEqual(len(recipients), 1)
+        self.assertEqual(recipients[0].notification.kind, 'teacher_approved')
+
 
 class LinkFlowTests(APITestCase):
     def setUp(self):
