@@ -1,6 +1,9 @@
 """Bildirishnoma service layer — admin xabar yuborishi, o'qildi belgilash."""
+import json
+import logging
 import re
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -10,7 +13,9 @@ from apps.accounts.models import User
 from apps.core import audit
 
 from . import realtime
-from .models import Notification, NotificationRecipient
+from .models import Notification, NotificationRecipient, PushSubscription
+
+logger = logging.getLogger('apps')
 
 # Rich editor (CKEditor) HTML'iga ruxsat etilgan teglar — XSS'dan himoya.
 # Rasm/fayl yo'q (FRD: hozircha faqat formatlangan matn) — shuning uchun
@@ -63,6 +68,7 @@ def send_notification(
     ])
 
     transaction.on_commit(lambda: realtime.broadcast_notification(notification, recipients))
+    transaction.on_commit(lambda: send_web_push(notification, recipients))
     audit.record(
         action='notification.send', actor=sender, target=notification,
         meta={'target_type': target_type, 'recipient_count': len(recipients)}, request=request,
@@ -79,3 +85,63 @@ def mark_read(*, user: User, notification_id) -> NotificationRecipient:
         recipient.read_at = timezone.now()
         recipient.save(update_fields=['read_at'])
     return recipient
+
+
+# ── Web Push — ilova/tab yopiq bo'lganda ham bildirishnoma ─────────────────
+
+def save_push_subscription(*, user: User, endpoint: str, p256dh: str, auth: str) -> PushSubscription:
+    """Brauzer `PushManager.subscribe()` natijasini saqlaydi. `endpoint`
+    UNIQUE — bitta brauzer nusxasi qayta obuna bo'lsa, eski qatorning o'zi
+    yangilanadi (boshqa foydalanuvchiga o'tib ketmasin — masalan umumiy
+    kompyuterda chiqib, boshqa hisobga kirilsa)."""
+    sub, _created = PushSubscription.objects.update_or_create(
+        endpoint=endpoint, defaults={'user': user, 'p256dh': p256dh, 'auth': auth},
+    )
+    return sub
+
+
+def remove_push_subscription(*, user: User, endpoint: str) -> bool:
+    deleted, _ = PushSubscription.objects.filter(user=user, endpoint=endpoint).delete()
+    return bool(deleted)
+
+
+def send_web_push(notification: Notification, recipients: list[User]) -> None:
+    """Har qabul qiluvchining barcha obuna qilingan qurilmalariga push
+    yuboradi — ilova/tab yopiq bo'lsa ham operatsion tizim darajasida
+    bildirishnoma chiqishi uchun. Best-effort: bitta obuna muvaffaqiyatsiz
+    bo'lsa ham (masalan brauzer obunani bekor qilgan — 404/410), boshqalarga
+    ta'sir qilmaydi; eskirgan obuna avtomatik o'chiriladi."""
+    from pywebpush import WebPushException, webpush
+
+    user_ids = [u.id for u in recipients]
+    subs = PushSubscription.objects.filter(user_id__in=user_ids)
+    if not subs:
+        return
+    payload = json.dumps({
+        'title': 'Fokus',
+        'body': notification.description[:200],
+        'kind': notification.kind,
+        'link_type': notification.link_type,
+        'link_id': notification.link_id,
+    })
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={
+                    'endpoint': sub.endpoint,
+                    'keys': {'p256dh': sub.p256dh, 'auth': sub.auth},
+                },
+                data=payload,
+                vapid_private_key=settings.VAPID_PRIVATE_KEY,
+                vapid_claims={'sub': settings.VAPID_CLAIM_EMAIL},
+            )
+        except WebPushException as exc:
+            status_code = getattr(exc.response, 'status_code', None)
+            if status_code in (404, 410):
+                # Brauzer obunani bekor qilgan (masalan foydalanuvchi ruxsatni
+                # olib tashlagan) — eskirgan qatorni o'chirib qo'yamiz.
+                sub.delete()
+            else:
+                logger.warning('web push failed (%s): %s', status_code, exc)
+        except Exception:  # noqa: BLE001 — push umuman ishlamasa ham notification o'zi saqlanib qolgan
+            logger.exception('web push failed')

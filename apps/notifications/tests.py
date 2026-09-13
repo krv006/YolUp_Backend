@@ -117,3 +117,98 @@ class NotificationTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json()), 1)
         self.assertEqual(resp.json()[0]['username'], 'p1')
+
+
+class PushNotificationTests(APITestCase):
+    """Web Push obunasi — ilova/tab yopiq bo'lganda ham xabar yetkazish."""
+
+    def setUp(self):
+        self.admin = make_admin(self.client)
+        self.admin_token = login(self.client, self.admin.username)
+        register(self.client, 'pt1', 'teacher')
+        self.teacher_token = login(self.client, 'pt1')
+        self.teacher = User.objects.get(username='pt1')
+
+    def auth(self, token):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_vapid_key_is_public(self):
+        self.auth(self.teacher_token)
+        resp = self.client.get('/api/v1/notifications/push/vapid-key/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['public_key'], settings.VAPID_PUBLIC_KEY)
+
+    def test_subscribe_and_unsubscribe(self):
+        from apps.notifications.models import PushSubscription
+
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/notifications/push/subscribe/', {
+            'endpoint': 'https://fcm.googleapis.com/fcm/send/abc123',
+            'keys': {'p256dh': 'pkey', 'auth': 'akey'},
+        }, format='json')
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(PushSubscription.objects.filter(user=self.teacher).count(), 1)
+
+        resp = self.client.post('/api/v1/notifications/push/unsubscribe/', {
+            'endpoint': 'https://fcm.googleapis.com/fcm/send/abc123',
+        })
+        self.assertEqual(resp.json()['removed'], True)
+        self.assertEqual(PushSubscription.objects.filter(user=self.teacher).count(), 0)
+
+    def test_resubscribing_same_endpoint_updates_not_duplicates(self):
+        from apps.notifications.models import PushSubscription
+
+        self.auth(self.teacher_token)
+        body = {'endpoint': 'https://fcm.googleapis.com/fcm/send/dup', 'keys': {'p256dh': 'p1', 'auth': 'a1'}}
+        self.client.post('/api/v1/notifications/push/subscribe/', body, format='json')
+        body['keys']['p256dh'] = 'p2'
+        self.client.post('/api/v1/notifications/push/subscribe/', body, format='json')
+        self.assertEqual(PushSubscription.objects.filter(endpoint=body['endpoint']).count(), 1)
+        self.assertEqual(PushSubscription.objects.get(endpoint=body['endpoint']).p256dh, 'p2')
+
+    def test_sending_notification_triggers_web_push_to_subscribed_device(self):
+        from unittest.mock import patch
+
+        from . import services
+
+        services.save_push_subscription(
+            user=self.teacher, endpoint='https://fcm.googleapis.com/fcm/send/xyz',
+            p256dh='pkey', auth='akey',
+        )
+        # send_notification `transaction.on_commit`da yuboradi — TestCase'ning
+        # o'ralgan tranzaksiyasi hech qachon commit bo'lmaydi, shuning uchun
+        # on_commit hook'larni majburan ishga tushirish kerak.
+        with patch('pywebpush.webpush') as mock_webpush, self.captureOnCommitCallbacks(execute=True):
+            self.auth(self.admin_token)
+            resp = self.client.post('/api/v1/notifications/send/', {
+                'description': '<p>Salom</p>', 'target_type': 'user', 'user_id': str(self.teacher.id),
+            })
+            self.assertEqual(resp.status_code, 201)
+        mock_webpush.assert_called_once()
+        call_kwargs = mock_webpush.call_args.kwargs
+        self.assertEqual(call_kwargs['subscription_info']['endpoint'], 'https://fcm.googleapis.com/fcm/send/xyz')
+
+    def test_expired_subscription_is_removed_on_410(self):
+        from unittest.mock import patch
+
+        from pywebpush import WebPushException
+
+        from apps.notifications.models import PushSubscription
+
+        from . import services
+
+        services.save_push_subscription(
+            user=self.teacher, endpoint='https://fcm.googleapis.com/fcm/send/gone',
+            p256dh='pkey', auth='akey',
+        )
+
+        class FakeResponse:
+            status_code = 410
+
+        with patch('pywebpush.webpush', side_effect=WebPushException('gone', response=FakeResponse())), \
+                self.captureOnCommitCallbacks(execute=True):
+            self.auth(self.admin_token)
+            self.client.post('/api/v1/notifications/send/', {
+                'description': '<p>Salom</p>', 'target_type': 'user', 'user_id': str(self.teacher.id),
+            })
+        self.assertFalse(PushSubscription.objects.filter(endpoint='https://fcm.googleapis.com/fcm/send/gone').exists())

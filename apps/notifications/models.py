@@ -13,6 +13,7 @@ from django.db.models import (
     ForeignKey,
     TextChoices,
     TextField,
+    URLField,
     UniqueConstraint,
 )
 
@@ -65,3 +66,21 @@ class NotificationRecipient(TimeStampedUUIDModel):
     def __str__(self):
         state = "o'qildi" if self.read_at else "o'qilmadi"
         return f'{self.user.username} · {state}'
+
+
+class PushSubscription(TimeStampedUUIDModel):
+    """Brauzerning Push API orqali bergan obuna ma'lumoti — bitta foydalanuvchi
+    bir nechta qurilma/brauzerdan obuna bo'lishi mumkin, har biri alohida
+    qator (`endpoint` — push xizmatining o'sha aniq brauzer nusxasiga
+    tegishli manzili, shuning uchun UNIQUE va amalda "qurilma ID"si vazifasini
+    bajaradi)."""
+
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='push_subscriptions')
+    endpoint = URLField(max_length=500, unique=True)
+    # Push API tomonidan berilgan shifrlash kalitlari — xabarni shu brauzer
+    # uchun shifrlashda kerak (pywebpush kutubxonasi ishlatadi).
+    p256dh = CharField(max_length=255)
+    auth = CharField(max_length=255)
+
+    def __str__(self):
+        return f'{self.user.username} · {self.endpoint[:40]}...'
