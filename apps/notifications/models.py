@@ -28,6 +28,13 @@ class Notification(TimeStampedUUIDModel):
     # Admin CKEditor'da yozgan matn — server tomonda tozalangan (sanitize) HTML
     description = TextField()
     target_type = CharField(max_length=8, choices=Target.choices)
+    # Xabar turi — frontend matnni tahlil qilmasdan, shunga qarab alohida
+    # ikonka/rang ko'rsatishi uchun (masalan "lesson_reminder",
+    # "new_assignment", "deadline_halfway", "deadline_1h"). Ataylab qattiq
+    # TextChoices emas — yangi turlar turli app'larda (homework, lessons,
+    # admin) qo'shilaveradi, `link_type` bilan bir xil ochiq-CharField naqsh.
+    # Bo'sh — oddiy admin xabari (turi yo'q).
+    kind = CharField(max_length=32, blank=True)
     # Frontend bosilganda qayerga o'tishi kerakligini bildiradi (masalan
     # link_type='assignment', link_id=<uuid>) — ixtiyoriy, umumiy admin
     # xabarlarida bo'sh qoladi. AuditLog.target_type/target_id bilan bir xil

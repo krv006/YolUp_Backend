@@ -27,6 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'first_name', 'last_name', 'role', 'phone', 'invite_code', 'avatar',
             'avg_rating', 'rating_count', 'certificates', 'is_approved', 'preferred_language',
+            'lesson_reminder_minutes',
         ]
         read_only_fields = ['role', 'invite_code', 'is_approved']
 

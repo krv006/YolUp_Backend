@@ -2133,3 +2133,89 @@ class AutoFinishExpiredLessonsTests(APITestCase):
         recording.refresh_from_db()
         self.assertEqual(recording.audio_finalized_at, original_audio_ts)
         self.assertIsNotNone(recording.video_ready_at)
+
+
+class LessonReminderTests(APITestCase):
+    """"Dars N daqiqadan keyin boshlanadi" — har foydalanuvchining o'z
+    `lesson_reminder_minutes` sozlamasiga ko'ra, har juftlikka bir marta."""
+
+    def setUp(self):
+        from apps.accounts.models import User
+
+        from .models import Course, Enrollment, Lesson
+
+        def mk(username, role, reminder_minutes=15):
+            u = User(username=username, role=role, lesson_reminder_minutes=reminder_minutes)
+            u.set_password('x')
+            u.save()
+            return u
+
+        self.mk = mk
+        self.teacher = mk('lr_t', User.Role.TEACHER)
+        self.student = mk('lr_s', User.Role.STUDENT)
+        self.course = Course.objects.create(teacher=self.teacher, title='LR')
+        Enrollment.objects.create(course=self.course, student=self.student, status=Enrollment.Status.APPROVED)
+
+    def inbox_texts(self, user):
+        from apps.notifications.models import NotificationRecipient
+
+        return [
+            r.notification.description
+            for r in NotificationRecipient.objects.filter(user=user).select_related('notification')
+        ]
+
+    def test_reminder_sent_when_window_reached(self):
+        from .models import Lesson
+        from . import services
+
+        lesson = Lesson.objects.create(
+            course=self.course, title='L1',
+            starts_at=timezone.now() + timedelta(minutes=15), duration_min=45,
+        )
+        sent = services.send_lesson_reminders()
+        self.assertEqual(sent, 2)  # o'qituvchi + o'quvchi
+        self.assertTrue(any('15 daqiqadan keyin' in t for t in self.inbox_texts(self.student)))
+        self.assertTrue(any(lesson.title in t for t in self.inbox_texts(self.teacher)))
+
+    def test_not_sent_before_window(self):
+        from .models import Lesson
+        from . import services
+
+        Lesson.objects.create(
+            course=self.course, title='L2',
+            starts_at=timezone.now() + timedelta(minutes=30), duration_min=45,
+        )
+        sent = services.send_lesson_reminders()
+        self.assertEqual(sent, 0)
+
+    def test_sent_only_once_per_user(self):
+        from .models import Lesson
+        from . import services
+
+        Lesson.objects.create(
+            course=self.course, title='L3',
+            starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
+        )
+        first = services.send_lesson_reminders()
+        second = services.send_lesson_reminders()
+        self.assertEqual(first, 2)
+        self.assertEqual(second, 0)
+
+    def test_respects_per_user_custom_minutes(self):
+        """O'quvchi 5 daqiqa, o'qituvchi standart 15 daqiqa — 10 daqiqa
+        qolganda faqat o'qituvchiga (15 >= 10) eslatma boradi, o'quvchiga
+        (5 < 10) hali emas."""
+        from .models import Lesson
+        from . import services
+
+        quick_student = self.mk('lr_s2', 'student', reminder_minutes=5)
+        from .models import Enrollment
+        Enrollment.objects.create(course=self.course, student=quick_student, status=Enrollment.Status.APPROVED)
+
+        Lesson.objects.create(
+            course=self.course, title='L4',
+            starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
+        )
+        services.send_lesson_reminders()
+        self.assertEqual(self.inbox_texts(self.teacher).__len__(), 1)
+        self.assertEqual(self.inbox_texts(quick_student).__len__(), 0)

@@ -12,6 +12,7 @@ from django.db.models import (
     FileField,
     ForeignKey,
     ImageField,
+    PositiveIntegerField,
     TextChoices,
     UniqueConstraint,
     UUIDField,
@@ -52,6 +53,9 @@ class User(AbstractUser):
     # so'rovdagi `Accept-Language` esa mustaqil ishlayveradi (LocaleMiddleware);
     # bu maydon faqat "eslab qolingan tanlov" — ikkalasi bir-biriga bog'liq emas.
     preferred_language = CharField(max_length=8, choices=settings.LANGUAGES, default='uz', blank=True)
+    # Dars boshlanishidan necha daqiqa oldin eslatma kelishi kerak — foydalanuvchi
+    # PATCH /auth/me/ orqali o'zgartiradi (apps.lessons.services.send_lesson_reminders).
+    lesson_reminder_minutes = PositiveIntegerField(default=15)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

@@ -12,7 +12,7 @@ class NotificationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Notification
-        fields = ['id', 'sender', 'description', 'target_type', 'link_type', 'link_id', 'created_at']
+        fields = ['id', 'sender', 'description', 'target_type', 'kind', 'link_type', 'link_id', 'created_at']
 
 
 class InboxItemSerializer(serializers.ModelSerializer):

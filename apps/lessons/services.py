@@ -11,7 +11,7 @@ from apps.accounts import selectors as account_selectors
 from apps.accounts.models import User
 from apps.core import audit
 
-from .models import Attendance, Course, Enrollment, Lesson
+from .models import Attendance, Course, Enrollment, Lesson, LessonReminder
 
 
 @transaction.atomic
@@ -387,6 +387,56 @@ def auto_finish_expired_lessons(*, now=None) -> int:
             logging.getLogger('apps').exception('auto_finish_expired_lessons: end_room failed')
         finished += 1
     return finished
+
+
+def send_lesson_reminders(*, now=None) -> int:
+    """"Dars N daqiqadan keyin boshlanadi" bildirishnomasi — o'qituvchi va
+    kursga APPROVED yozilgan har bir o'quvchi uchun, har biri o'zining
+    `User.lesson_reminder_minutes` sozlamasiga ko'ra (standart — 15 daqiqa).
+
+    Davriy chaqirish uchun (management command + tashqi cron, har daqiqada —
+    boshqa davriy vazifalardan farqli, bu yerda vaqt aniqligi muhim, 10
+    daqiqalik oraliq eslatmani 5-15 daqiqa orasida noaniq qilib qo'yardi).
+    Har (dars, foydalanuvchi) juftligiga faqat bir marta — `LessonReminder`
+    bilan belgilanadi.
+    """
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    now = now or timezone.now()
+    # Sozlama foydalanuvchiga xos bo'lgani uchun, oldindan "qancha vaqt oldin"
+    # ekanini bilmaymiz — oqilona yuqori chegara (eng uzoq real sozlamani
+    # ham qamrab oladi), har juftlik uchun aniq chegara alohida tekshiriladi.
+    upper_bound = now + timedelta(hours=24)
+    lessons = (
+        Lesson.objects.filter(
+            status=Lesson.Status.SCHEDULED, starts_at__gt=now, starts_at__lte=upper_bound,
+        )
+        .select_related('course', 'course__teacher')
+    )
+    sent = 0
+    for lesson in lessons:
+        participants = [lesson.course.teacher] + list(
+            User.objects.filter(
+                enrollments__course=lesson.course, enrollments__status=Enrollment.Status.APPROVED,
+            )
+        )
+        for user in participants:
+            remind_at = lesson.starts_at - timedelta(minutes=user.lesson_reminder_minutes)
+            if now < remind_at or LessonReminder.objects.filter(lesson=lesson, user=user).exists():
+                continue
+            send_notification(
+                sender=lesson.course.teacher,
+                description=(
+                    f'«{lesson.course.title}»: «{lesson.title}» darsi '
+                    f'{user.lesson_reminder_minutes} daqiqadan keyin boshlanadi.'
+                ),
+                target_type=Notification.Target.USER, user_id=user.id,
+                kind='lesson_reminder', link_type='lesson', link_id=str(lesson.id),
+            )
+            LessonReminder.objects.create(lesson=lesson, user=user)
+            sent += 1
+    return sent
 
 
 def _ensure_recording_finalized(lesson: Lesson) -> None:

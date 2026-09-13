@@ -284,6 +284,24 @@ class CameraRequest(TimeStampedUUIDModel):
         return f'{self.student.username} @ {self.lesson.title} [camera requested]'
 
 
+class LessonReminder(TimeStampedUUIDModel):
+    """'Dars N daqiqadan keyin boshlanadi' bildirishnomasi — har (dars,
+    foydalanuvchi) juftligiga FAQAT BIR MARTA yuboriladi (o'qituvchi ham,
+    o'quvchi ham shu jadvalda, ikkalasi ham `User.lesson_reminder_minutes`ga
+    ko'ra o'z vaqtida ogohlantiriladi — apps.lessons.services.send_lesson_reminders)."""
+
+    lesson = ForeignKey('lessons.Lesson', CASCADE, related_name='reminders')
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='lesson_reminders')
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['lesson', 'user'], name='unique_lesson_reminder_user'),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} @ {self.lesson.title}'
+
+
 class LessonRating(TimeStampedUUIDModel):
     """O'quvchi tugagan darsga baho beradi — o'qituvchi/kurs sifatini kuzatish uchun."""
 
