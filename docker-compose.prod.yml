@@ -84,12 +84,19 @@ services:
       REDIS_URL: redis://redis:6379/0
       RECORDINGS_DIR: /app/recordings
       LIVEKIT_API_URL: http://livekit:7880
+    # `send_lesson_reminders` alohida, tezroq (60s) siklda — foydalanuvchi
+    # o'zi tanlagan eslatma vaqti (`lesson_reminder_minutes`) daqiqa
+    # aniqligida bo'lishi kerak; 300s sikl uni 5 daqiqagacha kechiktirar edi.
     command: >
       sh -c "sleep 30 &&
-             while true; do
+             (while true; do
                python manage.py auto_finish_expired_lessons;
                python manage.py send_deadline_reminders;
                sleep 300;
+             done) &
+             while true; do
+               python manage.py send_lesson_reminders;
+               sleep 60;
              done"
     volumes:
       - media:/app/media
