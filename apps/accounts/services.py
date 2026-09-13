@@ -14,6 +14,11 @@ from apps.core import audit
 
 from .models import Consent, ParentChildLink, TeacherCertificate, User
 
+# O'quvchi/ota-ona uchun standart 15 daqiqa (User.lesson_reminder_minutes
+# maydon standarti) yetarli — o'qituvchi esa darsni BOSHLASHI kerak,
+# shuning uchun biroz kamroq (10 daqiqa) oldindan ogohlantiriladi.
+TEACHER_LESSON_REMINDER_MINUTES = 10
+
 
 def _notify_admins_of_pending_teacher(teacher: User, request=None) -> None:
     """Yangi o'qituvchi ro'yxatdan o'tganda BARCHA adminlarga bildirishnoma —
@@ -61,6 +66,7 @@ def register_user(*, username: str, password: str, role: str, request=None, **ex
         # Kira oladi, lekin admin tasdiqlamaguncha kurs/dars ochish kabi
         # amallarga ruxsati yo'q (RequirePerm — apps.core.permissions).
         user.is_approved = False
+        user.lesson_reminder_minutes = TEACHER_LESSON_REMINDER_MINUTES
     user.set_password(password)
     user.save()
     audit.record(action='auth.register', actor=user, target=user, meta={'role': role}, request=request)

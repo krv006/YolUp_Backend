@@ -55,6 +55,10 @@ class User(AbstractUser):
     preferred_language = CharField(max_length=8, choices=settings.LANGUAGES, default='uz', blank=True)
     # Dars boshlanishidan necha daqiqa oldin eslatma kelishi kerak — foydalanuvchi
     # PATCH /auth/me/ orqali o'zgartiradi (apps.lessons.services.send_lesson_reminders).
+    # Standart 15 — o'quvchi/ota-ona uchun; o'qituvchiga ro'yxatdan o'tishda
+    # `services.register_user` alohida TEACHER_LESSON_REMINDER_MINUTES (10)
+    # qo'yadi, chunki o'qituvchi darsni BOSHLASHI kerak, undan oldinroq
+    # ogohlantirilishi tabiiy.
     lesson_reminder_minutes = PositiveIntegerField(default=15)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)

@@ -119,6 +119,29 @@ class AuthTests(APITestCase):
         self.assertEqual(resp.json()['role'], 'student')
         self.assertEqual(resp.json()['invite_code'], original_invite_code)
 
+    def test_teacher_defaults_to_10_minute_lesson_reminder(self):
+        """O'qituvchi darsni BOSHLASHI kerak, shuning uchun o'quvchi/ota-onaga
+        (15 daqiqa) qaraganda ozroq (10 daqiqa) oldindan ogohlantiriladi."""
+        register(self.client, 'reminder_teacher', 'teacher')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "reminder_teacher")}')
+        self.assertEqual(self.client.get('/api/v1/auth/me/').json()['lesson_reminder_minutes'], 10)
+
+    def test_student_and_parent_default_to_15_minute_lesson_reminder(self):
+        register(self.client, 'reminder_student', 'student')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "reminder_student")}')
+        self.assertEqual(self.client.get('/api/v1/auth/me/').json()['lesson_reminder_minutes'], 15)
+
+        register(self.client, 'reminder_parent', 'parent')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "reminder_parent")}')
+        self.assertEqual(self.client.get('/api/v1/auth/me/').json()['lesson_reminder_minutes'], 15)
+
+    def test_teacher_can_still_customize_own_reminder_minutes(self):
+        register(self.client, 'reminder_custom', 'teacher')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "reminder_custom")}')
+        resp = self.client.patch('/api/v1/auth/me/', {'lesson_reminder_minutes': 20})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['lesson_reminder_minutes'], 20)
+
 
 class CertificateTests(APITestCase):
     def upload(self, filename='cert.png'):
