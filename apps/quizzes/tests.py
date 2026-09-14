@@ -60,7 +60,7 @@ class QuizFlowTests(APITestCase):
 
         self.auth(self.teacher_token)
         self.course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'math'}
         ).json()['id']
 
         self.quiz_payload = {
@@ -297,7 +297,7 @@ class QuizDocxImportTests(APITestCase):
         preview = resp.json()
         self.auth(self.teacher_token)
         course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'math'}
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,
@@ -374,7 +374,7 @@ class QuizXlsxImportTests(APITestCase):
         preview = resp.json()
         self.auth(self.teacher_token)
         course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'math'}
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,

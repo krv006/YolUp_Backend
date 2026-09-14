@@ -69,11 +69,11 @@ class Command(BaseCommand):
 
         # ── kurslar ──
         algebra = Course.objects.create(
-            teacher=teacher, title='Algebra · 7-sinf', subject='Matematika',
+            teacher=teacher, title='Algebra · 7-sinf', subject=Course.Subject.MATH,
             description='Kvadrat tenglamalar, funksiyalar va grafiklar',
         )
         english = Course.objects.create(
-            teacher=teacher, title="Ingliz tili · Boshlang'ich", subject='Ingliz tili',
+            teacher=teacher, title="Ingliz tili · Boshlang'ich", subject=Course.Subject.ENGLISH,
             description='Grammatika va so\'zlashuv asoslari',
         )
 
@@ -136,7 +136,7 @@ class Command(BaseCommand):
             make_user('Yokub', User.Role.STUDENT, 'Yokub', ''),
         ]
         informatika = Course.objects.create(
-            teacher=data_teacher, title='Informatika · Python', subject='Informatika',
+            teacher=data_teacher, title='Informatika · Python', subject=Course.Subject.COMPUTER_SCIENCE,
             description="Python asoslari — o'zgaruvchilar, sikllar, funksiyalar",
         )
         for s in data_students:

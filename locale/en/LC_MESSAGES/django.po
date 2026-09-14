@@ -2,159 +2,172 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: 1.0\n"
-"POT-Creation-Date: 2026-09-06 21:19\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-15 00:51+0500\n"
 "PO-Revision-Date: 2026-09-06 21:19\n"
 "Language: en\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: apps/homework/services.py:203 apps/homework/services.py:363
-#: apps/homework/services.py:452
-msgid "'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s"
-msgstr "'%(ext)s' is not supported. Allowed: %(allowed)s"
+#: apps/accounts/services.py:21
+msgid "Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi."
+msgstr "Only a teacher, parent, or student can register."
 
-#: apps/board/services.py:137
-msgid "'%(name)s' koordinatasi noto'g'ri."
-msgstr "'%(name)s' coordinate is invalid."
+#: apps/accounts/services.py:39 apps/chat/services.py:85
+msgid "O'qituvchi topilmadi."
+msgstr "Teacher not found."
 
-#: apps/notifications/services.py:44
-msgid "'user' yoki 'all' bo'lishi kerak."
-msgstr "Must be 'user' or 'all'."
+#: apps/accounts/services.py:74
+msgid "Bunday taklif kodi topilmadi."
+msgstr "No such invite code found."
 
-#: apps/lessons/services.py:184
-msgid "Amal noto'g'ri: approve yoki decline."
-msgstr "Invalid action: approve or decline."
+#: apps/accounts/services.py:94 apps/lessons/services.py:180
+msgid "So'rov topilmadi."
+msgstr "Request not found."
 
-#: apps/homework/services.py:456
-msgid "Audio faqat Speaking vazifalari uchun."
-msgstr "Audio is only for Speaking assignments."
-
-#: apps/homework/services.py:579
-msgid "Ball raqam bo'lishi kerak."
-msgstr "Score must be a number."
-
-#: apps/lessons/services.py:69
-msgid "Berilgan parametrlar bo'yicha hech qanday dars yaratilmaydi."
-msgstr "No lessons will be created with the given parameters."
-
-#: apps/notifications/services.py:77
-msgid "Bildirishnoma topilmadi."
-msgstr "Notification not found."
-
-#: apps/quizzes/services.py:92
-msgid "Bir savolga faqat bitta javob yuborilishi mumkin."
-msgstr "Only one answer can be submitted per question."
-
-#: apps/lessons/services.py:621 apps/lessons/services.py:673
-msgid "Bo'lak %(max_mb)s MB dan katta."
-msgstr "Chunk is larger than %(max_mb)s MB."
-
-#: apps/lessons/serializers.py:108
-msgid "Boshlanish sanasi o'tgan bo'lishi mumkin emas."
-msgstr "Start date cannot be in the past."
-
-#: apps/chat/services.py:36
-msgid "Bu chatga yozish huquqingiz yo'q."
-msgstr "You don't have permission to write in this chat."
-
-#: apps/quizzes/services.py:42
-msgid "Bu dars ushbu kursga tegishli emas."
-msgstr "This lesson does not belong to this course."
-
-#: apps/lessons/services.py:487
-msgid "Bu dars yozuvini ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this lesson's recording."
-
-#: apps/lessons/services.py:490
-msgid "Bu darsda video yozuv yo'q."
-msgstr "This lesson has no video recording."
-
-#: apps/lessons/services.py:654
-msgid "Bu darsga audio yuklanmagan."
-msgstr "No audio has been uploaded for this lesson."
-
-#: apps/live/services.py:86 apps/live/services.py:315
-#: apps/live/services.py:358
-msgid "Bu darsga kirish huquqingiz yo'q."
-msgstr "You don't have permission to join this lesson."
-
-#: apps/lessons/services.py:706
-msgid "Bu darsga video yuklanmagan."
-msgstr "No video has been uploaded for this lesson."
-
-#: apps/live/services.py:102
-msgid "Bu darsning vaqti allaqachon o'tib ketgan."
-msgstr "This lesson's time has already passed."
-
-#: apps/homework/services.py:382 apps/homework/services.py:546
-msgid "Bu faylni ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this file."
-
-#: apps/accounts/services.py:163
-msgid "Bu foydalanuvchi login tarixini ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this user's login history."
-
-#: apps/quizzes/services.py:40
-msgid "Bu kurs sizga tegishli emas."
-msgstr "This course does not belong to you."
-
-#: apps/homework/services.py:391
-msgid "Bu kurs vazifalarini ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this course's assignments."
-
-#: apps/homework/services.py:446
-msgid "Bu kursga yozilmagansiz — vazifa topshira olmaysiz."
-msgstr ""
-"You're not enrolled in this course — you can't submit this assignment."
-
-#: apps/homework/services.py:595
-msgid "Bu kursga yozilmagansiz."
-msgstr "You're not enrolled in this course."
-
-#: apps/homework/services.py:671
-msgid "Bu maydon majburiy."
-msgstr "This field is required."
-
-#: apps/lessons/services.py:131 apps/accounts/services.py:109
+#: apps/accounts/services.py:111 apps/lessons/services.py:131
 msgid "Bu o'quvchi sizga bog'lanmagan."
 msgstr "This student is not linked to you."
 
-#: apps/homework/services.py:664
-msgid "Bu o'quvchining hisobotini ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this student's report."
+#: apps/accounts/services.py:165
+msgid "Bu foydalanuvchi login tarixini ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this user's login history."
 
-#: apps/board/services.py:193
+#: apps/accounts/services.py:169 apps/notifications/services.py:58
+msgid "Foydalanuvchi topilmadi."
+msgstr "User not found."
+
+#: apps/accounts/services.py:193
+msgid "Sertifikat topilmadi."
+msgstr "Certificate not found."
+
+#: apps/accounts/services.py:207
+#, fuzzy
+#| msgid "Bu o'quvchi sizga bog'lanmagan."
+msgid "Bu akkaunt sizga bog'lanmagan."
+msgstr "This student is not linked to you."
+
+#: apps/accounts/services.py:211
+#, fuzzy
+#| msgid "Chat topilmadi."
+msgid "Akkaunt topilmadi."
+msgstr "Chat not found."
+
+#: apps/accounts/services.py:244
+msgid "O'quvchi hisobidan boshqa rolga o'tib bo'lmaydi."
+msgstr ""
+
+#: apps/accounts/services.py:246
+msgid "Noto'g'ri rol."
+msgstr ""
+
+#: apps/accounts/services.py:248
+msgid "Siz allaqachon shu roldasiz."
+msgstr ""
+
+#: apps/accounts/services.py:250
+msgid "Rol almashtirish uchun avval telefon raqamingizni kiriting."
+msgstr ""
+
+#: apps/analytics/views.py:28
+msgid "Noto'g'ri davr — day/week/month/year bo'lishi kerak."
+msgstr ""
+
+#: apps/board/services.py:24 apps/homework/services.py:178
+#: apps/lessons/views.py:312 apps/live/services.py:79 apps/live/services.py:244
+#: apps/live/services.py:310 apps/live/services.py:353
+#: apps/live/services.py:499 apps/live/services.py:634
+msgid "Dars topilmadi."
+msgstr "Lesson not found."
+
+#: apps/board/services.py:60
+msgid "Doskani ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view the board."
+
+#: apps/board/services.py:98
+msgid "Matematik formula bloki faqat matematika kurslari doskasida ishlaydi."
+msgstr "The math formula block only works on the board of math courses."
+
+#: apps/board/services.py:102
+msgid "Formula bo'sh."
+msgstr "Formula is empty."
+
+#: apps/board/services.py:107 apps/board/services.py:125
+msgid "Koordinata noto'g'ri."
+msgstr "Coordinate is invalid."
+
+#: apps/board/services.py:120
+msgid "Matn bo'sh."
+msgstr "Text is empty."
+
+#: apps/board/services.py:144
+#, python-format
+msgid "'%(name)s' koordinatasi noto'g'ri."
+msgstr "'%(name)s' coordinate is invalid."
+
+#: apps/board/services.py:167
+msgid "Kamida 2 nuqta kerak."
+msgstr "At least 2 points are required."
+
+#: apps/board/services.py:175
+msgid "Nuqta formati noto'g'ri."
+msgstr "Invalid point format."
+
+#: apps/board/services.py:195
+msgid "Chizish uchun o'qituvchidan ruxsat oling."
+msgstr "Get the teacher's permission to draw."
+
+#: apps/board/services.py:200
 msgid "Bu sheet to'ldi — yangisini oching."
 msgstr "This sheet is full — open a new one."
 
-#: apps/chat/services.py:120
-msgid "Bu so'rov sizga tegishli emas."
-msgstr "This request does not belong to you."
+#: apps/board/services.py:217
+msgid "Yangi sheet'ni faqat o'qituvchi ochadi."
+msgstr "Only the teacher can open a new sheet."
 
-#: apps/quizzes/services.py:69
-msgid "Bu test sizga tegishli emas."
-msgstr "This quiz does not belong to you."
+#: apps/board/services.py:230
+msgid "O'chirish sababi bo'sh bo'lishi mumkin emas."
+msgstr "The deletion reason cannot be empty."
 
-#: apps/homework/services.py:534
-msgid "Bu topshiriqni ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this submission."
+#: apps/board/services.py:232
+msgid "Nimani o'chirish ko'rsatilmadi."
+msgstr "It wasn't specified what to delete."
 
-#: apps/homework/services.py:384
-msgid "Bu vazifada biriktirilgan fayl yo'q."
-msgstr "This assignment has no attached file."
+#: apps/board/services.py:235
+msgid "O'chirish uchun ruxsat yo'q."
+msgstr "No permission to delete."
 
-#: apps/homework/services.py:413
-msgid "Bu vazifani ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view this assignment."
+#: apps/board/services.py:239
+msgid "Sheet topilmadi."
+msgstr "Sheet not found."
 
-#: apps/lessons/services.py:121
-msgid "Bunday login yoki taklif kodli o'quvchi topilmadi."
-msgstr "No student found with that login or invite code."
+#: apps/board/services.py:262
+msgid "Ruxsatni faqat kurs o'qituvchisi beradi."
+msgstr "Only the course teacher can grant permission."
 
-#: apps/accounts/services.py:72
-msgid "Bunday taklif kodi topilmadi."
-msgstr "No such invite code found."
+#: apps/board/services.py:266 apps/homework/services.py:668
+#: apps/lessons/services.py:140 apps/live/services.py:393
+#: apps/live/services.py:448 apps/live/services.py:547
+#: apps/live/services.py:608 apps/live/services.py:685
+msgid "O'quvchi topilmadi."
+msgstr "Student not found."
+
+#: apps/board/services.py:450 apps/board/services.py:465 apps/chat/views.py:125
+msgid "Ruxsat yo'q."
+msgstr "No permission."
+
+#: apps/board/services.py:453
+msgid "Formula yechuvchi faqat matematika kurslarida ishlaydi."
+msgstr "The formula solver only works in math courses."
+
+#: apps/board/services.py:470
+msgid "Doska bo'sh — PDF yo'q."
+msgstr "The board is empty — no PDF available."
+
+#: apps/chat/services.py:27
+msgid "Chat topilmadi."
+msgstr "Chat not found."
 
 #: apps/chat/services.py:35
 msgid "Chat hali ochiq emas (so'rov qabul qilinmagan yoki bloklangan)."
@@ -162,328 +175,9 @@ msgstr ""
 "This chat is not open yet (the request hasn't been accepted, or has been "
 "blocked)."
 
-#: apps/chat/services.py:27
-msgid "Chat topilmadi."
-msgstr "Chat not found."
-
-#: apps/board/services.py:188
-msgid "Chizish uchun o'qituvchidan ruxsat oling."
-msgstr "Get the teacher's permission to draw."
-
-#: apps/lessons/serializers.py:63
-msgid "Dars boshlanish vaqti o'tgan bo'lishi mumkin emas."
-msgstr "Lesson start time cannot be in the past."
-
-#: apps/live/services.py:79 apps/live/services.py:244
-#: apps/live/services.py:310 apps/live/services.py:353
-#: apps/live/services.py:499 apps/live/services.py:634
-#: apps/homework/services.py:178 apps/board/services.py:25
-#: apps/lessons/views.py:303
-msgid "Dars topilmadi."
-msgstr "Lesson not found."
-
-#: apps/live/services.py:90
-msgid "Dars tugagan yoki bekor qilingan."
-msgstr "The lesson has ended or been cancelled."
-
-#: apps/board/services.py:463
-msgid "Doska bo'sh — PDF yo'q."
-msgstr "The board is empty — no PDF available."
-
-#: apps/board/services.py:58
-msgid "Doskani ko'rish huquqingiz yo'q."
-msgstr "You don't have permission to view the board."
-
-#: apps/homework/services.py:573
-msgid ""
-"Faqat AI tekshirib bo'lgan (ko'rib chiqish kutilayotgan) topshiriqni "
-"tasdiqlash mumkin."
-msgstr ""
-"Only a submission already checked by AI (pending review) can be approved."
-
-#: apps/lessons/services.py:30 apps/lessons/services.py:49
-msgid "Faqat kurs egasi dars qo'sha oladi."
-msgstr "Only the course owner can add lessons."
-
-#: apps/lessons/services.py:226
-msgid "Faqat kurs egasi guruhni o'chira oladi."
-msgstr "Only the course owner can delete the group."
-
-#: apps/lessons/services.py:651
-msgid "Faqat kurs o'qituvchisi audio yozuvni yakunlashi mumkin."
-msgstr "Only the course teacher can finish the audio recording."
-
-#: apps/lessons/services.py:618
-msgid "Faqat kurs o'qituvchisi audio yuklashi mumkin."
-msgstr "Only the course teacher can upload audio."
-
-#: apps/chat/services.py:59
-msgid "Faqat kurs o'qituvchisi guruh rasmini o'zgartira oladi."
-msgstr "Only the course teacher can change the group photo."
-
-#: apps/live/services.py:501
-msgid "Faqat kurs o'qituvchisi ruxsat beradi."
-msgstr "Only the course teacher can grant permission."
-
-#: apps/live/services.py:636
-msgid "Faqat kurs o'qituvchisi shu amalni bajara oladi."
-msgstr "Only the course teacher can perform this action."
-
-#: apps/lessons/services.py:182
-msgid "Faqat kurs o'qituvchisi so'rovga javob beradi."
-msgstr "Only the course teacher can respond to the request."
-
-#: apps/homework/services.py:570
-msgid "Faqat kurs o'qituvchisi tasdiqlaydi."
-msgstr "Only the course teacher can approve."
-
-#: apps/homework/services.py:189
-msgid "Faqat kurs o'qituvchisi vazifa bera oladi."
-msgstr "Only the course teacher can assign homework."
-
-#: apps/homework/services.py:313
-msgid "Faqat kurs o'qituvchisi vazifani o'chira oladi."
-msgstr "Only the course teacher can delete the assignment."
-
-#: apps/homework/services.py:329
-msgid "Faqat kurs o'qituvchisi vazifani tahrirlashi mumkin."
-msgstr "Only the course teacher can edit the assignment."
-
-#: apps/lessons/services.py:703
-msgid "Faqat kurs o'qituvchisi video yozuvni yakunlashi mumkin."
-msgstr "Only the course teacher can finish the video recording."
-
-#: apps/lessons/services.py:670
-msgid "Faqat kurs o'qituvchisi video yuklashi mumkin."
-msgstr "Only the course teacher can upload video."
-
-#: apps/lessons/services.py:293
-msgid "Faqat o'qituvchi darsni tugata oladi."
-msgstr "Only the teacher can end the lesson."
-
-#: apps/accounts/services.py:19
-msgid "Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi."
-msgstr "Only a teacher, parent, or student can register."
-
-#: apps/chat/services.py:80
-msgid "Faqat o'quvchi so'rov yuboradi."
-msgstr "Only a student can send this request."
-
-#: apps/lessons/services.py:144
-msgid "Faqat o'quvchi, ota-ona yoki kurs o'qituvchisi yoza oladi."
-msgstr "Only a student, parent, or the course teacher can write."
-
-#: apps/lessons/services.py:135
-msgid "Faqat o'z kursingizga o'quvchi biriktira olasiz."
-msgstr "You can only attach students to your own course."
-
-#: apps/chat/services.py:90
-msgid "Faqat o'z o'qituvchingizga yozish so'rovi yuborishingiz mumkin."
-msgstr "You can only send a chat request to your own teacher."
-
-#: apps/lessons/views.py:205
-msgid "Faqat tugagan darsga baho berish mumkin."
-msgstr "Only a finished lesson can be rated."
-
-#: apps/homework/services.py:180
-msgid "Faqat tugagan darsga vazifa bog'lash mumkin."
-msgstr "An assignment can only be linked to a finished lesson."
-
-#: apps/homework/services.py:208 apps/homework/services.py:368
-msgid "Fayl %(max_mb)s MB dan katta."
-msgstr "File is larger than %(max_mb)s MB."
-
-#: apps/homework/services.py:458
-msgid "Fayl %(size).1f MB; chegara %(max_mb)s MB."
-msgstr "File is %(size).1f MB; limit is %(max_mb)s MB."
-
-#: apps/lessons/views.py:250 apps/lessons/views.py:275
-msgid "Fayl bo'lagi yuborilmadi."
-msgstr "No file chunk was sent."
-
-#: apps/homework/services.py:448
-msgid "Fayl majburiy."
-msgstr "A file is required."
-
-#: apps/chat/views.py:127
-msgid "Fayl yo'q."
-msgstr "No file."
-
-#: apps/board/services.py:95
-msgid "Formula bo'sh."
-msgstr "Formula is empty."
-
-#: apps/board/services.py:446
-msgid "Formula yechuvchi faqat matematika kurslarida ishlaydi."
-msgstr "The formula solver only works in math courses."
-
-#: apps/accounts/services.py:167 apps/notifications/services.py:53
-msgid "Foydalanuvchi topilmadi."
-msgstr "User not found."
-
-#: apps/quizzes/serializers.py:26
-msgid "Har bir savolda aynan 1 ta to'g'ri variant belgilanishi kerak."
-msgstr "Each question must have exactly 1 correct option marked."
-
-#: apps/quizzes/serializers.py:24
-msgid "Har bir savolda kamida 2 ta variant bo'lishi kerak."
-msgstr "Each question must have at least 2 options."
-
-#: apps/lessons/services.py:558
-msgid "Havola boshqa darsga tegishli."
-msgstr "The link belongs to a different lesson."
-
-#: apps/lessons/services.py:556
-msgid "Havola yaroqsiz yoki muddati tugagan."
-msgstr "The link is invalid or has expired."
-
-#: apps/core/exceptions.py:45
-msgid "Ichki xatolik. Birozdan so'ng qayta urinib ko'ring."
-msgstr "Internal error. Please try again shortly."
-
-#: apps/quizzes/serializers.py:123
-msgid "Kamida 1 ta javob yuborilishi kerak."
-msgstr "At least 1 answer must be submitted."
-
-#: apps/quizzes/serializers.py:41
-msgid "Kamida 1 ta savol bo'lishi kerak."
-msgstr "There must be at least 1 question."
-
-#: apps/board/services.py:160
-msgid "Kamida 2 nuqta kerak."
-msgstr "At least 2 points are required."
-
-#: apps/board/services.py:100 apps/board/services.py:118
-msgid "Koordinata noto'g'ri."
-msgstr "Coordinate is invalid."
-
-#: apps/homework/services.py:62 apps/lessons/services.py:112
-msgid "Kurs topilmadi."
-msgstr "Course not found."
-
-#: apps/board/services.py:91
-msgid "Matematik formula bloki faqat matematika kurslari doskasida ishlaydi."
-msgstr "The math formula block only works on the board of math courses."
-
-#: apps/board/services.py:113
-msgid "Matn bo'sh."
-msgstr "Text is empty."
-
-#: apps/homework/services.py:164
-msgid "Muddat formati noto'g'ri."
-msgstr "Invalid deadline format."
-
-#: apps/board/services.py:225
-msgid "Nimani o'chirish ko'rsatilmadi."
-msgstr "It wasn't specified what to delete."
-
-#: apps/homework/services.py:195 apps/homework/services.py:350
-msgid "Noto'g'ri ko'nikma: %(skills)s"
-msgstr "Invalid skill: %(skills)s"
-
-#: apps/board/services.py:168
-msgid "Nuqta formati noto'g'ri."
-msgstr "Invalid point format."
-
-#: apps/board/services.py:223
-msgid "O'chirish sababi bo'sh bo'lishi mumkin emas."
-msgstr "The deletion reason cannot be empty."
-
-#: apps/board/services.py:228
-msgid "O'chirish uchun ruxsat yo'q."
-msgstr "No permission to delete."
-
-#: apps/chat/services.py:85 apps/accounts/services.py:37
-msgid "O'qituvchi topilmadi."
-msgstr "Teacher not found."
-
-#: apps/live/services.py:654
-msgid "O'quvchi bu kursga yozilmagan."
-msgstr "The student is not enrolled in this course."
-
-#: apps/lessons/services.py:142
-msgid "O'quvchi login yoki taklif kodini kiriting."
-msgstr "Enter the student's login or invite code."
-
-#: apps/live/services.py:393 apps/live/services.py:448
-#: apps/live/services.py:547 apps/live/services.py:608
-#: apps/live/services.py:685 apps/homework/services.py:668
-#: apps/lessons/services.py:140 apps/board/services.py:259
-msgid "O'quvchi topilmadi."
-msgstr "Student not found."
-
-#: apps/homework/services.py:553
-msgid "Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."
-msgstr "Only the course teacher can start a recheck."
-
-#: apps/chat/services.py:56
-msgid "Rasm fayli kerak."
-msgstr "An image file is required."
-
-#: apps/board/services.py:443 apps/board/services.py:458
-#: apps/chat/views.py:125
-msgid "Ruxsat yo'q."
-msgstr "No permission."
-
-#: apps/board/services.py:255
-msgid "Ruxsatni faqat kurs o'qituvchisi beradi."
-msgstr "Only the course teacher can grant permission."
-
-#: apps/quizzes/services.py:90
-msgid "Savol ushbu testga tegishli emas."
-msgstr "The question does not belong to this quiz."
-
-#: apps/accounts/services.py:191
-msgid "Sertifikat topilmadi."
-msgstr "Certificate not found."
-
-#: apps/board/services.py:232
-msgid "Sheet topilmadi."
-msgstr "Sheet not found."
-
-#: apps/live/services.py:88
-msgid "Siz bu darsdan chetlashtirilgansiz."
-msgstr "You have been removed from this lesson."
-
-#: apps/quizzes/services.py:79 apps/lessons/views.py:209
-msgid "Siz bu kursga yozilmagansiz."
-msgstr "You're not enrolled in this course."
-
-#: apps/lessons/services.py:180 apps/accounts/services.py:92
-msgid "So'rov topilmadi."
-msgstr "Request not found."
-
-#: apps/quizzes/services.py:94
-msgid "Tanlangan variant bu savolga tegishli emas."
-msgstr "The selected option does not belong to this question."
-
-#: apps/live/services.py:220
-msgid "Tekshiruv topilmadi."
-msgstr "Check not found."
-
-#: apps/quizzes/views.py:37
-msgid "Test topilmadi."
-msgstr "Quiz not found."
-
-#: apps/homework/services.py:78
-msgid "Topshiriq topilmadi."
-msgstr "Submission not found."
-
-#: apps/lessons/serializers.py:104
-msgid "Tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak."
-msgstr "End time must be after start time."
-
-#: apps/live/services.py:226
-msgid "Vaqt tugadi — bu tekshiruv o'tkazib yuborilgan."
-msgstr "Time is up — this check has been skipped."
-
-#: apps/homework/services.py:191 apps/homework/services.py:334
-msgid "Vazifa nomi majburiy."
-msgstr "Assignment title is required."
-
-#: apps/homework/services.py:69
-msgid "Vazifa topilmadi."
-msgstr "Assignment not found."
+#: apps/chat/services.py:36
+msgid "Bu chatga yozish huquqingiz yo'q."
+msgstr "You don't have permission to write in this chat."
 
 #: apps/chat/services.py:39
 msgid "Xabar bo'sh bo'lishi mumkin emas."
@@ -493,42 +187,510 @@ msgstr "Message cannot be empty."
 msgid "Xabar juda uzun (maks. 4000 belgi)."
 msgstr "Message is too long (max. 4000 characters)."
 
-#: apps/notifications/services.py:47
-msgid "Xabar matni bo'sh bo'lishi mumkin emas."
-msgstr "Message text cannot be empty."
+#: apps/chat/services.py:56
+msgid "Rasm fayli kerak."
+msgstr "An image file is required."
 
-#: apps/chat/views.py:123
-msgid "Xabar topilmadi."
-msgstr "Message not found."
+#: apps/chat/services.py:59
+msgid "Faqat kurs o'qituvchisi guruh rasmini o'zgartira oladi."
+msgstr "Only the course teacher can change the group photo."
 
-#: apps/core/exceptions.py:28
-msgid "Xatolik yuz berdi."
-msgstr "An error occurred."
+#: apps/chat/services.py:80
+msgid "Faqat o'quvchi so'rov yuboradi."
+msgstr "Only a student can send this request."
 
-#: apps/board/services.py:210
-msgid "Yangi sheet'ni faqat o'qituvchi ochadi."
-msgstr "Only the teacher can open a new sheet."
+#: apps/chat/services.py:90
+msgid "Faqat o'z o'qituvchingizga yozish so'rovi yuborishingiz mumkin."
+msgstr "You can only send a chat request to your own teacher."
 
-#: apps/lessons/services.py:564
-msgid "Yozuv fayli hali tayyor emas."
-msgstr "The recording file isn't ready yet."
-
-#: apps/lessons/services.py:561
-msgid "Yozuv topilmadi."
-msgstr "Recording not found."
-
-#: apps/lessons/services.py:579
-msgid "Yozuv yo'q."
-msgstr "No recording."
-
-#: apps/lessons/services.py:576
-msgid "Yozuvni faqat kurs o'qituvchisi o'chira oladi."
-msgstr "Only the course teacher can delete the recording."
+#: apps/chat/services.py:120
+msgid "Bu so'rov sizga tegishli emas."
+msgstr "This request does not belong to you."
 
 #: apps/chat/services.py:126
 msgid "accept yoki block bo'lishi kerak."
 msgstr "must be accept or block."
 
-#: apps/live/services.py:240 apps/homework/services.py:597
+#: apps/chat/views.py:123
+msgid "Xabar topilmadi."
+msgstr "Message not found."
+
+#: apps/chat/views.py:127
+msgid "Fayl yo'q."
+msgstr "No file."
+
+#: apps/core/exceptions.py:28
+msgid "Xatolik yuz berdi."
+msgstr "An error occurred."
+
+#: apps/core/exceptions.py:45
+msgid "Ichki xatolik. Birozdan so'ng qayta urinib ko'ring."
+msgstr "Internal error. Please try again shortly."
+
+#: apps/homework/services.py:62 apps/lessons/services.py:112
+msgid "Kurs topilmadi."
+msgstr "Course not found."
+
+#: apps/homework/services.py:69
+msgid "Vazifa topilmadi."
+msgstr "Assignment not found."
+
+#: apps/homework/services.py:78
+msgid "Topshiriq topilmadi."
+msgstr "Submission not found."
+
+#: apps/homework/services.py:164
+msgid "Muddat formati noto'g'ri."
+msgstr "Invalid deadline format."
+
+#: apps/homework/services.py:180
+msgid "Faqat tugagan darsga vazifa bog'lash mumkin."
+msgstr "An assignment can only be linked to a finished lesson."
+
+#: apps/homework/services.py:189
+msgid "Faqat kurs o'qituvchisi vazifa bera oladi."
+msgstr "Only the course teacher can assign homework."
+
+#: apps/homework/services.py:191 apps/homework/services.py:334
+msgid "Vazifa nomi majburiy."
+msgstr "Assignment title is required."
+
+#: apps/homework/services.py:195 apps/homework/services.py:350
+#, python-format
+msgid "Noto'g'ri ko'nikma: %(skills)s"
+msgstr "Invalid skill: %(skills)s"
+
+#: apps/homework/services.py:203 apps/homework/services.py:363
+#: apps/homework/services.py:452
+#, python-format
+msgid "'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s"
+msgstr "'%(ext)s' is not supported. Allowed: %(allowed)s"
+
+#: apps/homework/services.py:208 apps/homework/services.py:368
+#, python-format
+msgid "Fayl %(max_mb)s MB dan katta."
+msgstr "File is larger than %(max_mb)s MB."
+
+#: apps/homework/services.py:313
+msgid "Faqat kurs o'qituvchisi vazifani o'chira oladi."
+msgstr "Only the course teacher can delete the assignment."
+
+#: apps/homework/services.py:329
+msgid "Faqat kurs o'qituvchisi vazifani tahrirlashi mumkin."
+msgstr "Only the course teacher can edit the assignment."
+
+#: apps/homework/services.py:382 apps/homework/services.py:546
+msgid "Bu faylni ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this file."
+
+#: apps/homework/services.py:384
+msgid "Bu vazifada biriktirilgan fayl yo'q."
+msgstr "This assignment has no attached file."
+
+#: apps/homework/services.py:391
+msgid "Bu kurs vazifalarini ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this course's assignments."
+
+#: apps/homework/services.py:413
+msgid "Bu vazifani ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this assignment."
+
+#: apps/homework/services.py:446
+msgid "Bu kursga yozilmagansiz — vazifa topshira olmaysiz."
+msgstr "You're not enrolled in this course — you can't submit this assignment."
+
+#: apps/homework/services.py:448 apps/quizzes/services.py:80
+msgid "Fayl majburiy."
+msgstr "A file is required."
+
+#: apps/homework/services.py:456
+msgid "Audio faqat Speaking vazifalari uchun."
+msgstr "Audio is only for Speaking assignments."
+
+#: apps/homework/services.py:458 apps/quizzes/services.py:86
+#, python-format
+msgid "Fayl %(size).1f MB; chegara %(max_mb)s MB."
+msgstr "File is %(size).1f MB; limit is %(max_mb)s MB."
+
+#: apps/homework/services.py:534
+msgid "Bu topshiriqni ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this submission."
+
+#: apps/homework/services.py:553
+msgid "Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."
+msgstr "Only the course teacher can start a recheck."
+
+#: apps/homework/services.py:570
+msgid "Faqat kurs o'qituvchisi tasdiqlaydi."
+msgstr "Only the course teacher can approve."
+
+#: apps/homework/services.py:573
+msgid ""
+"Faqat AI tekshirib bo'lgan (ko'rib chiqish kutilayotgan) topshiriqni "
+"tasdiqlash mumkin."
+msgstr ""
+"Only a submission already checked by AI (pending review) can be approved."
+
+#: apps/homework/services.py:579
+msgid "Ball raqam bo'lishi kerak."
+msgstr "Score must be a number."
+
+#: apps/homework/services.py:595
+msgid "Bu kursga yozilmagansiz."
+msgstr "You're not enrolled in this course."
+
+#: apps/homework/services.py:597 apps/live/services.py:240
 msgid "exit yoki return."
 msgstr "exit or return."
+
+#: apps/homework/services.py:664
+msgid "Bu o'quvchining hisobotini ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this student's report."
+
+#: apps/homework/services.py:671
+msgid "Bu maydon majburiy."
+msgstr "This field is required."
+
+#: apps/lessons/models.py:25
+msgid "Matematika"
+msgstr "Mathematics"
+
+#: apps/lessons/models.py:26
+msgid "Fizika"
+msgstr "Physics"
+
+#: apps/lessons/models.py:27
+msgid "Astronomiya"
+msgstr "Astronomy"
+
+#: apps/lessons/models.py:28
+msgid "Kimyo"
+msgstr "Chemistry"
+
+#: apps/lessons/models.py:29
+msgid "Biologiya"
+msgstr "Biology"
+
+#: apps/lessons/models.py:30
+msgid "Ekologiya"
+msgstr "Ecology"
+
+#: apps/lessons/models.py:31
+msgid "Informatika"
+msgstr "Computer Science"
+
+#: apps/lessons/models.py:32
+msgid "Tarix"
+msgstr "History"
+
+#: apps/lessons/models.py:33
+msgid "Geografiya"
+msgstr "Geography"
+
+#: apps/lessons/models.py:34
+msgid "Huquq asoslari"
+msgstr "Civics"
+
+#: apps/lessons/models.py:35
+msgid "Iqtisodiyot asoslari"
+msgstr "Economics"
+
+#: apps/lessons/models.py:36
+msgid "Ona tili va adabiyot"
+msgstr "Native Language and Literature"
+
+#: apps/lessons/models.py:37
+msgid "Musiqa"
+msgstr "Music"
+
+#: apps/lessons/models.py:38
+msgid "Tasviriy san'at"
+msgstr "Fine Arts"
+
+#: apps/lessons/models.py:39
+msgid "Jismoniy tarbiya"
+msgstr "Physical Education"
+
+#: apps/lessons/models.py:40
+msgid "Texnologiya"
+msgstr "Technology"
+
+#: apps/lessons/models.py:41
+msgid "Shaxmat"
+msgstr "Chess"
+
+#: apps/lessons/models.py:42
+msgid "Ingliz tili"
+msgstr "English"
+
+#: apps/lessons/models.py:43
+msgid "Rus tili"
+msgstr "Russian"
+
+#: apps/lessons/models.py:44
+msgid "Turk tili"
+msgstr "Turkish"
+
+#: apps/lessons/models.py:45
+msgid "Nemis tili"
+msgstr "German"
+
+#: apps/lessons/models.py:46
+msgid "Fransuz tili"
+msgstr "French"
+
+#: apps/lessons/models.py:47
+msgid "Arab tili"
+msgstr "Arabic"
+
+#: apps/lessons/models.py:48
+msgid "Xitoy tili"
+msgstr "Chinese"
+
+#: apps/lessons/models.py:49
+msgid "Koreys tili"
+msgstr "Korean"
+
+#: apps/lessons/models.py:50
+msgid "Yapon tili"
+msgstr "Japanese"
+
+#: apps/lessons/models.py:51
+msgid "Boshqa"
+msgstr "Other"
+
+#: apps/lessons/serializers.py:72
+msgid "Dars boshlanish vaqti o'tgan bo'lishi mumkin emas."
+msgstr "Lesson start time cannot be in the past."
+
+#: apps/lessons/serializers.py:113
+msgid "Tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak."
+msgstr "End time must be after start time."
+
+#: apps/lessons/serializers.py:117
+msgid "Boshlanish sanasi o'tgan bo'lishi mumkin emas."
+msgstr "Start date cannot be in the past."
+
+#: apps/lessons/services.py:30 apps/lessons/services.py:49
+msgid "Faqat kurs egasi dars qo'sha oladi."
+msgstr "Only the course owner can add lessons."
+
+#: apps/lessons/services.py:69
+msgid "Berilgan parametrlar bo'yicha hech qanday dars yaratilmaydi."
+msgstr "No lessons will be created with the given parameters."
+
+#: apps/lessons/services.py:121
+msgid "Bunday login yoki taklif kodli o'quvchi topilmadi."
+msgstr "No student found with that login or invite code."
+
+#: apps/lessons/services.py:135
+msgid "Faqat o'z kursingizga o'quvchi biriktira olasiz."
+msgstr "You can only attach students to your own course."
+
+#: apps/lessons/services.py:142
+msgid "O'quvchi login yoki taklif kodini kiriting."
+msgstr "Enter the student's login or invite code."
+
+#: apps/lessons/services.py:144
+msgid "Faqat o'quvchi, ota-ona yoki kurs o'qituvchisi yoza oladi."
+msgstr "Only a student, parent, or the course teacher can write."
+
+#: apps/lessons/services.py:182
+msgid "Faqat kurs o'qituvchisi so'rovga javob beradi."
+msgstr "Only the course teacher can respond to the request."
+
+#: apps/lessons/services.py:184
+msgid "Amal noto'g'ri: approve yoki decline."
+msgstr "Invalid action: approve or decline."
+
+#: apps/lessons/services.py:226
+msgid "Faqat kurs egasi guruhni o'chira oladi."
+msgstr "Only the course owner can delete the group."
+
+#: apps/lessons/services.py:293
+msgid "Faqat o'qituvchi darsni tugata oladi."
+msgstr "Only the teacher can end the lesson."
+
+#: apps/lessons/services.py:537
+msgid "Bu dars yozuvini ko'rish huquqingiz yo'q."
+msgstr "You don't have permission to view this lesson's recording."
+
+#: apps/lessons/services.py:540
+msgid "Bu darsda video yozuv yo'q."
+msgstr "This lesson has no video recording."
+
+#: apps/lessons/services.py:606
+msgid "Havola yaroqsiz yoki muddati tugagan."
+msgstr "The link is invalid or has expired."
+
+#: apps/lessons/services.py:608
+msgid "Havola boshqa darsga tegishli."
+msgstr "The link belongs to a different lesson."
+
+#: apps/lessons/services.py:611
+msgid "Yozuv topilmadi."
+msgstr "Recording not found."
+
+#: apps/lessons/services.py:614
+msgid "Yozuv fayli hali tayyor emas."
+msgstr "The recording file isn't ready yet."
+
+#: apps/lessons/services.py:626
+msgid "Yozuvni faqat kurs o'qituvchisi o'chira oladi."
+msgstr "Only the course teacher can delete the recording."
+
+#: apps/lessons/services.py:629
+msgid "Yozuv yo'q."
+msgstr "No recording."
+
+#: apps/lessons/services.py:668
+msgid "Faqat kurs o'qituvchisi audio yuklashi mumkin."
+msgstr "Only the course teacher can upload audio."
+
+#: apps/lessons/services.py:671 apps/lessons/services.py:723
+#, python-format
+msgid "Bo'lak %(max_mb)s MB dan katta."
+msgstr "Chunk is larger than %(max_mb)s MB."
+
+#: apps/lessons/services.py:701
+msgid "Faqat kurs o'qituvchisi audio yozuvni yakunlashi mumkin."
+msgstr "Only the course teacher can finish the audio recording."
+
+#: apps/lessons/services.py:704
+msgid "Bu darsga audio yuklanmagan."
+msgstr "No audio has been uploaded for this lesson."
+
+#: apps/lessons/services.py:720
+msgid "Faqat kurs o'qituvchisi video yuklashi mumkin."
+msgstr "Only the course teacher can upload video."
+
+#: apps/lessons/services.py:753
+msgid "Faqat kurs o'qituvchisi video yozuvni yakunlashi mumkin."
+msgstr "Only the course teacher can finish the video recording."
+
+#: apps/lessons/services.py:756
+msgid "Bu darsga video yuklanmagan."
+msgstr "No video has been uploaded for this lesson."
+
+#: apps/lessons/views.py:214
+msgid "Faqat tugagan darsga baho berish mumkin."
+msgstr "Only a finished lesson can be rated."
+
+#: apps/lessons/views.py:218 apps/quizzes/services.py:122
+msgid "Siz bu kursga yozilmagansiz."
+msgstr "You're not enrolled in this course."
+
+#: apps/lessons/views.py:259 apps/lessons/views.py:284
+msgid "Fayl bo'lagi yuborilmadi."
+msgstr "No file chunk was sent."
+
+#: apps/live/services.py:86 apps/live/services.py:315 apps/live/services.py:358
+msgid "Bu darsga kirish huquqingiz yo'q."
+msgstr "You don't have permission to join this lesson."
+
+#: apps/live/services.py:88
+msgid "Siz bu darsdan chetlashtirilgansiz."
+msgstr "You have been removed from this lesson."
+
+#: apps/live/services.py:90
+msgid "Dars tugagan yoki bekor qilingan."
+msgstr "The lesson has ended or been cancelled."
+
+#: apps/live/services.py:102
+msgid "Bu darsning vaqti allaqachon o'tib ketgan."
+msgstr "This lesson's time has already passed."
+
+#: apps/live/services.py:220
+msgid "Tekshiruv topilmadi."
+msgstr "Check not found."
+
+#: apps/live/services.py:226
+msgid "Vaqt tugadi — bu tekshiruv o'tkazib yuborilgan."
+msgstr "Time is up — this check has been skipped."
+
+#: apps/live/services.py:501
+msgid "Faqat kurs o'qituvchisi ruxsat beradi."
+msgstr "Only the course teacher can grant permission."
+
+#: apps/live/services.py:636
+msgid "Faqat kurs o'qituvchisi shu amalni bajara oladi."
+msgstr "Only the course teacher can perform this action."
+
+#: apps/live/services.py:654
+msgid "O'quvchi bu kursga yozilmagan."
+msgstr "The student is not enrolled in this course."
+
+#: apps/notifications/services.py:49
+msgid "'user' yoki 'all' bo'lishi kerak."
+msgstr "Must be 'user' or 'all'."
+
+#: apps/notifications/services.py:52
+msgid "Xabar matni bo'sh bo'lishi mumkin emas."
+msgstr "Message text cannot be empty."
+
+#: apps/notifications/services.py:83
+msgid "Bildirishnoma topilmadi."
+msgstr "Notification not found."
+
+#: apps/quizzes/serializers.py:24
+msgid "Har bir savolda kamida 2 ta variant bo'lishi kerak."
+msgstr "Each question must have at least 2 options."
+
+#: apps/quizzes/serializers.py:26
+msgid "Har bir savolda aynan 1 ta to'g'ri variant belgilanishi kerak."
+msgstr "Each question must have exactly 1 correct option marked."
+
+#: apps/quizzes/serializers.py:41
+msgid "Kamida 1 ta savol bo'lishi kerak."
+msgstr "There must be at least 1 question."
+
+#: apps/quizzes/serializers.py:123
+msgid "Kamida 1 ta javob yuborilishi kerak."
+msgstr "At least 1 answer must be submitted."
+
+#: apps/quizzes/services.py:48
+msgid "Bu kurs sizga tegishli emas."
+msgstr "This course does not belong to you."
+
+#: apps/quizzes/services.py:50
+msgid "Bu dars ushbu kursga tegishli emas."
+msgstr "This lesson does not belong to this course."
+
+#: apps/quizzes/services.py:84
+msgid "Faqat .docx yoki .xlsx fayl qo'llab-quvvatlanadi."
+msgstr ""
+
+#: apps/quizzes/services.py:93
+#, python-format
+msgid "Faylni o'qib bo'lmadi: %(error)s"
+msgstr ""
+
+#: apps/quizzes/services.py:95
+#, fuzzy
+#| msgid "Bildirishnoma topilmadi."
+msgid "Fayldan birorta ham savol topilmadi."
+msgstr "Notification not found."
+
+#: apps/quizzes/services.py:107
+msgid "Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin."
+msgstr ""
+
+#: apps/quizzes/services.py:112
+msgid "Bu test sizga tegishli emas."
+msgstr "This quiz does not belong to you."
+
+#: apps/quizzes/services.py:133
+msgid "Savol ushbu testga tegishli emas."
+msgstr "The question does not belong to this quiz."
+
+#: apps/quizzes/services.py:135
+msgid "Bir savolga faqat bitta javob yuborilishi mumkin."
+msgstr "Only one answer can be submitted per question."
+
+#: apps/quizzes/services.py:137
+msgid "Tanlangan variant bu savolga tegishli emas."
+msgstr "The selected option does not belong to this question."
+
+#: apps/quizzes/views.py:39
+msgid "Test topilmadi."
+msgstr "Quiz not found."

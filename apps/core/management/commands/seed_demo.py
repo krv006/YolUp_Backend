@@ -33,7 +33,7 @@ class Command(BaseCommand):
             creator=parent, username='demo_child', password=PASSWORD, first_name='Sardor',
         )
         course = lesson_services.create_course(
-            teacher=teacher, title='Algebra · 7-sinf', subject='Matematika',
+            teacher=teacher, title='Algebra · 7-sinf', subject='math',
             description='Kvadrat tenglamalar moduli',
         )
         lesson_services.enroll(course_id=course.id, by_user=parent, student_id=child.id)

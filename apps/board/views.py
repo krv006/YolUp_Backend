@@ -1,11 +1,23 @@
 """Board views — yupqa qatlam."""
 from django.http import FileResponse
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import RequirePerm
 
 from . import services
+from .periodic_table_data import PERIODIC_TABLE
+
+
+class PeriodicTableView(APIView):
+    """Davriy jadval — darsga/xonaga bog'liq emas, shuning uchun `lesson_id`
+    talab qilmaydi (`room.token` o'rniga oddiy autentifikatsiya yetarli)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(PERIODIC_TABLE)
 
 
 class BoardView(APIView):

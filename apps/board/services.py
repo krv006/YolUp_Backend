@@ -1,5 +1,4 @@
 """Doska service layer — chizish, o'chirish (sabab bilan), ruxsat, PDF -> chat."""
-import re
 import uuid
 
 from django.conf import settings
@@ -9,7 +8,7 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 
 from apps.accounts.models import User
 from apps.core import audit
-from apps.lessons.models import Enrollment, Lesson
+from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import realtime
 from .models import SHEET_H, SHEET_W, BoardErase, BoardGrant, BoardSheet
@@ -44,12 +43,15 @@ def can_draw(user: User, lesson: Lesson) -> bool:
 
 
 # Matematik vosita (MathLive formulalar, SymPy yechuvchi) FAQAT matematika
-# oilasidagi kurslarda — ingliz tili va boshqa fanlarda chiqmaydi (EduTech).
-_MATH_SUBJECT_RE = re.compile(r'matem|algebra|geometr', re.IGNORECASE)
-
-
+# kurslarida, davriy jadval FAQAT kimyo kurslarida — `Course.subject` endi
+# erkin matn emas, tayin ro'yxatdan tanlanadi, shuning uchun oddiy tenglik
+# yetarli (regex/imlo xatosi xavfi yo'q).
 def is_math_lesson(lesson: Lesson) -> bool:
-    return bool(_MATH_SUBJECT_RE.search(lesson.course.subject or ''))
+    return lesson.course.subject == Course.Subject.MATH
+
+
+def is_chemistry_lesson(lesson: Lesson) -> bool:
+    return lesson.course.subject == Course.Subject.CHEMISTRY
 
 
 def get_board(*, user: User, lesson_id) -> dict:
@@ -70,6 +72,11 @@ def get_board(*, user: User, lesson_id) -> dict:
         # formula bloklari) faqat shu true bo'lganda ko'rsatiladi — fan
         # regex'ini frontendda takrorlash SHART EMAS
         'math_enabled': is_math_lesson(lesson),
+        # Xuddi shunday: davriy jadval tugmasi faqat shu true bo'lganda
+        # ko'rsatiladi (`GET /board/periodic-table/`ning o'zi fan bo'yicha
+        # cheklanmagan — chunki ma'lumot umumiy va zararsiz, lekin UI shu
+        # flag orqali faqat kimyo darslarida chiqishi kerak)
+        'chemistry_enabled': is_chemistry_lesson(lesson),
     }
     if is_teacher:
         # Diqqatsiz o'quvchilar (oynadan chiqib, hali qaytmagan) — faqat

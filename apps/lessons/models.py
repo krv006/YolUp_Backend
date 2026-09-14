@@ -13,14 +13,49 @@ from django.db.models import (
     TextField,
     UniqueConstraint,
 )
+from django.utils.translation import gettext_lazy as _
 
 from apps.core.models import SoftDeleteModel, TimeStampedUUIDModel
 
 
 class Course(TimeStampedUUIDModel, SoftDeleteModel):
+    class Subject(TextChoices):
+        # Labellar `gettext_lazy` — `Accept-Language` sarlavhasiga qarab
+        # uz/ru/en tarjima qilinadi (`locale/{ru,en}/LC_MESSAGES/django.po`).
+        MATH = 'math', _('Matematika')
+        PHYSICS = 'physics', _('Fizika')
+        ASTRONOMY = 'astronomy', _('Astronomiya')
+        CHEMISTRY = 'chemistry', _('Kimyo')
+        BIOLOGY = 'biology', _('Biologiya')
+        ECOLOGY = 'ecology', _('Ekologiya')
+        COMPUTER_SCIENCE = 'computer_science', _('Informatika')
+        HISTORY = 'history', _('Tarix')
+        GEOGRAPHY = 'geography', _('Geografiya')
+        CIVICS = 'civics', _('Huquq asoslari')
+        ECONOMICS = 'economics', _('Iqtisodiyot asoslari')
+        LITERATURE = 'literature', _('Ona tili va adabiyot')
+        MUSIC = 'music', _('Musiqa')
+        ART = 'art', _("Tasviriy san'at")
+        PHYSICAL_EDUCATION = 'physical_education', _('Jismoniy tarbiya')
+        TECHNOLOGY = 'technology', _('Texnologiya')
+        CHESS = 'chess', _('Shaxmat')
+        ENGLISH = 'english', _('Ingliz tili')
+        RUSSIAN = 'russian', _('Rus tili')
+        TURKISH = 'turkish', _('Turk tili')
+        GERMAN = 'german', _('Nemis tili')
+        FRENCH = 'french', _('Fransuz tili')
+        ARABIC = 'arabic', _('Arab tili')
+        CHINESE = 'chinese', _('Xitoy tili')
+        KOREAN = 'korean', _('Koreys tili')
+        JAPANESE = 'japanese', _('Yapon tili')
+        OTHER = 'other', _('Boshqa')
+
     teacher = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='courses')
     title = CharField(max_length=200)
-    subject = CharField(max_length=100, blank=True)
+    # Erkin matn EMAS — o'qituvchi tayin ro'yxatdan tanlaydi (2026-09-15: ilgari
+    # erkin matn edi, regex bilan aniqlanardi — imlo farqi (Ximiya/kimyo/KIMYO)
+    # bo'lsa fan aniqlanmay qolish xavfi bor edi).
+    subject = CharField(max_length=100, choices=Subject.choices, default=Subject.OTHER, blank=True)
     description = TextField(blank=True)
     is_active = BooleanField(default=True)
 
