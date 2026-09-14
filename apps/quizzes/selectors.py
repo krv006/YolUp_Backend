@@ -6,7 +6,7 @@ from django.utils import timezone
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Enrollment
 
-from .models import Quiz, QuizAttempt
+from .models import MockTest, MockTestAttempt, Quiz, QuizAttempt
 
 _ENROLLED = Enrollment.Status.APPROVED
 _APPROVED = ParentChildLink.Status.APPROVED
@@ -34,6 +34,34 @@ def quizzes_for(user: User) -> QuerySet[Quiz]:
 
 def attempts_for(user: User, quiz: Quiz) -> QuerySet[QuizAttempt]:
     qs = QuizAttempt.objects.filter(quiz=quiz).select_related('student')
+    if user.role == User.Role.STUDENT:
+        return qs.filter(student=user)
+    if user.role == User.Role.PARENT:
+        return qs.filter(
+            student__parent_links__parent=user,
+            student__parent_links__status=_APPROVED,
+        )
+    # TEACHER (kursi tekshirilgan — views.py) / ADMIN / SUPER_ADMIN — hammasi.
+    return qs
+
+
+def mock_tests_for(user: User) -> QuerySet[MockTest]:
+    qs = MockTest.objects.select_related('course')
+    if user.role == User.Role.TEACHER:
+        return qs.filter(course__teacher=user)
+    if user.role == User.Role.STUDENT:
+        return qs.filter(course__enrollments__student=user, course__enrollments__status=_ENROLLED)
+    if user.role == User.Role.PARENT:
+        return qs.filter(
+            course__enrollments__status=_ENROLLED,
+            course__enrollments__student__parent_links__parent=user,
+            course__enrollments__student__parent_links__status=_APPROVED,
+        ).distinct()
+    return qs
+
+
+def mock_test_attempts_for(user: User, mock_test: MockTest) -> QuerySet[MockTestAttempt]:
+    qs = MockTestAttempt.objects.filter(mock_test=mock_test).select_related('student')
     if user.role == User.Role.STUDENT:
         return qs.filter(student=user)
     if user.role == User.Role.PARENT:

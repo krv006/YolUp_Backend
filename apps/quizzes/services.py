@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import docx_import, template_export, xlsx_import
-from .models import AnswerResponse, Option, Question, Quiz, QuizAttempt
+from .models import AnswerResponse, MockTest, MockTestAttempt, MockTestSection, Option, Question, Quiz, QuizAttempt
 
 _IMPORT_PARSERS = {
     '.docx': docx_import.parse_docx_questions,
@@ -114,7 +114,9 @@ def delete_quiz(*, teacher: User, quiz: Quiz) -> None:
 
 
 @transaction.atomic
-def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
+def submit_attempt(
+    *, student: User, quiz: Quiz, answers: list, mock_test_attempt: MockTestAttempt | None = None,
+) -> QuizAttempt:
     is_enrolled = Enrollment.objects.filter(
         course=quiz.course, student=student, status=_ENROLLED,
     ).exists()
@@ -123,7 +125,7 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
 
     all_questions = list(quiz.questions.all())
     answered_ids = set()
-    attempt = QuizAttempt.objects.create(quiz=quiz, student=student)
+    attempt = QuizAttempt.objects.create(quiz=quiz, student=student, mock_test_attempt=mock_test_attempt)
 
     score = 0
     for answer in answers:
@@ -150,4 +152,72 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
     attempt.score = score
     attempt.max_score = max_score
     attempt.save(update_fields=['score', 'max_score'])
+    return attempt
+
+
+# ─── Mock Test (imtihon-simulyatsiyasi) ────────────────────────────────────
+
+
+@transaction.atomic
+def create_mock_test(
+    *, teacher: User, course: Course, title: str, time_limit_minutes: int,
+    quizzes: list[Quiz], description: str = '',
+) -> MockTest:
+    if course.teacher_id != teacher.id:
+        raise PermissionDenied(_('Bu kurs sizga tegishli emas.'))
+    if any(quiz.course_id != course.id for quiz in quizzes):
+        raise ValidationError({'quizzes': _('Barcha testlar shu kursga tegishli bo\'lishi kerak.')})
+
+    mock_test = MockTest.objects.create(
+        course=course, title=title, description=description, time_limit_minutes=time_limit_minutes,
+    )
+    MockTestSection.objects.bulk_create([
+        MockTestSection(mock_test=mock_test, quiz=quiz, order=index)
+        for index, quiz in enumerate(quizzes)
+    ])
+    return mock_test
+
+
+def delete_mock_test(*, teacher: User, mock_test: MockTest) -> None:
+    if mock_test.course.teacher_id != teacher.id:
+        raise PermissionDenied(_('Bu Mock Test sizga tegishli emas.'))
+    mock_test.delete()
+
+
+def start_mock_test(*, student: User, mock_test: MockTest) -> MockTestAttempt:
+    is_enrolled = Enrollment.objects.filter(
+        course=mock_test.course, student=student, status=_ENROLLED,
+    ).exists()
+    if not is_enrolled:
+        raise PermissionDenied(_('Siz bu kursga yozilmagansiz.'))
+    if not mock_test.sections.exists():
+        raise ValidationError({'mock_test': _("Bu Mock Test hali tayyor emas — bo'limlar yo'q.")})
+    return MockTestAttempt.objects.create(mock_test=mock_test, student=student)
+
+
+@transaction.atomic
+def submit_mock_test(*, student: User, attempt: MockTestAttempt, sections: list) -> MockTestAttempt:
+    """`sections`: `[{'quiz': Quiz, 'answers': [...]}]` — `MockTestSubmitSerializer`
+    orqali validatsiya qilingan. Har bir bo'lim oddiy `submit_attempt` orqali
+    baholanadi (bir xil mexanizm), faqat `mock_test_attempt` bilan belgilanadi."""
+    if attempt.student_id != student.id:
+        raise PermissionDenied(_('Bu urinish sizga tegishli emas.'))
+    if attempt.submitted_at is not None:
+        raise ValidationError({'attempt': _('Bu urinish allaqachon yakunlangan.')})
+    if timezone.now() > attempt.deadline:
+        raise ValidationError({'attempt': _('Vaqt tugagan — bu urinishni topshirib bo\'lmaydi.')})
+
+    section_quiz_ids = set(attempt.mock_test.sections.values_list('quiz_id', flat=True))
+    submitted_quiz_ids = set()
+    for section in sections:
+        quiz = section['quiz']
+        if quiz.id not in section_quiz_ids:
+            raise ValidationError({'sections': _('Bu test ushbu Mock Test tarkibida emas.')})
+        if quiz.id in submitted_quiz_ids:
+            raise ValidationError({'sections': _('Bir testga faqat bitta javob to\'plami yuborilishi mumkin.')})
+        submitted_quiz_ids.add(quiz.id)
+        submit_attempt(student=student, quiz=quiz, answers=section['answers'], mock_test_attempt=attempt)
+
+    attempt.submitted_at = timezone.now()
+    attempt.save(update_fields=['submitted_at'])
     return attempt

@@ -8,6 +8,8 @@ Oqim:
   - Baholash DARHOL va AVTOMATIK — AI kerak emas, oddiy taqqoslash
     (apps.homework'dagi AI-tekshiruvdan farqli, shu sabab alohida app).
 """
+from datetime import timedelta
+
 from django.conf import settings
 from django.db.models import (
     CASCADE,
@@ -16,6 +18,7 @@ from django.db.models import (
     CharField,
     DateTimeField,
     ForeignKey,
+    ManyToManyField,
     PositiveIntegerField,
     TextField,
 )
@@ -72,13 +75,83 @@ class Option(TimeStampedUUIDModel):
         return self.text[:60]
 
 
+class MockTest(TimeStampedUUIDModel):
+    """Imtihon-simulyatsiyasi (EduTech: faqat Student uchun Workspace'dagi
+    "Mock Test") — mavjud testlardan bir nechtasini birlashtirib, vaqt
+    chegarasi bilan bitta seansda topshiriladigan rejim. Savollar qayta
+    yozilmaydi — mavjud `Quiz`lardan tuziladi, baholash ham xuddi shu
+    mexanizm (`services.submit_attempt`) orqali ishlaydi."""
+
+    course = ForeignKey('lessons.Course', CASCADE, related_name='mock_tests')
+    title = CharField(max_length=200)
+    description = TextField(blank=True)
+    time_limit_minutes = PositiveIntegerField()
+    quizzes = ManyToManyField(Quiz, through='MockTestSection', related_name='mock_tests')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+
+class MockTestSection(TimeStampedUUIDModel):
+    """`MockTest` tarkibidagi bitta testning tartibi (bo'lim sifatida)."""
+
+    mock_test = ForeignKey(MockTest, CASCADE, related_name='sections')
+    quiz = ForeignKey(Quiz, CASCADE, related_name='+')
+    order = PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+        unique_together = [('mock_test', 'quiz')]
+
+    def __str__(self):
+        return f'{self.mock_test.title} · #{self.order} {self.quiz.title}'
+
+
+class MockTestAttempt(TimeStampedUUIDModel):
+    """O'quvchining bitta imtihon-simulyatsiyasi seansi. `started_at` +
+    `mock_test.time_limit_minutes` = topshirish muddati (`deadline`) —
+    `services.submit_mock_test` shundan kechikkan urinishni rad etadi."""
+
+    mock_test = ForeignKey(MockTest, CASCADE, related_name='attempts')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='mock_test_attempts')
+    started_at = DateTimeField(auto_now_add=True)
+    submitted_at = DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.student.username} · {self.mock_test.title}'
+
+    @property
+    def deadline(self):
+        return self.started_at + timedelta(minutes=self.mock_test.time_limit_minutes)
+
+    @property
+    def total_score(self) -> int:
+        return sum(attempt.score for attempt in self.quiz_attempts.all())
+
+    @property
+    def total_max_score(self) -> int:
+        return sum(attempt.max_score for attempt in self.quiz_attempts.all())
+
+
 class QuizAttempt(TimeStampedUUIDModel):
-    """O'quvchining bitta urinishi. Cheklanmagan — xohlagancha qayta topshiradi."""
+    """O'quvchining bitta urinishi. Cheklanmagan — xohlagancha qayta topshiradi.
+
+    `mock_test_attempt` bo'sh bo'lmasa — bu urinish alohida emas, balki bitta
+    `MockTestAttempt` seansining bir bo'lagi sifatida yaratilgan."""
 
     quiz = ForeignKey(Quiz, CASCADE, related_name='attempts')
     student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='quiz_attempts')
     score = PositiveIntegerField(default=0)
     max_score = PositiveIntegerField(default=0)
+    mock_test_attempt = ForeignKey(
+        MockTestAttempt, SET_NULL, null=True, blank=True, related_name='quiz_attempts',
+    )
 
     class Meta:
         ordering = ['-created_at']
