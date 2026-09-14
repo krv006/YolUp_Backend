@@ -592,7 +592,7 @@ class LessonQuizLinkTests(APITestCase):
             self.client.get(f'/api/v1/lessons/{lesson["id"]}/').json()['quiz_id'], quiz['id'],
         )
 
-        resp = self.client.patch(f'/api/v1/lessons/{lesson["id"]}/', {'quiz': None})
+        resp = self.client.patch(f'/api/v1/lessons/{lesson["id"]}/', {'quiz': None}, format='json')
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(resp.json()['quiz_id'])
 
@@ -615,7 +615,7 @@ class LessonQuizLinkTests(APITestCase):
         quiz = self.create_quiz(lesson_id=lesson1['id'])
 
         # lesson1'dan ajratib, lesson2'ga biriktiramiz.
-        resp = self.client.patch(f'/api/v1/lessons/{lesson1["id"]}/', {'quiz': None})
+        resp = self.client.patch(f'/api/v1/lessons/{lesson1["id"]}/', {'quiz': None}, format='json')
         self.assertEqual(resp.status_code, 200)
         resp = self.client.patch(f'/api/v1/lessons/{lesson2["id"]}/', {'quiz': quiz['id']})
         self.assertEqual(resp.status_code, 200)
