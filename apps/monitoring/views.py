@@ -1,5 +1,6 @@
 """Monitoring views — yupqa qatlam. Faqat admin (`audit.view`, apps.analytics
 dashboard bilan bir xil ruxsat) ko'radi."""
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,13 +13,20 @@ from .serializers import ResourceSampleSerializer
 class ResourceCurrentView(APIView):
     """Eng so'nggi yozilgan namuna — real vaqtda psutil ishga tushirish
     o'rniga (har so'rovda 1 soniya kutish shart bo'lmasin), oxirgi siklning
-    natijasi qaytariladi."""
+    natijasi qaytariladi.
+
+    DIQQAT: hali birorta namuna yo'q bo'lsa `204 No Content` qaytadi — DRF
+    `Response(None)`ni JSON `null` sifatida EMAS, bo'sh (Content-Type'siz)
+    tanachalik javob sifatida render qiladi, shuning uchun 200+`null`
+    o'rniga to'g'ri HTTP semantikasi (204) ishlatiladi."""
 
     permission_classes = [RequirePerm('audit.view')]
 
     def get(self, request):
         sample = selectors.latest_sample()
-        return Response(ResourceSampleSerializer(sample).data if sample else None)
+        if sample is None:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(ResourceSampleSerializer(sample).data)
 
 
 class ResourceHistoryView(APIView):

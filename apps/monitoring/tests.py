@@ -68,11 +68,10 @@ class MonitoringViewTests(APITestCase):
         self.assertEqual(self.client.get('/api/v1/monitoring/current/').status_code, 403)
         self.assertEqual(self.client.get('/api/v1/monitoring/history/').status_code, 403)
 
-    def test_current_returns_none_when_no_samples_yet(self):
+    def test_current_returns_204_when_no_samples_yet(self):
         self.auth(self.admin_token)
         resp = self.client.get('/api/v1/monitoring/current/')
-        self.assertEqual(resp.status_code, 200)
-        self.assertIsNone(resp.json())
+        self.assertEqual(resp.status_code, 204)
 
     def test_current_returns_latest_sample(self):
         ResourceSample.objects.create(cpu_percent=10, memory_percent=20, memory_used_mb=100, memory_total_mb=1000)
