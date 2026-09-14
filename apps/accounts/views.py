@@ -232,6 +232,17 @@ class PendingTeachersListView(generics.ListAPIView):
         return selectors.pending_teachers()
 
 
+class TeacherVideoStatsView(APIView):
+    """Admin: Storage — har bir o'qituvchida nechta tayyor dars-yozuvi
+    (video) borligi + platformadagi jami video soni."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def get(self, request):
+        from apps.lessons import selectors as lesson_selectors
+        return Response(lesson_selectors.video_stats_by_teacher())
+
+
 class ApproveTeacherView(APIView):
     """Admin: o'qituvchini tasdiqlash — shundan keyin kira oladi."""
 

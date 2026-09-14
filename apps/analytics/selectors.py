@@ -138,6 +138,8 @@ def _top_teachers(limit: int = 5) -> list:
 
 
 def dashboard_summary() -> dict:
+    from apps.lessons.models import LessonRecording
+
     active_course_ids = list(Course.objects.filter(is_active=True).values_list('id', flat=True))
     active_teacher_ids = Course.objects.filter(is_active=True).values_list('teacher_id', flat=True).distinct()
 
@@ -151,6 +153,9 @@ def dashboard_summary() -> dict:
     rating_agg = LessonRating.objects.filter(lesson__is_deleted=False).aggregate(
         avg=Avg('stars'), count=Count('id'),
     )
+    total_videos = LessonRecording.objects.filter(
+        status=LessonRecording.Status.COMPLETED, lesson__is_deleted=False,
+    ).count()
 
     return {
         'active_students': active_students,
@@ -158,8 +163,86 @@ def dashboard_summary() -> dict:
         'active_courses': len(active_course_ids),
         'avg_rating': round(rating_agg['avg'], 1) if rating_agg['avg'] is not None else None,
         'rating_count': rating_agg['count'],
+        'total_videos': total_videos,
         'top_courses': _top_courses(),
         'top_teachers': _top_teachers(),
+    }
+
+
+def _attempt_summary(attempts) -> dict:
+    """`QuizAttempt` queryset'idan urinishlar soni va o'rtacha foiz."""
+    total = attempts.count()
+    avg_pct = attempts.annotate(pct=F('score') * 100.0 / F('max_score')).aggregate(avg=Avg('pct'))['avg']
+    return {
+        'attempt_count': total,
+        'avg_percentage': round(avg_pct, 1) if avg_pct is not None else None,
+    }
+
+
+def student_own_stats(student: User) -> dict:
+    """O'quvchining Workspace > Tahlil bo'limi uchun shaxsiy statistikasi —
+    test natijalari tarixi, o'rtacha foiz va so'nggi urinishlar."""
+    attempts = QuizAttempt.objects.filter(
+        student=student, max_score__gt=0,
+    ).select_related('quiz', 'quiz__course').order_by('-created_at')
+
+    recent = [
+        {
+            'quiz_id': str(attempt.quiz_id),
+            'quiz_title': attempt.quiz.title,
+            'course_title': attempt.quiz.course.title,
+            'score': attempt.score,
+            'max_score': attempt.max_score,
+            'percentage': round(attempt.score / attempt.max_score * 100, 1),
+            'taken_at': attempt.created_at,
+        }
+        for attempt in attempts[:20]
+    ]
+    return {**_attempt_summary(attempts), 'recent_attempts': recent}
+
+
+def teacher_course_breakdown(teacher: User) -> list[dict]:
+    """O'qituvchining har bir kursi ("sinf") bo'yicha solishtiruv
+    statistikasi — Workspace > Tahlil'da kurslar orasidagi farqni ko'rish uchun."""
+    courses = Course.objects.filter(teacher=teacher, is_active=True)
+
+    result = []
+    for course in courses:
+        student_count = Enrollment.objects.filter(course=course, status=_ENROLLED).count()
+        lessons = Lesson.objects.filter(course=course)
+        finished = lessons.filter(status=_FINISHED).count()
+        cancelled = lessons.filter(status=_CANCELLED).count()
+        reliability = round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None
+        rating = LessonRating.objects.filter(
+            lesson__course=course, lesson__is_deleted=False,
+        ).aggregate(avg=Avg('stars'))['avg']
+        quiz_stats = _attempt_summary(
+            QuizAttempt.objects.filter(quiz__course=course, max_score__gt=0)
+        )
+        result.append({
+            'course_id': str(course.id),
+            'course_title': course.title,
+            'student_count': student_count,
+            'avg_rating': round(rating, 1) if rating is not None else None,
+            'reliability': reliability,
+            'quiz_avg_percentage': quiz_stats['avg_percentage'],
+            'quiz_attempt_count': quiz_stats['attempt_count'],
+            'attendance_rate': _attendance_rate(course_ids=[course.id]),
+        })
+    result.sort(key=lambda row: row['student_count'], reverse=True)
+    return result
+
+
+def teacher_own_stats(teacher: User) -> dict:
+    """O'qituvchining Workspace > Tahlil bo'limi uchun shaxsiy statistikasi —
+    umumiy ko'rsatkichlar (apps.accounts.selectors.teacher_detail_stats bilan
+    bir xil, admin panelida ham shu funksiya ishlatiladi) + kurslar orasidagi
+    solishtiruv."""
+    from apps.accounts import selectors as account_selectors
+
+    return {
+        'overall': account_selectors.teacher_detail_stats(teacher),
+        'courses': teacher_course_breakdown(teacher),
     }
 
 

@@ -17,6 +17,7 @@ urlpatterns = [
     path('users/search/', views.UserSearchView.as_view(), name='user-search'),
     path('teachers/', views.TeacherStatsListView.as_view(), name='teacher-stats-list'),
     path('teachers/pending/', views.PendingTeachersListView.as_view(), name='teacher-pending-list'),
+    path('teachers/video-stats/', views.TeacherVideoStatsView.as_view(), name='teacher-video-stats'),
     path('teachers/<uuid:pk>/approve/', views.ApproveTeacherView.as_view(), name='teacher-approve'),
     path('teachers/<uuid:pk>/stats/', views.TeacherStatsDetailView.as_view(), name='teacher-stats-detail'),
     path('teachers/<uuid:pk>/ratings/', views.TeacherRatingsListView.as_view(), name='teacher-ratings-list'),

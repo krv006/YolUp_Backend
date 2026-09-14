@@ -7,7 +7,7 @@ from django.db.models import QuerySet
 
 from apps.accounts.models import ParentChildLink, User
 
-from .models import Attendance, Course, Enrollment, Lesson, LessonRating
+from .models import Attendance, Course, Enrollment, Lesson, LessonRating, LessonRecording
 
 _APPROVED = ParentChildLink.Status.APPROVED
 _ENROLLED = Enrollment.Status.APPROVED
@@ -114,3 +114,35 @@ def attendance_for(user: User) -> QuerySet[Attendance]:
             student__parent_links__status=_APPROVED,
         )
     return qs
+
+
+def video_stats_by_teacher() -> dict:
+    """Admin panel > Storage — har bir o'qituvchida nechta tayyor
+    dars-yozuvi (video) borligi + platformadagi jami video soni.
+    Faqat `COMPLETED` yozuvlar hisoblanadi (merge tugab, foydalanishga
+    tayyor bo'lgan fayllar — `LessonRecording.Status`)."""
+    from django.db.models import Count
+
+    rows = (
+        LessonRecording.objects
+        .filter(status=LessonRecording.Status.COMPLETED, lesson__is_deleted=False)
+        .values(
+            'lesson__course__teacher_id',
+            'lesson__course__teacher__first_name',
+            'lesson__course__teacher__last_name',
+            'lesson__course__teacher__username',
+        )
+        .annotate(video_count=Count('id'))
+        .order_by('-video_count')
+    )
+    teachers = []
+    total = 0
+    for row in rows:
+        full_name = f"{row['lesson__course__teacher__first_name']} {row['lesson__course__teacher__last_name']}".strip()
+        teachers.append({
+            'teacher_id': str(row['lesson__course__teacher_id']),
+            'teacher_name': full_name or row['lesson__course__teacher__username'],
+            'video_count': row['video_count'],
+        })
+        total += row['video_count']
+    return {'total_videos': total, 'teachers': teachers}

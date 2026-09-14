@@ -40,6 +40,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'quiz.create', 'quiz.view',
         'certificate.manage',
         'rating.view_own',
+        'stats.view_own',
     },
     STUDENT: {
         'course.view', 'course.enroll',
@@ -50,6 +51,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'chat.use',
         'homework.submit', 'homework.view',
         'quiz.view', 'quiz.attempt',
+        'stats.view_own',
     },
     PARENT: {
         'child.create',

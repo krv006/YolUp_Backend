@@ -166,3 +166,66 @@ class DashboardTrendsTests(APITestCase):
         data = resp.json()
         self.assertEqual(data['attendance_rate'][-1], 50.0)
         self.assertTrue(all(v is None for v in data['attendance_rate'][:-1]))
+
+
+class MyAnalyticsTests(APITestCase):
+    """Workspace > Tahlil — `GET /api/v1/analytics/me/` (shaxsiy statistika)."""
+
+    def setUp(self):
+        register(self.client, 'ta1', 'teacher')
+        self.teacher_token = login(self.client, 'ta1')
+        register(self.client, 'sa1', 'student')
+        self.student_token = login(self.client, 'sa1')
+        register(self.client, 'pa1', 'parent')
+        self.parent_token = login(self.client, 'pa1')
+        make_admin('aa1')
+        self.admin_token = login(self.client, 'aa1')
+
+        self.teacher = User.objects.get(username='ta1')
+        self.student = User.objects.get(username='sa1')
+
+    def auth(self, token):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_parent_and_admin_forbidden(self):
+        for token in (self.parent_token, self.admin_token):
+            self.auth(token)
+            self.assertEqual(self.client.get('/api/v1/analytics/me/').status_code, 403)
+
+    def test_student_sees_own_quiz_history(self):
+        course = Course.objects.create(teacher=self.teacher, title='Ingliz tili', is_active=True)
+        quiz = Quiz.objects.create(course=course, title='1-bob testi')
+        QuizAttempt.objects.create(quiz=quiz, student=self.student, score=8, max_score=10)
+        QuizAttempt.objects.create(quiz=quiz, student=self.student, score=5, max_score=10)
+        # Boshqa o'quvchining urinishi — bu ro'yxatga kirmasligi kerak.
+        other_student = User.objects.create_user(username='sa2', password=PASSWORD, role=User.Role.STUDENT)
+        QuizAttempt.objects.create(quiz=quiz, student=other_student, score=10, max_score=10)
+
+        self.auth(self.student_token)
+        resp = self.client.get('/api/v1/analytics/me/')
+        data = resp.json()
+        self.assertEqual(data['attempt_count'], 2)
+        self.assertEqual(data['avg_percentage'], 65.0)  # (80% + 50%) / 2
+        self.assertEqual(len(data['recent_attempts']), 2)
+        self.assertEqual(data['recent_attempts'][0]['course_title'], 'Ingliz tili')
+
+    def test_teacher_sees_overall_and_course_breakdown(self):
+        course1 = Course.objects.create(teacher=self.teacher, title='Matematika', is_active=True)
+        course2 = Course.objects.create(teacher=self.teacher, title='Fizika', is_active=True)
+        other_student = User.objects.create_user(username='sa3', password=PASSWORD, role=User.Role.STUDENT)
+        Enrollment.objects.create(course=course1, student=self.student, status=Enrollment.Status.APPROVED)
+        Enrollment.objects.create(course=course2, student=self.student, status=Enrollment.Status.APPROVED)
+        Enrollment.objects.create(course=course2, student=other_student, status=Enrollment.Status.APPROVED)
+
+        lesson1 = make_lesson(course1, status=Lesson.Status.FINISHED, starts_at=timezone.now())
+        LessonRating.objects.create(lesson=lesson1, student=self.student, stars=4)
+
+        self.auth(self.teacher_token)
+        resp = self.client.get('/api/v1/analytics/me/')
+        data = resp.json()
+        self.assertIn('overall', data)
+        self.assertEqual(data['overall']['course_count'], 2)
+        self.assertEqual(len(data['courses']), 2)
+        math_row = next(row for row in data['courses'] if row['course_title'] == 'Matematika')
+        self.assertEqual(math_row['student_count'], 1)
+        self.assertEqual(math_row['avg_rating'], 4.0)

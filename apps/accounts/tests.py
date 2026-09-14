@@ -1,8 +1,11 @@
 import io
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APITestCase
+
+from apps.lessons.models import Course, Lesson, LessonRecording
 
 from .models import ParentChildLink, User
 
@@ -720,3 +723,45 @@ class SwitchRoleTests(APITestCase):
         me = self.client.get('/api/v1/auth/me/', HTTP_AUTHORIZATION=f'Bearer {new_access}')
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()['role'], 'student')
+
+
+class TeacherVideoStatsTests(APITestCase):
+    """Admin panel > Storage — `GET /api/v1/auth/teachers/video-stats/`."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='vs_admin', password=PASSWORD, role=User.Role.ADMIN)
+        self.teacher1 = User.objects.create_user(username='vs_teacher1', password=PASSWORD, role=User.Role.TEACHER)
+        self.teacher2 = User.objects.create_user(username='vs_teacher2', password=PASSWORD, role=User.Role.TEACHER)
+        self.course1 = Course.objects.create(teacher=self.teacher1, title='Kurs 1', is_active=True)
+        self.course2 = Course.objects.create(teacher=self.teacher2, title='Kurs 2', is_active=True)
+
+    def auth_admin(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "vs_admin")}')
+
+    def _lesson(self, course):
+        return Lesson.objects.create(
+            course=course, title='Dars', starts_at=timezone.now(), status=Lesson.Status.FINISHED,
+        )
+
+    def test_only_completed_recordings_counted_per_teacher(self):
+        lesson1 = self._lesson(self.course1)
+        lesson2 = self._lesson(self.course1)
+        lesson3 = self._lesson(self.course2)
+        LessonRecording.objects.create(lesson=lesson1, status=LessonRecording.Status.COMPLETED)
+        LessonRecording.objects.create(lesson=lesson2, status=LessonRecording.Status.COMPLETED)
+        # Hali tugallanmagan yozuv — hisoblanmasligi kerak.
+        LessonRecording.objects.create(lesson=lesson3, status=LessonRecording.Status.RECORDING)
+
+        self.auth_admin()
+        resp = self.client.get('/api/v1/auth/teachers/video-stats/')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['total_videos'], 2)
+        rows = {row['teacher_id']: row['video_count'] for row in data['teachers']}
+        self.assertEqual(rows[str(self.teacher1.id)], 2)
+        self.assertNotIn(str(self.teacher2.id), rows)
+
+    def test_non_admin_forbidden(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "vs_teacher1")}')
+        resp = self.client.get('/api/v1/auth/teachers/video-stats/')
+        self.assertEqual(resp.status_code, 403)
