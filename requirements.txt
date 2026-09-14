@@ -29,3 +29,4 @@ channels-redis>=4.2
 daphne>=4.1
 uvicorn[standard]>=0.30
 pywebpush>=2.0
+psutil>=6.0

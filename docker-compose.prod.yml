@@ -50,9 +50,22 @@ services:
       RECORDINGS_DIR: /app/recordings
       # Server-server LiveKit API — Caddy/TLS orqali emas, to'g'ridan-to'g'ri
       LIVEKIT_API_URL: http://livekit:7880
+    # `record_resource_sample` ATAYLAB shu yerda (cron konteynerida EMAS) —
+    # Docker socket ulanmagan (xavfsizlik sababli), shuning uchun faqat
+    # buyruq ishga tushirilgan konteynerning o'z holati ko'rinadi. `cron`
+    # konteyneri deyarli bo'sh turadi — uning statistikasi backend'ning
+    # haqiqiy yukini (Admin panel > Server monitoring) aks ettirmas edi.
+    # E'TIBOR: sampler sikli `(... &)` — o'z pastki qobig'ida orqa fonga
+    # o'tkaziladi, shu bilan `&&` zanjiriga ta'sir qilmaydi (aks holda `&`
+    # migrate+collectstatic'ni ham orqa fonga o'tkazib, gunicorn'ni ular
+    # tugashini kutmasdan ishga tushirib yuborar edi).
     command: >
       sh -c "python manage.py migrate --noinput &&
              python manage.py collectstatic --noinput &&
+             (while true; do
+               python manage.py record_resource_sample;
+               sleep 300;
+             done &) &&
              gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 3 --timeout 60"
     volumes:
       - media:/app/media
