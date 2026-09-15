@@ -15,19 +15,11 @@ from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
 from . import selectors, services
-from .models import MockTest, MockTestAttempt, Quiz
+from .models import Quiz
 from .serializers import (
     AttemptListSerializer,
     AttemptResultSerializer,
     AttemptSubmitSerializer,
-    MockTestAttemptListSerializer,
-    MockTestAttemptResultSerializer,
-    MockTestAttemptStartSerializer,
-    MockTestCreateSerializer,
-    MockTestDetailSerializer,
-    MockTestListSerializer,
-    MockTestSubmitSerializer,
-    MockTestTakeSerializer,
     QuizCreateSerializer,
     QuizDetailSerializer,
     QuizListSerializer,
@@ -45,20 +37,6 @@ def _get_quiz(user: User, pk) -> Quiz:
         return selectors.quizzes_for(user).get(pk=pk)
     except (Quiz.DoesNotExist, ValueError, TypeError):
         raise NotFound(_('Test topilmadi.'))
-
-
-def _get_mock_test(user: User, pk) -> MockTest:
-    try:
-        return selectors.mock_tests_for(user).get(pk=pk)
-    except (MockTest.DoesNotExist, ValueError, TypeError):
-        raise NotFound(_('Mock Test topilmadi.'))
-
-
-def _get_mock_test_attempt(user: User, mock_test: MockTest, pk) -> MockTestAttempt:
-    try:
-        return selectors.mock_test_attempts_for(user, mock_test).get(pk=pk)
-    except (MockTestAttempt.DoesNotExist, ValueError, TypeError):
-        raise NotFound(_('Urinish topilmadi.'))
 
 
 class QuizListCreateView(generics.ListCreateAPIView):
@@ -167,87 +145,3 @@ class QuizAttemptListCreateView(APIView):
             student=request.user, quiz=quiz, answers=serializer.validated_data['answers'],
         )
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
-
-
-# ─── Mock Test (imtihon-simulyatsiyasi) ────────────────────────────────────
-
-
-class MockTestListCreateView(generics.ListCreateAPIView):
-    """`quiz.create`/`quiz.view` ruxsatlari qayta ishlatiladi — Mock Test
-    "Test" domenining bir qismi, alohida ruxsat kaliti kerak emas."""
-
-    def get_permissions(self):
-        perm = 'quiz.create' if self.request.method == 'POST' else 'quiz.view'
-        return [RequirePerm(perm)()]
-
-    def get_queryset(self):
-        return selectors.mock_tests_for(self.request.user)
-
-    def get_serializer_class(self):
-        return MockTestListSerializer
-
-    def create(self, request, *args, **kwargs):
-        serializer = MockTestCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        mock_test = services.create_mock_test(
-            teacher=request.user, course=data['course'], title=data['title'],
-            description=data.get('description', ''), time_limit_minutes=data['time_limit_minutes'],
-            quizzes=data['quizzes'],
-        )
-        return Response(MockTestDetailSerializer(mock_test).data, status=status.HTTP_201_CREATED)
-
-
-class MockTestDetailView(APIView):
-    def get_permissions(self):
-        perm = 'quiz.create' if self.request.method == 'DELETE' else 'quiz.view'
-        return [RequirePerm(perm)()]
-
-    def get(self, request, pk):
-        mock_test = _get_mock_test(request.user, pk)
-        if request.user.role in _STAFF_ROLES:
-            return Response(MockTestDetailSerializer(mock_test).data)
-        return Response(MockTestTakeSerializer(mock_test).data)
-
-    def delete(self, request, pk):
-        mock_test = _get_mock_test(request.user, pk)
-        services.delete_mock_test(teacher=request.user, mock_test=mock_test)
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class MockTestStartView(APIView):
-    """O'quvchi imtihon-simulyatsiyasini boshlaydi — shu daqiqadan vaqt
-    hisoblana boshlaydi (`MockTestAttempt.started_at`)."""
-
-    def get_permissions(self):
-        return [RequirePerm('quiz.attempt')()]
-
-    def post(self, request, pk):
-        mock_test = _get_mock_test(request.user, pk)
-        attempt = services.start_mock_test(student=request.user, mock_test=mock_test)
-        return Response(MockTestAttemptStartSerializer(attempt).data, status=status.HTTP_201_CREATED)
-
-
-class MockTestAttemptListView(APIView):
-    def get_permissions(self):
-        return [RequirePerm('quiz.view')()]
-
-    def get(self, request, pk):
-        mock_test = _get_mock_test(request.user, pk)
-        attempts = selectors.mock_test_attempts_for(request.user, mock_test)
-        return Response(MockTestAttemptListSerializer(attempts, many=True).data)
-
-
-class MockTestAttemptSubmitView(APIView):
-    def get_permissions(self):
-        return [RequirePerm('quiz.attempt')()]
-
-    def post(self, request, pk, attempt_id):
-        mock_test = _get_mock_test(request.user, pk)
-        attempt = _get_mock_test_attempt(request.user, mock_test, attempt_id)
-        serializer = MockTestSubmitSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        attempt = services.submit_mock_test(
-            student=request.user, attempt=attempt, sections=serializer.validated_data['sections'],
-        )
-        return Response(MockTestAttemptResultSerializer(attempt).data)
