@@ -107,13 +107,13 @@ class HomeworkTests(TestCase):
 
     def test_assignment_linked_to_finished_lesson(self):
         lesson = Lesson.objects.create(
-            course=self.course, title="O'tilgan dars", starts_at=timezone.now(),
+            course=self.course, starts_at=timezone.now(),
             duration_min=45, status='finished',
         )
         r = self.create_assignment(lesson_id=str(lesson.id))
         self.assertEqual(r.status_code, 201)
         self.assertEqual(r.data['lesson_id'], str(lesson.id))
-        self.assertEqual(r.data['lesson_title'], "O'tilgan dars")
+        self.assertEqual(r.data['lesson_title'], self.course.title)
 
         # bitta darsga bir nechta vazifa berish mumkin
         r2 = self.create_assignment(lesson_id=str(lesson.id), title='Ikkinchi vazifa')
@@ -172,7 +172,7 @@ class HomeworkTests(TestCase):
 
     def test_unfinished_lesson_rejected(self):
         lesson = Lesson.objects.create(
-            course=self.course, title='Kelayotgan dars', starts_at=timezone.now(),
+            course=self.course, starts_at=timezone.now(),
             duration_min=45,
         )
         r = self.create_assignment(lesson_id=str(lesson.id))
@@ -183,7 +183,7 @@ class HomeworkTests(TestCase):
             teacher=self.other_teacher, title='Boshqa kurs', subject=Course.Subject.PHYSICS,
         )
         lesson = Lesson.objects.create(
-            course=other_course, title='Boshqa dars', starts_at=timezone.now(),
+            course=other_course, starts_at=timezone.now(),
             duration_min=45, status='finished',
         )
         r = self.create_assignment(lesson_id=str(lesson.id))

@@ -129,8 +129,7 @@ class CourseLessonFlowTests(APITestCase):
 
         course = Course.objects.get(id=self.course_id)
         stale = Lesson.objects.create(
-            course=course, title='Stale scheduled',
-            starts_at=timezone.now() - timedelta(days=2),
+            course=course, starts_at=timezone.now() - timedelta(days=2),
             duration_min=45, status=Lesson.Status.SCHEDULED,
         )
         self.auth(self.teacher_token)
@@ -147,8 +146,7 @@ class CourseLessonFlowTests(APITestCase):
         now = timezone.localtime(timezone.now())
         end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
         later_today = Lesson.objects.create(
-            course=course, title='Later today',
-            starts_at=min(now + timedelta(hours=1), end_of_day),
+            course=course, starts_at=min(now + timedelta(hours=1), end_of_day),
             duration_min=45, status=Lesson.Status.SCHEDULED,
         )
         self.auth(self.teacher_token)
@@ -193,9 +191,9 @@ class CourseLessonFlowTests(APITestCase):
         """starts_at o'zgarmasa (allaqachon kelajakda bo'lsa ham), boshqa
         maydonni tahrirlash bloklanmasligini tekshiradi."""
         self.auth(self.teacher_token)
-        resp = self.client.patch(f'/api/v1/lessons/{self.lesson_id}/', {'title': 'Yangi nom'})
+        resp = self.client.patch(f'/api/v1/lessons/{self.lesson_id}/', {'duration_min': 60})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()['title'], 'Yangi nom')
+        self.assertEqual(resp.json()['duration_min'], 60)
 
     def test_schedule_recurring_rejects_past_start_date(self):
         self.auth(self.teacher_token)
@@ -235,30 +233,6 @@ class CourseLessonFlowTests(APITestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.json()['count'], 6)
-
-    def test_schedule_recurring_allows_blank_title(self):
-        """Bitta mavzu ko'p darsga bir xil yozilib ketmasligi uchun —
-        o'qituvchi keyin har birini alohida tahrirlab yozadi."""
-        self.auth(self.teacher_token)
-        resp = self.client.post(f'/api/v1/courses/{self.course_id}/schedule/', {
-            'title': '',
-            'days': [0, 2],
-            'start_time': '10:00',
-            'end_time': '11:00',
-            'weeks': 1,
-            'start_date': self._next_monday(),
-        }, format='json')
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()['count'], 2)
-
-    def test_create_single_lesson_allows_blank_title(self):
-        self.auth(self.teacher_token)
-        resp = self.client.post('/api/v1/lessons/', {
-            'course': self.course_id, 'title': '',
-            'starts_at': (timezone.now() + timedelta(days=1)).isoformat(), 'duration_min': 45,
-        })
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(resp.json()['title'], '')
 
     def test_schedule_recurring_detects_overlap(self):
         self.auth(self.teacher_token)
@@ -666,7 +640,7 @@ class FocusSummaryTests(APITestCase):
 
         course = Course.objects.create(teacher=self.teacher, title='F')
         self.lesson = Lesson.objects.create(
-            course=course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=course, starts_at=timezone.now(), duration_min=45,
         )
 
     def _event(self, kind, at):
@@ -752,7 +726,7 @@ class ParentSeesFocusTests(APITestCase):
             course=course, student=self.studentu, status=Enrollment.Status.APPROVED,
         )
         lesson = Lesson.objects.create(
-            course=course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=course, starts_at=timezone.now(), duration_min=45,
         )
         Attendance.objects.create(lesson=lesson, student=self.studentu, joined_at=timezone.now())
         t0 = timezone.now()
@@ -812,8 +786,7 @@ class RecordingTests(APITestCase):
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
         )
         self.lesson = Lesson.objects.create(
-            course=self.course, title='Yozuvli dars',
-            starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
         # Egress yozgan faylni imitatsiya qilamiz (egress tasdiqlagan holat)
@@ -930,7 +903,7 @@ class FocusEscalationTests(APITestCase):
         course = Course.objects.create(teacher=self.teacher, title='FE')
         Enrollment.objects.create(course=course, student=self.student, status=Enrollment.Status.APPROVED)
         self.lesson = Lesson.objects.create(
-            course=course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
 
@@ -1033,7 +1006,7 @@ class RecordingLifecycleTests(APITestCase):
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
         )
         self.lesson = Lesson.objects.create(
-            course=self.course, title='L', starts_at=timezone.now(),
+            course=self.course, starts_at=timezone.now(),
             duration_min=45, status=Lesson.Status.LIVE,
         )
 
@@ -1096,7 +1069,7 @@ class AudioChunkUploadTests(APITestCase):
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
         )
         self.lesson = Lesson.objects.create(
-            course=self.course, title='Audio dars', starts_at=timezone.now(),
+            course=self.course, starts_at=timezone.now(),
             duration_min=45, status=Lesson.Status.LIVE,
         )
         self.LessonRecording = LessonRecording
@@ -1592,7 +1565,7 @@ class InviteBanTests(APITestCase):
         Enrollment.objects.create(course=self.course, student=self.student, status=Enrollment.Status.APPROVED)
         Enrollment.objects.create(course=self.course, student=self.other_student, status=Enrollment.Status.APPROVED)
         self.lesson = Lesson.objects.create(
-            course=self.course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
 
@@ -1612,7 +1585,7 @@ class InviteBanTests(APITestCase):
 
         inbox = self.api(self.student).get('/api/v1/notifications/').json()['results']
         self.assertEqual(len(inbox), 1)
-        self.assertIn(self.lesson.title, inbox[0]['notification']['description'])
+        self.assertIn(self.lesson.course.title, inbox[0]['notification']['description'])
         self.assertEqual(
             len(self.api(self.other_student).get('/api/v1/notifications/').json()['results']), 0,
         )
@@ -1724,7 +1697,7 @@ class JoinQueueTests(APITestCase):
         for s in self.students:
             Enrollment.objects.create(course=self.course, student=s, status=Enrollment.Status.APPROVED)
         self.lesson = Lesson.objects.create(
-            course=self.course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
 
@@ -1769,7 +1742,7 @@ class JoinQueueTests(APITestCase):
             course=other_course, student=self.students[0], status=Enrollment.Status.APPROVED,
         )
         other_lesson = Lesson.objects.create(
-            course=other_course, title='L2', starts_at=timezone.now(), duration_min=45,
+            course=other_course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
         # Birinchi darsda navbatni to'ldiramiz (global hisoblagich 6ga yetadi).
@@ -1825,7 +1798,7 @@ class MicPermissionTests(APITestCase):
         self.course = Course.objects.create(teacher=self.teacher, title='MIC')
         Enrollment.objects.create(course=self.course, student=self.student, status=Enrollment.Status.APPROVED)
         self.lesson = Lesson.objects.create(
-            course=self.course, title='L', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
             status=Lesson.Status.LIVE,
         )
 
@@ -2174,17 +2147,17 @@ class AutoFinishExpiredLessonsTests(APITestCase):
         now = timezone.now()
         # Vaqti allaqachon tugagan (45 daqiqa oldin boshlangan, 30 daqiqalik dars)
         self.expired = Lesson.objects.create(
-            course=self.course, title='Expired', starts_at=now - timedelta(minutes=45),
+            course=self.course, starts_at=now - timedelta(minutes=45),
             duration_min=30, status=Lesson.Status.LIVE,
         )
         # Hali davom etayotgan (10 daqiqa oldin boshlangan, 45 daqiqalik dars)
         self.still_live = Lesson.objects.create(
-            course=self.course, title='Still live', starts_at=now - timedelta(minutes=10),
+            course=self.course, starts_at=now - timedelta(minutes=10),
             duration_min=45, status=Lesson.Status.LIVE,
         )
         # SCHEDULED holatda, vaqti tugagan bo'lsa ham — tegilmasligi kerak
         self.never_started = Lesson.objects.create(
-            course=self.course, title='Never started', starts_at=now - timedelta(hours=2),
+            course=self.course, starts_at=now - timedelta(hours=2),
             duration_min=30, status=Lesson.Status.SCHEDULED,
         )
 
@@ -2227,8 +2200,7 @@ class AutoFinishExpiredLessonsTests(APITestCase):
 
         now = timezone.now()
         late = Lesson.objects.create(
-            course=self.course, title='Late start',
-            starts_at=now - timedelta(hours=2), duration_min=30,
+            course=self.course, starts_at=now - timedelta(hours=2), duration_min=30,
             status=Lesson.Status.LIVE, live_started_at=now - timedelta(minutes=5),
         )
         count = services.auto_finish_expired_lessons()
@@ -2243,7 +2215,7 @@ class AutoFinishExpiredLessonsTests(APITestCase):
 
         now = timezone.now()
         stuck = Lesson.objects.create(
-            course=self.course, title='Stuck', starts_at=now - timedelta(hours=3),
+            course=self.course, starts_at=now - timedelta(hours=3),
             duration_min=30, status=Lesson.Status.LIVE,
             live_started_at=now - timedelta(minutes=61),  # 30 + 30 grace = 60 dan o'tgan
         )
@@ -2264,7 +2236,7 @@ class AutoFinishExpiredLessonsTests(APITestCase):
         from .models import Lesson
 
         stale = Lesson.objects.create(
-            course=self.course, title='Stale', starts_at=timezone.now() - timedelta(hours=3),
+            course=self.course, starts_at=timezone.now() - timedelta(hours=3),
             duration_min=45, status=Lesson.Status.LIVE,
             live_started_at=timezone.now() - timedelta(hours=2),  # 45+30=75 daqiqadan ancha o'tgan
         )
@@ -2419,21 +2391,19 @@ class LessonReminderTests(APITestCase):
         from . import services
 
         lesson = Lesson.objects.create(
-            course=self.course, title='L1',
-            starts_at=timezone.now() + timedelta(minutes=15), duration_min=45,
+            course=self.course, starts_at=timezone.now() + timedelta(minutes=15), duration_min=45,
         )
         sent = services.send_lesson_reminders()
         self.assertEqual(sent, 2)  # o'qituvchi + o'quvchi
         self.assertTrue(any('15 daqiqadan keyin' in t for t in self.inbox_texts(self.student)))
-        self.assertTrue(any(lesson.title in t for t in self.inbox_texts(self.teacher)))
+        self.assertTrue(any(lesson.course.title in t for t in self.inbox_texts(self.teacher)))
 
     def test_not_sent_before_window(self):
         from .models import Lesson
         from . import services
 
         Lesson.objects.create(
-            course=self.course, title='L2',
-            starts_at=timezone.now() + timedelta(minutes=30), duration_min=45,
+            course=self.course, starts_at=timezone.now() + timedelta(minutes=30), duration_min=45,
         )
         sent = services.send_lesson_reminders()
         self.assertEqual(sent, 0)
@@ -2443,8 +2413,7 @@ class LessonReminderTests(APITestCase):
         from . import services
 
         Lesson.objects.create(
-            course=self.course, title='L3',
-            starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
+            course=self.course, starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
         )
         first = services.send_lesson_reminders()
         second = services.send_lesson_reminders()
@@ -2463,8 +2432,7 @@ class LessonReminderTests(APITestCase):
         Enrollment.objects.create(course=self.course, student=quick_student, status=Enrollment.Status.APPROVED)
 
         Lesson.objects.create(
-            course=self.course, title='L4',
-            starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
+            course=self.course, starts_at=timezone.now() + timedelta(minutes=10), duration_min=45,
         )
         services.send_lesson_reminders()
         self.assertEqual(self.inbox_texts(self.teacher).__len__(), 1)

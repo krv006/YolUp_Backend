@@ -16,7 +16,7 @@ def make_admin(username='admin1') -> User:
 
 
 def make_lesson(course, *, status, starts_at) -> Lesson:
-    return Lesson.objects.create(course=course, title='Dars', starts_at=starts_at, status=status)
+    return Lesson.objects.create(course=course, starts_at=starts_at, status=status)
 
 
 class AnalyticsPermissionTests(APITestCase):

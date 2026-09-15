@@ -95,11 +95,6 @@ class Lesson(TimeStampedUUIDModel, SoftDeleteModel):
         CANCELLED = 'cancelled', 'Bekor qilingan'
 
     course = ForeignKey('lessons.Course', CASCADE, related_name='lessons')
-    # Bo'sh bo'lishi mumkin — takrorlanuvchi jadval yaratishda o'qituvchidan
-    # mavzu so'ralmaydi (bitta mavzu barcha darslarga bir xil yozilib
-    # ketmasligi uchun); frontend mavzusiz darsni alohida belgilaydi,
-    # o'qituvchi keyin har birini alohida tahrirlab yozadi.
-    title = CharField(max_length=200, blank=True)
     starts_at = DateTimeField(db_index=True)
     duration_min = PositiveIntegerField(default=45)
     status = CharField(max_length=12, choices=Status.choices, default=Status.SCHEDULED, db_index=True)
@@ -121,7 +116,7 @@ class Lesson(TimeStampedUUIDModel, SoftDeleteModel):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f'{self.title} ({self.starts_at:%Y-%m-%d %H:%M})'
+        return f'{self.course.title} ({self.starts_at:%Y-%m-%d %H:%M})'
 
 
 class AttentionCheck(TimeStampedUUIDModel):
@@ -184,7 +179,7 @@ class FocusAlert(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title} · {self.exit_count} marta chiqdi'
+        return f'{self.student.username} @ {self.lesson.course.title} · {self.exit_count} marta chiqdi'
 
 
 class LessonRecording(TimeStampedUUIDModel):
@@ -235,7 +230,7 @@ class LessonRecording(TimeStampedUUIDModel):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.lesson.title} [{self.status}]'
+        return f'{self.lesson.course.title} [{self.status}]'
 
 
 class Attendance(TimeStampedUUIDModel):
@@ -259,7 +254,7 @@ class Attendance(TimeStampedUUIDModel):
         return None
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title}'
+        return f'{self.student.username} @ {self.lesson.course.title}'
 
 
 class LessonBan(TimeStampedUUIDModel):
@@ -276,7 +271,7 @@ class LessonBan(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title} [banned]'
+        return f'{self.student.username} @ {self.lesson.course.title} [banned]'
 
 
 class MicRequest(TimeStampedUUIDModel):
@@ -302,7 +297,7 @@ class MicRequest(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title} [mic requested]'
+        return f'{self.student.username} @ {self.lesson.course.title} [mic requested]'
 
 
 class CameraRequest(TimeStampedUUIDModel):
@@ -320,7 +315,7 @@ class CameraRequest(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title} [camera requested]'
+        return f'{self.student.username} @ {self.lesson.course.title} [camera requested]'
 
 
 class LessonReminder(TimeStampedUUIDModel):
@@ -338,7 +333,7 @@ class LessonReminder(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.user.username} @ {self.lesson.title}'
+        return f'{self.user.username} @ {self.lesson.course.title}'
 
 
 class LessonRating(TimeStampedUUIDModel):
@@ -356,4 +351,4 @@ class LessonRating(TimeStampedUUIDModel):
         ]
 
     def __str__(self):
-        return f'{self.student.username} @ {self.lesson.title} · {self.stars}★'
+        return f'{self.student.username} @ {self.lesson.course.title} · {self.stars}★'

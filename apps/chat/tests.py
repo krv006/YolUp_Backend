@@ -118,7 +118,7 @@ class ChatFlowTests(TestCase):
         from apps.lessons.models import Lesson
 
         lesson = Lesson.objects.create(
-            course=self.course, title='Live dars', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
         )
         r = self.api(self.student).get('/api/v1/chat/rooms/')
         self.assertIsNone(r.data['results'][0]['live_lesson'])
@@ -219,7 +219,7 @@ class ChatWebSocketTests(TransactionTestCase):
         from apps.live import services as live_services
 
         lesson = await database_sync_to_async(Lesson.objects.create)(
-            course=self.course, title='WS jonli dars', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
         )
         comm, connected, _ = await self._connect(self.student)
         self.assertTrue(connected)

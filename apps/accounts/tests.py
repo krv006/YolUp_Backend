@@ -740,7 +740,7 @@ class TeacherVideoStatsTests(APITestCase):
 
     def _lesson(self, course):
         return Lesson.objects.create(
-            course=course, title='Dars', starts_at=timezone.now(), status=Lesson.Status.FINISHED,
+            course=course, starts_at=timezone.now(), status=Lesson.Status.FINISHED,
         )
 
     def test_only_completed_recordings_counted_per_teacher(self):

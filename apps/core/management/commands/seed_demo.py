@@ -38,7 +38,7 @@ class Command(BaseCommand):
         )
         lesson_services.enroll(course_id=course.id, by_user=parent, student_id=child.id)
         lesson = lesson_services.schedule_lesson(
-            teacher=teacher, course=course, title='Kvadrat tenglamalar — 1-dars',
+            teacher=teacher, course=course,
             starts_at=timezone.now() + timezone.timedelta(hours=1), duration_min=45,
         )
 

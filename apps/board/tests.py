@@ -65,7 +65,7 @@ class BoardTests(TestCase):
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
         )
         self.lesson = Lesson.objects.create(
-            course=self.course, title='Dars', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
         )
         self.client = APIClient()
 
@@ -219,13 +219,13 @@ class MathBoardTests(TestCase):
         chat_services.ensure_course_room(self.eng_course)
         chat_services.ensure_course_room(self.chem_course)
         self.math_lesson = Lesson.objects.create(
-            course=self.math_course, title='M', starts_at=timezone.now(), duration_min=45,
+            course=self.math_course, starts_at=timezone.now(), duration_min=45,
         )
         self.eng_lesson = Lesson.objects.create(
-            course=self.eng_course, title='E', starts_at=timezone.now(), duration_min=45,
+            course=self.eng_course, starts_at=timezone.now(), duration_min=45,
         )
         self.chem_lesson = Lesson.objects.create(
-            course=self.chem_course, title='K', starts_at=timezone.now(), duration_min=45,
+            course=self.chem_course, starts_at=timezone.now(), duration_min=45,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.teacher)
@@ -290,7 +290,7 @@ class ShapeStrokeTests(TestCase):
         course = Course.objects.create(teacher=self.teacher, title='SH', subject=Course.Subject.MATH)
         chat_services.ensure_course_room(course)
         self.lesson = Lesson.objects.create(
-            course=course, title='D', starts_at=timezone.now(), duration_min=45,
+            course=course, starts_at=timezone.now(), duration_min=45,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.teacher)
@@ -342,7 +342,7 @@ class BoardWebSocketTests(TransactionTestCase):
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
         )
         self.lesson = Lesson.objects.create(
-            course=self.course, title='D', starts_at=timezone.now(), duration_min=45,
+            course=self.course, starts_at=timezone.now(), duration_min=45,
         )
 
     def ws(self, user):

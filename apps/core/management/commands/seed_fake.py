@@ -94,7 +94,7 @@ class Command(BaseCommand):
         for i, topic in enumerate(topics):
             starts = now - timedelta(days=len(topics) - i, hours=2)
             lesson = Lesson.objects.create(
-                course=algebra, title=topic, starts_at=starts,
+                course=algebra, starts_at=starts,
                 duration_min=45, status=Lesson.Status.FINISHED,
             )
             for j, s in enumerate(all_students):
@@ -120,8 +120,7 @@ class Command(BaseCommand):
 
         # ── hozir jonli dars ──
         live = Lesson.objects.create(
-            course=algebra, title='Kvadrat tenglamalar — amaliyot',
-            starts_at=now - timedelta(minutes=15), duration_min=45, status=Lesson.Status.LIVE,
+            course=algebra, starts_at=now - timedelta(minutes=15), duration_min=45, status=Lesson.Status.LIVE,
         )
         Attendance.objects.create(
             lesson=live, student=student, joined_at=now - timedelta(minutes=12),
@@ -146,7 +145,7 @@ class Command(BaseCommand):
         for i, topic in enumerate(['Python — kirish', "O'zgaruvchilar va turlar"]):
             starts = now - timedelta(days=2 - i, hours=1)
             lesson = Lesson.objects.create(
-                course=informatika, title=topic, starts_at=starts,
+                course=informatika, starts_at=starts,
                 duration_min=45, status=Lesson.Status.FINISHED,
             )
             for j, s in enumerate(data_students):
@@ -156,18 +155,13 @@ class Command(BaseCommand):
                     left_at=starts + timedelta(minutes=42),
                 )
         Lesson.objects.create(
-            course=informatika, title='Shart operatorlari (if/else)',
-            starts_at=now + timedelta(days=1, hours=2), duration_min=45,
+            course=informatika, starts_at=now + timedelta(days=1, hours=2), duration_min=45,
         )
 
         # ── kelgusi darslar ──
-        for days, (course, topic) in enumerate([
-            (algebra, "Chiziqli tenglamalar tizimi"),
-            (english, 'Present Simple — amaliyot'),
-            (algebra, 'Nazorat ishi'),
-        ], start=1):
+        for days, course in enumerate([algebra, english, algebra], start=1):
             Lesson.objects.create(
-                course=course, title=topic,
+                course=course,
                 starts_at=now + timedelta(days=days, hours=3), duration_min=45,
             )
 

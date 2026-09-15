@@ -68,7 +68,7 @@ class LessonSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lesson
         fields = [
-            'id', 'course', 'course_title', 'title', 'starts_at',
+            'id', 'course', 'course_title', 'starts_at',
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id',
         ]
@@ -122,7 +122,6 @@ class RateLessonSerializer(serializers.Serializer):
 
 
 class ScheduleLessonsSerializer(serializers.Serializer):
-    title = serializers.CharField(max_length=200, allow_blank=True)
     days = serializers.ListField(
         child=serializers.IntegerField(min_value=0, max_value=6),
         min_length=1, max_length=7,
@@ -156,7 +155,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
 
 class AttendanceSerializer(serializers.ModelSerializer):
     student = UserSerializer(read_only=True)
-    lesson_title = serializers.CharField(source='lesson.title', read_only=True)
+    lesson_title = serializers.CharField(source='lesson.course.title', read_only=True)
     minutes = serializers.IntegerField(read_only=True)
     attention_total = serializers.SerializerMethodField()
     attention_answered = serializers.SerializerMethodField()

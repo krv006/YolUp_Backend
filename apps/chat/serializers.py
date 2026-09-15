@@ -49,7 +49,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         lesson = obj.course.lessons.filter(status=Lesson.Status.LIVE).first()
         if lesson is None:
             return None
-        return {'id': str(lesson.id), 'title': lesson.title, 'room_name': lesson.room_name}
+        return {'id': str(lesson.id), 'title': lesson.course.title, 'room_name': lesson.room_name}
 
     def get_title(self, obj) -> str:
         return obj.title_for(self.context['request'].user)

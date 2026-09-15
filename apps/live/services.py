@@ -659,7 +659,7 @@ def invite_to_lesson(*, teacher: User, lesson_id, student_id=None, request=None)
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 
-    description = f'«{lesson.title}» darsi boshlandi — hoziroq kiring.'
+    description = f'«{lesson.course.title}» darsi boshlandi — hoziroq kiring.'
     for student in students:
         send_notification(
             sender=teacher, description=description,
@@ -1054,7 +1054,7 @@ def _announce_recording_ready(recording) -> None:
 
     try:
         from apps.lessons.services import publish_recording_message
-        title = recording.title or recording.lesson.title
+        title = recording.title or recording.lesson.course.title
         publish_recording_message(recording.lesson, title)
     except Exception:  # noqa: BLE001
         logging.getLogger('apps').exception('recording announce failed')
