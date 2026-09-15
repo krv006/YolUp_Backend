@@ -62,6 +62,9 @@ def _get_mock_test_attempt(user: User, mock_test: MockTest, pk) -> MockTestAttem
 
 
 class QuizListCreateView(generics.ListCreateAPIView):
+    filterset_fields = ['course', 'lesson']
+    ordering_fields = ['created_at', 'due_at', 'opens_at']
+
     def get_permissions(self):
         perm = 'quiz.create' if self.request.method == 'POST' else 'quiz.view'
         return [RequirePerm(perm)()]

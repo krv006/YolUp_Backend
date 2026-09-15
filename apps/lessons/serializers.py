@@ -122,7 +122,7 @@ class RateLessonSerializer(serializers.Serializer):
 
 
 class ScheduleLessonsSerializer(serializers.Serializer):
-    title = serializers.CharField(max_length=200)
+    title = serializers.CharField(max_length=200, allow_blank=True)
     days = serializers.ListField(
         child=serializers.IntegerField(min_value=0, max_value=6),
         min_length=1, max_length=7,

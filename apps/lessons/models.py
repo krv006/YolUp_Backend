@@ -95,7 +95,11 @@ class Lesson(TimeStampedUUIDModel, SoftDeleteModel):
         CANCELLED = 'cancelled', 'Bekor qilingan'
 
     course = ForeignKey('lessons.Course', CASCADE, related_name='lessons')
-    title = CharField(max_length=200)
+    # Bo'sh bo'lishi mumkin — takrorlanuvchi jadval yaratishda o'qituvchidan
+    # mavzu so'ralmaydi (bitta mavzu barcha darslarga bir xil yozilib
+    # ketmasligi uchun); frontend mavzusiz darsni alohida belgilaydi,
+    # o'qituvchi keyin har birini alohida tahrirlab yozadi.
+    title = CharField(max_length=200, blank=True)
     starts_at = DateTimeField(db_index=True)
     duration_min = PositiveIntegerField(default=45)
     status = CharField(max_length=12, choices=Status.choices, default=Status.SCHEDULED, db_index=True)

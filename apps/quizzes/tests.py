@@ -213,6 +213,32 @@ class QuizFlowTests(APITestCase):
         self.client.post('/api/v1/quizzes/', payload, format='json')
         self.assertFalse(Notification.objects.filter(link_type='quiz').exists())
 
+    def test_list_filters_by_course(self):
+        self.auth(self.teacher_token)
+        other_course_id = self.client.post(
+            '/api/v1/courses/', {'title': 'Boshqa kurs', 'subject': 'other'}
+        ).json()['id']
+        self.client.post('/api/v1/quizzes/', {
+            'course': other_course_id, 'title': 'Boshqa kurs testi',
+            'questions': self.quiz_payload['questions'],
+        }, format='json')
+        self.create_quiz()
+
+        resp = self.client.get(f'/api/v1/quizzes/?course={self.course_id}')
+        titles = [q['title'] for q in resp.json()['results']]
+        self.assertEqual(titles, ["1-bob testi"])
+
+    def test_list_orders_by_created_at(self):
+        self.auth(self.teacher_token)
+        self.quiz_payload['title'] = 'Birinchi'
+        self.create_quiz()
+        self.quiz_payload['title'] = 'Ikkinchi'
+        self.create_quiz()
+
+        resp = self.client.get('/api/v1/quizzes/?ordering=-created_at')
+        titles = [q['title'] for q in resp.json()['results']]
+        self.assertEqual(titles, ['Ikkinchi', 'Birinchi'])
+
 
 class MockTestFlowTests(APITestCase):
     def setUp(self):
