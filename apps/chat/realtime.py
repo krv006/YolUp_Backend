@@ -51,7 +51,7 @@ def broadcast_lesson_live(lesson) -> None:
         return
     async_to_sync(layer.group_send)(group, {
         'type': 'chat.lesson_live',
-        'lesson': {'id': str(lesson.id), 'title': lesson.course.title, 'room_name': lesson.room_name},
+        'lesson': {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'room_name': lesson.room_name},
     })
 
 

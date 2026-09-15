@@ -427,10 +427,10 @@ def publish_board_pdf(lesson: Lesson):
     msg = Message(
         room=room,
         sender=lesson.course.teacher,
-        text=f'📋 "{lesson.course.title}" doskasi',
+        text=f'📋 "{lesson.title or lesson.course.title}" doskasi',
         kind=Message.Kind.SYSTEM,
         system_key='board_ready',
-        system_params={'lesson_title': lesson.course.title},
+        system_params={'lesson_title': lesson.title or lesson.course.title},
     )
     with open(path, 'rb') as f:
         msg.file.save(f'doska_{lesson.id}.pdf', File(f), save=False)

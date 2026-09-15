@@ -122,7 +122,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         lesson = room.course.lessons.filter(status=Lesson.Status.LIVE).first()
         if lesson is None:
             return None
-        return {'id': str(lesson.id), 'title': lesson.course.title, 'room_name': lesson.room_name}
+        return {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'room_name': lesson.room_name}
 
     @database_sync_to_async
     def _send_message(self, user, text):

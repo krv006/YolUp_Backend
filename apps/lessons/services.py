@@ -63,7 +63,7 @@ def update_lesson_quiz(*, teacher: User, lesson: Lesson, quiz, request=None) -> 
 
 @transaction.atomic
 def schedule_recurring(*, teacher: User, course: Course, days: list[int],
-                       start_time, end_time, weeks: int, start_date, note: str = '',
+                       start_time, end_time, weeks: int, start_date, title: str = '', note: str = '',
                        request=None) -> list[Lesson]:
     """Haftalik jadval asosida ko'plab darslarni bir yo'la yaratadi.
 
@@ -100,7 +100,7 @@ def schedule_recurring(*, teacher: User, course: Course, days: list[int],
         course__teacher=teacher,
         status__in=[Lesson.Status.SCHEDULED, Lesson.Status.LIVE],
         starts_at__range=(slots[0] - timedelta(hours=24), slots[-1] + timedelta(minutes=duration_min)),
-    ).values('course__title', 'starts_at', 'duration_min'))
+    ).values('title', 'course__title', 'starts_at', 'duration_min'))
 
     conflicts = []
     for new_start in slots:
@@ -111,7 +111,7 @@ def schedule_recurring(*, teacher: User, course: Course, days: list[int],
                 conflicts.append({
                     'date': new_start.strftime('%Y-%m-%d'),
                     'time': f"{new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}",
-                    'existing': ex['course__title'],
+                    'existing': ex['title'] or ex['course__title'],
                 })
                 break
 
@@ -120,7 +120,7 @@ def schedule_recurring(*, teacher: User, course: Course, days: list[int],
 
     lessons = Lesson.objects.bulk_create([
         Lesson(
-            course=course, starts_at=s, duration_min=duration_min,
+            course=course, title=title, starts_at=s, duration_min=duration_min,
             room_name=f'lesson-{uuid.uuid4().hex[:12]}',
         )
         for s in slots
@@ -345,7 +345,7 @@ def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', r
     try:
         from .models import LessonRecording
         recording, _created = LessonRecording.objects.get_or_create(lesson=lesson)
-        title = (recording_title or '').strip() or lesson.course.title
+        title = (recording_title or '').strip() or lesson.title or lesson.course.title
         recording.title = title[:200]
         recording.ended_at = timezone.now()
         recording.save(update_fields=['title', 'ended_at', 'updated_at'])
@@ -456,7 +456,7 @@ def send_lesson_reminders(*, now=None) -> int:
             send_notification(
                 sender=lesson.course.teacher,
                 description=(
-                    f'«{lesson.course.title}» darsi '
+                    f'«{lesson.title or lesson.course.title}» darsi '
                     f'{user.lesson_reminder_minutes} daqiqadan keyin boshlanadi.'
                 ),
                 target_type=Notification.Target.USER, user_id=user.id,
@@ -606,7 +606,7 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
 
     data = {
         'lesson_id': str(lesson.id),
-        'title': recording.title or lesson.course.title,
+        'title': recording.title or lesson.title or lesson.course.title,
         'status': recording.status,
         'ready': file_ready,
         'created_at': recording.created_at,

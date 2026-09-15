@@ -116,7 +116,7 @@ def _assignment_dict(a: Assignment) -> dict:
         'due_at': a.due_at,
         'skill_key': a.skill_key,
         'lesson_id': str(a.lesson_id) if a.lesson_id else None,
-        'lesson_title': a.course.title if a.lesson_id else None,
+        'lesson_title': (a.lesson.title or a.course.title) if a.lesson_id else None,
         'created_at': a.created_at,
     }
 
