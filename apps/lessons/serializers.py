@@ -14,25 +14,34 @@ class CourseSerializer(serializers.ModelSerializer):
     student_count = serializers.SerializerMethodField()
     my_status = serializers.SerializerMethodField()
     is_language_subject = serializers.SerializerMethodField()
+    subject_label = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
         fields = [
-            'id', 'teacher', 'title', 'subject', 'description', 'is_active',
-            'student_count', 'my_status', 'is_language_subject', 'created_at',
+            'id', 'teacher', 'title', 'subject', 'subject_label', 'description',
+            'is_active', 'student_count', 'my_status', 'is_language_subject', 'created_at',
         ]
         read_only_fields = ['is_active']
 
     def get_student_count(self, obj) -> int:
         return obj.enrollments.filter(status=Enrollment.Status.APPROVED).count()
 
+    def get_subject_label(self, obj) -> str:
+        """`subject` — barqaror kod (masalan `'chemistry'`), frontend uchun
+        emas. `subject_label` esa so'rovning `Accept-Language`iga (uz/ru/en)
+        mos tarjima qilingan ko'rsatiladigan nom."""
+        return obj.get_subject_display()
+
     def get_is_language_subject(self, obj) -> bool:
-        """Til fani (ingliz/rus/turk...) bo'lsa true — frontend vazifa
+        """Til fani (ingliz/rus/turk) bo'lsa true — frontend vazifa
         yaratishda "tekshiruv turi" (writing/reading/listening/speaking)
         maydonini faqat shu holatda ko'rsatishi kerak."""
-        from apps.homework.ai import detect_profile
-        _, _, language_key = detect_profile(obj.subject)
-        return bool(language_key)
+        return obj.subject in (
+            Course.Subject.ENGLISH, Course.Subject.RUSSIAN, Course.Subject.TURKISH,
+            Course.Subject.GERMAN, Course.Subject.FRENCH, Course.Subject.ARABIC,
+            Course.Subject.CHINESE, Course.Subject.KOREAN, Course.Subject.JAPANESE,
+        )
 
     def get_my_status(self, obj) -> str | None:
         """So'rov yuborgan foydalanuvchining shu kursdagi yozilish holati (katalog uchun)."""

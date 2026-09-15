@@ -21,12 +21,44 @@ def make(username, role):
 STROKE = {'points': [[10, 10], [100, 100], [200, 150]], 'color': '#ff0000', 'width': 4}
 
 
+class PeriodicTableTests(TestCase):
+    def setUp(self):
+        self.student = make('pt_s', User.Role.STUDENT)
+        self.client = APIClient()
+
+    def test_requires_auth(self):
+        resp = self.client.get('/api/v1/board/periodic-table/')
+        self.assertEqual(resp.status_code, 401)
+
+    def test_authenticated_user_gets_full_table(self):
+        self.client.force_authenticate(self.student)
+        resp = self.client.get('/api/v1/board/periodic-table/')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data), 118)  # H dan Og gacha (barcha elementlar)
+        hydrogen = next(el for el in data if el['symbol'] == 'H')
+        self.assertEqual(hydrogen['z'], 1)
+        self.assertEqual(hydrogen['shells'], [1])
+        self.assertEqual(hydrogen['valence'], [1])
+        self.assertIn('appearance', hydrogen)
+        for el in data:
+            if el['shells'] is not None:
+                self.assertEqual(sum(el['shells']), el['z'])
+
+    def test_no_lesson_or_room_permission_needed(self):
+        """Bu — umumiy ma'lumot, biror darsga/xonaga bog'liq emas — shuning
+        uchun `room.token` kabi ruxsat emas, oddiy autentifikatsiya yetarli."""
+        self.client.force_authenticate(self.student)
+        resp = self.client.get('/api/v1/board/periodic-table/')
+        self.assertEqual(resp.status_code, 200)
+
+
 class BoardTests(TestCase):
     def setUp(self):
         self.teacher = make('t1', User.Role.TEACHER)
         self.student = make('s1', User.Role.STUDENT)
         self.course = Course.objects.create(
-            teacher=self.teacher, title='Algebra', subject='Matematika',
+            teacher=self.teacher, title='Algebra', subject=Course.Subject.MATH,
         )
         chat_services.ensure_course_room(self.course)
         Enrollment.objects.create(
@@ -175,18 +207,25 @@ class MathBoardTests(TestCase):
     def setUp(self):
         self.teacher = make('mb_t', User.Role.TEACHER)
         self.math_course = Course.objects.create(
-            teacher=self.teacher, title='Algebra 7', subject='Matematika',
+            teacher=self.teacher, title='Algebra 7', subject=Course.Subject.MATH,
         )
         self.eng_course = Course.objects.create(
-            teacher=self.teacher, title='English', subject='Ingliz tili',
+            teacher=self.teacher, title='English', subject=Course.Subject.ENGLISH,
+        )
+        self.chem_course = Course.objects.create(
+            teacher=self.teacher, title='Kimyo 8', subject=Course.Subject.CHEMISTRY,
         )
         chat_services.ensure_course_room(self.math_course)
         chat_services.ensure_course_room(self.eng_course)
+        chat_services.ensure_course_room(self.chem_course)
         self.math_lesson = Lesson.objects.create(
             course=self.math_course, title='M', starts_at=timezone.now(), duration_min=45,
         )
         self.eng_lesson = Lesson.objects.create(
             course=self.eng_course, title='E', starts_at=timezone.now(), duration_min=45,
+        )
+        self.chem_lesson = Lesson.objects.create(
+            course=self.chem_course, title='K', starts_at=timezone.now(), duration_min=45,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.teacher)
@@ -196,6 +235,15 @@ class MathBoardTests(TestCase):
         self.assertTrue(r.data['math_enabled'])
         r = self.client.get(f'/api/v1/board/{self.eng_lesson.id}/')
         self.assertFalse(r.data['math_enabled'])
+
+    def test_chemistry_enabled_flag_chemistry_only(self):
+        r = self.client.get(f'/api/v1/board/{self.chem_lesson.id}/')
+        self.assertTrue(r.data['chemistry_enabled'])
+        self.assertFalse(r.data['math_enabled'])
+        r = self.client.get(f'/api/v1/board/{self.math_lesson.id}/')
+        self.assertFalse(r.data['chemistry_enabled'])
+        r = self.client.get(f'/api/v1/board/{self.eng_lesson.id}/')
+        self.assertFalse(r.data['chemistry_enabled'])
 
     def test_math_stroke_only_on_math_course(self):
         r = self.client.post(
@@ -239,7 +287,7 @@ class ShapeStrokeTests(TestCase):
 
     def setUp(self):
         self.teacher = make('sh_t', User.Role.TEACHER)
-        course = Course.objects.create(teacher=self.teacher, title='SH', subject='Matematika')
+        course = Course.objects.create(teacher=self.teacher, title='SH', subject=Course.Subject.MATH)
         chat_services.ensure_course_room(course)
         self.lesson = Lesson.objects.create(
             course=course, title='D', starts_at=timezone.now(), duration_min=45,
@@ -287,7 +335,7 @@ class BoardWebSocketTests(TransactionTestCase):
         self.student = make('bw_s', User.Role.STUDENT)
         self.stranger = make('bw_x', User.Role.STUDENT)
         self.course = Course.objects.create(
-            teacher=self.teacher, title='BW', subject='Matematika',
+            teacher=self.teacher, title='BW', subject=Course.Subject.MATH,
         )
         chat_services.ensure_course_room(self.course)
         Enrollment.objects.create(

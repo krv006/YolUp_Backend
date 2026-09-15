@@ -55,6 +55,15 @@ class CourseViewSet(viewsets.ModelViewSet):
         page = self.paginate_queryset(self.get_queryset())
         return self.get_paginated_response(self.get_serializer(page, many=True).data)
 
+    @action(detail=False)
+    def subjects(self, request):
+        """Kurs yaratishda tanlanadigan tayin fanlar ro'yxati — o'qituvchi
+        o'zi fan nomini yozmaydi, shu ro'yxatdan tanlaydi. `label` so'rovning
+        `Accept-Language`iga (uz/ru/en) mos tarjima qilingan."""
+        return Response([
+            {'value': value, 'label': str(label)} for value, label in Course.Subject.choices
+        ])
+
     def perform_create(self, serializer):
         serializer.instance = services.create_course(
             teacher=self.request.user, request=self.request, **serializer.validated_data,

@@ -68,7 +68,7 @@ class HomeworkTests(TestCase):
             status=ParentChildLink.Status.APPROVED,
         )
         self.course = Course.objects.create(
-            teacher=self.teacher, title='Algebra · 7-sinf', subject='Matematika',
+            teacher=self.teacher, title='Algebra · 7-sinf', subject=Course.Subject.MATH,
         )
         Enrollment.objects.create(
             course=self.course, student=self.student, status=Enrollment.Status.APPROVED,
@@ -87,7 +87,7 @@ class HomeworkTests(TestCase):
     def test_teacher_creates_assignment(self):
         r = self.create_assignment()
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.data['subject'], 'Matematika')
+        self.assertEqual(r.data['subject'], 'math')
 
     def test_only_own_course(self):
         r = self.api(self.other_teacher).post('/api/v1/homework/assignments/', {
@@ -180,7 +180,7 @@ class HomeworkTests(TestCase):
 
     def test_foreign_course_lesson_rejected(self):
         other_course = Course.objects.create(
-            teacher=self.other_teacher, title='Boshqa kurs', subject='Fizika',
+            teacher=self.other_teacher, title='Boshqa kurs', subject=Course.Subject.PHYSICS,
         )
         lesson = Lesson.objects.create(
             course=other_course, title='Boshqa dars', starts_at=timezone.now(),
@@ -191,7 +191,7 @@ class HomeworkTests(TestCase):
 
     def test_course_serializer_is_language_subject(self):
         eng = Course.objects.create(
-            teacher=self.teacher, title='English A1', subject='Ingliz tili',
+            teacher=self.teacher, title='English A1', subject=Course.Subject.ENGLISH,
         )
         r = self.api(self.teacher).get('/api/v1/courses/')
         by_id = {c['id']: c for c in r.data['results']}
@@ -213,7 +213,7 @@ class HomeworkTests(TestCase):
         self.assertEqual(r.data['grade'], '')
         # AI'ga fan konteksti to'g'ri uzatilgan
         _, kwargs = mock_grade.call_args
-        self.assertEqual(kwargs['subject_text'], 'Matematika')
+        self.assertEqual(kwargs['subject_text'], 'math')
         # natija bazada (AI taklifi sifatida) to'liq saqlangan
         sub = Submission.objects.get(pk=r.data['id'])
         self.assertEqual(sub.ai_overall_score, 78)
@@ -505,7 +505,7 @@ class DeadlineReminderTests(TestCase):
         self.teacher = make('dr_t', User.Role.TEACHER)
         self.student = make('dr_s1', User.Role.STUDENT)
         self.other_student = make('dr_s2', User.Role.STUDENT)
-        self.course = Course.objects.create(teacher=self.teacher, title='DR', subject='Matematika')
+        self.course = Course.objects.create(teacher=self.teacher, title='DR', subject=Course.Subject.MATH)
         Enrollment.objects.create(course=self.course, student=self.student, status=Enrollment.Status.APPROVED)
         Enrollment.objects.create(course=self.course, student=self.other_student, status=Enrollment.Status.APPROVED)
 
@@ -596,7 +596,7 @@ class ProgressReportTests(TestCase):
         ParentChildLink.objects.create(
             parent=self.parent, student=self.student, status=ParentChildLink.Status.APPROVED,
         )
-        self.course = Course.objects.create(teacher=self.teacher, title='Algebra', subject='Matematika')
+        self.course = Course.objects.create(teacher=self.teacher, title='Algebra', subject=Course.Subject.MATH)
         Enrollment.objects.create(course=self.course, student=self.student, status=Enrollment.Status.APPROVED)
         self.client = APIClient()
 
@@ -674,10 +674,11 @@ class ProgressReportTests(TestCase):
 
 class AiUnitTests(TestCase):
     def test_detect_profile(self):
-        self.assertEqual(ai.detect_profile('Matematika'), ('math', '', ''))
-        self.assertEqual(ai.detect_profile('Fizika'), ('physics', '', ''))
-        self.assertEqual(ai.detect_profile('Ingliz tili'), ('general', '', 'english'))
-        self.assertEqual(ai.detect_profile('Geografiya'), ('general', 'Geografiya', ''))
+        self.assertEqual(ai.detect_profile('math'), ('math', '', ''))
+        self.assertEqual(ai.detect_profile('physics'), ('physics', '', ''))
+        self.assertEqual(ai.detect_profile('english'), ('general', '', 'english'))
+        self.assertEqual(ai.detect_profile('geography'), ('general', 'Geography', ''))
+        self.assertEqual(ai.detect_profile('other'), ('general', '', ''))
 
     def test_grade_label(self):
         self.assertEqual(ai.grade_label(95), "A'lo")

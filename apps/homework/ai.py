@@ -232,7 +232,11 @@ SUBJECTS = {
 }
 
 # Til fanlari — (til, ko'nikma) juftligidan profil quriladi (asl SKILL_TEMPLATES porti)
-LANGUAGES = {'english': 'English', 'russian': 'Russian', 'turkish': 'Turkish'}
+LANGUAGES = {
+    'english': 'English', 'russian': 'Russian', 'turkish': 'Turkish',
+    'german': 'German', 'french': 'French', 'arabic': 'Arabic',
+    'chinese': 'Chinese', 'korean': 'Korean', 'japanese': 'Japanese',
+}
 SKILLS = {
     'writing': {
         'note': 'The submission is a piece of student writing (essay, letter, or short answers) as PDF, image, or Word document.',
@@ -308,28 +312,43 @@ SKILLS = {
     },
 }
 
-# course.subject matnidan fan kalitini aniqlash (board'dagi regex uslubi)
-_SUBJECT_PATTERNS = [
-    (r'matem|algebra|geometr', ('math', '', '')),
-    (r'fizik', ('physics', '', '')),
-    (r'kimyo|ximiy', ('chemistry', '', '')),
-    (r'biolog', ('biology', '', '')),
-    (r'informat|dastur|program|kompyut', ('computer_science', '', '')),
-    (r'tarix|histor', ('history', '', '')),
-    (r'adabiyot|ona tili|essay|insho', ('essay', '', '')),
-    (r'ingliz|english', ('general', '', 'english')),
-    (r'rus tili|russian', ('general', '', 'russian')),
-    (r'turk', ('general', '', 'turkish')),
-]
+# course.subject -> (subject_key, custom_name, language_key). `Course.subject`
+# endi erkin matn emas, `Course.Subject` tayin kodlaridan biri — shuning uchun
+# oddiy lug'at yetarli, regex/imlo moslashtirish shart emas.
+_SUBJECT_KEY_MAP = {
+    'math': ('math', '', ''),
+    'physics': ('physics', '', ''),
+    'astronomy': ('physics', '', ''),
+    'chemistry': ('chemistry', '', ''),
+    'biology': ('biology', '', ''),
+    'ecology': ('biology', '', ''),
+    'computer_science': ('computer_science', '', ''),
+    'history': ('history', '', ''),
+    'literature': ('essay', '', ''),
+    'geography': ('general', 'Geography', ''),
+    'civics': ('general', 'Civics', ''),
+    'economics': ('general', 'Economics', ''),
+    'music': ('general', 'Music', ''),
+    'art': ('general', 'Art', ''),
+    'physical_education': ('general', 'Physical Education', ''),
+    'technology': ('general', 'Technology', ''),
+    'chess': ('general', 'Chess', ''),
+    'english': ('general', '', 'english'),
+    'russian': ('general', '', 'russian'),
+    'turkish': ('general', '', 'turkish'),
+    'german': ('general', '', 'german'),
+    'french': ('general', '', 'french'),
+    'arabic': ('general', '', 'arabic'),
+    'chinese': ('general', '', 'chinese'),
+    'korean': ('general', '', 'korean'),
+    'japanese': ('general', '', 'japanese'),
+    'other': ('general', '', ''),
+}
 
 
-def detect_profile(subject_text: str) -> tuple:
-    """course.subject -> (subject_key, custom_name, language_key)."""
-    text = (subject_text or '').lower()
-    for pattern, found in _SUBJECT_PATTERNS:
-        if re.search(pattern, text):
-            return found
-    return ('general', subject_text or '', '')
+def detect_profile(subject_value: str) -> tuple:
+    """course.subject (Course.Subject kodi) -> (subject_key, custom_name, language_key)."""
+    return _SUBJECT_KEY_MAP.get(subject_value or '', ('general', '', ''))
 
 
 # ---------------------------------------------------------------------------

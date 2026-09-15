@@ -60,7 +60,7 @@ class QuizFlowTests(APITestCase):
 
         self.auth(self.teacher_token)
         self.course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'math'}
         ).json()['id']
 
         self.quiz_payload = {
@@ -228,7 +228,7 @@ class MockTestFlowTests(APITestCase):
 
         self.auth(self.teacher_token)
         self.course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Ingliz tili', 'subject': 'Til'}
+            '/api/v1/courses/', {'title': 'Ingliz tili', 'subject': 'english'}
         ).json()['id']
 
         self.quiz1_id = self._create_quiz('1-bob testi')['id']
@@ -283,7 +283,7 @@ class MockTestFlowTests(APITestCase):
 
     def test_rejects_quiz_from_other_course(self):
         other_course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Boshqa kurs', 'subject': 'X'}
+            '/api/v1/courses/', {'title': 'Boshqa kurs', 'subject': 'other'}
         ).json()['id']
         foreign_quiz_id = self._create_quiz('Boshqa test', course_id=other_course_id)['id']
         resp = self.create_mock_test(quiz_ids=[self.quiz1_id, foreign_quiz_id])
@@ -480,7 +480,7 @@ class QuizDocxImportTests(APITestCase):
         preview = resp.json()
         self.auth(self.teacher_token)
         course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'math'}
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,
@@ -557,7 +557,7 @@ class QuizXlsxImportTests(APITestCase):
         preview = resp.json()
         self.auth(self.teacher_token)
         course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Matematika', 'subject': 'math'}
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,

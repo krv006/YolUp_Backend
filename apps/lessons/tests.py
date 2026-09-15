@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 from apps.accounts.models import User
 from apps.accounts.tests import PASSWORD, login, register
 
-from .models import Attendance
+from .models import Attendance, Course
 
 
 class CourseLessonFlowTests(APITestCase):
@@ -24,7 +24,7 @@ class CourseLessonFlowTests(APITestCase):
         # teacher creates course + lesson
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.teacher_token}')
         self.course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'Matematika'}
+            '/api/v1/courses/', {'title': 'Algebra', 'subject': 'math'}
         ).json()['id']
         starts_at = (timezone.now() + timedelta(days=1)).isoformat()
         self.lesson_id = self.client.post('/api/v1/lessons/', {
@@ -501,7 +501,7 @@ class LessonQuizLinkTests(APITestCase):
         self.teacher_token = login(self.client, 'lq_teacher')
         self.auth(self.teacher_token)
         self.course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Fizika', 'subject': 'Fizika'}
+            '/api/v1/courses/', {'title': 'Fizika', 'subject': 'physics'}
         ).json()['id']
 
     def auth(self, token):
@@ -558,7 +558,7 @@ class LessonQuizLinkTests(APITestCase):
 
     def test_cannot_attach_quiz_from_another_course(self):
         other_course_id = self.client.post(
-            '/api/v1/courses/', {'title': 'Kimyo', 'subject': 'Kimyo'}
+            '/api/v1/courses/', {'title': 'Kimyo', 'subject': 'chemistry'}
         ).json()['id']
         quiz = self.create_quiz(course_id=other_course_id)
 
@@ -2445,3 +2445,60 @@ class LessonReminderTests(APITestCase):
         services.send_lesson_reminders()
         self.assertEqual(self.inbox_texts(self.teacher).__len__(), 1)
         self.assertEqual(self.inbox_texts(quick_student).__len__(), 0)
+
+
+class CourseSubjectI18nTests(APITestCase):
+    """Fanlar ro'yxati tayin (erkin matn emas) va 3 tilda (uz/ru/en) —
+    `Accept-Language` sarlavhasiga qarab tarjima qilinadi."""
+
+    def setUp(self):
+        register(self.client, 'subj_teacher', 'teacher')
+        self.token = login(self.client, 'subj_teacher')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+
+    def test_subjects_list_default_uzbek(self):
+        r = self.client.get('/api/v1/courses/subjects/')
+        self.assertEqual(r.status_code, 200)
+        values = {item['value'] for item in r.json()}
+        self.assertEqual(values, {v for v, _ in Course.Subject.choices})
+        chemistry = next(item for item in r.json() if item['value'] == 'chemistry')
+        self.assertEqual(chemistry['label'], 'Kimyo')
+        chess = next(item for item in r.json() if item['value'] == 'chess')
+        self.assertEqual(chess['label'], 'Shaxmat')
+
+    def test_all_subject_labels_translated_in_all_3_languages(self):
+        """Har bir fan kodi uchun ru/en labeli uz labelidan farqli bo'lishi
+        kerak — aks holda tarjima yozilmagan (source matn qaytgan) bo'ladi."""
+        uz = {item['value']: item['label'] for item in self.client.get('/api/v1/courses/subjects/').json()}
+        for lang in ('ru', 'en'):
+            translated = {
+                item['value']: item['label']
+                for item in self.client.get('/api/v1/courses/subjects/', HTTP_ACCEPT_LANGUAGE=lang).json()
+            }
+            for value, uz_label in uz.items():
+                self.assertNotEqual(
+                    translated[value], uz_label,
+                    f"'{value}' fani {lang} tiliga tarjima qilinmagan",
+                )
+
+    def test_subjects_list_russian(self):
+        r = self.client.get('/api/v1/courses/subjects/', HTTP_ACCEPT_LANGUAGE='ru')
+        chemistry = next(item for item in r.json() if item['value'] == 'chemistry')
+        self.assertEqual(chemistry['label'], 'Химия')
+
+    def test_subjects_list_english(self):
+        r = self.client.get('/api/v1/courses/subjects/', HTTP_ACCEPT_LANGUAGE='en')
+        chemistry = next(item for item in r.json() if item['value'] == 'chemistry')
+        self.assertEqual(chemistry['label'], 'Chemistry')
+
+    def test_course_creation_rejects_free_text_subject(self):
+        r = self.client.post('/api/v1/courses/', {'title': 'X', 'subject': 'Ximiya'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_course_subject_label_follows_accept_language(self):
+        course_id = self.client.post(
+            '/api/v1/courses/', {'title': 'Kimyo 9', 'subject': 'chemistry'},
+        ).json()['id']
+        r = self.client.get(f'/api/v1/courses/{course_id}/', HTTP_ACCEPT_LANGUAGE='ru')
+        self.assertEqual(r.json()['subject'], 'chemistry')
+        self.assertEqual(r.json()['subject_label'], 'Химия')
