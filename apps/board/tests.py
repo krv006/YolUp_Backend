@@ -245,20 +245,19 @@ class MathBoardTests(TestCase):
         r = self.client.get(f'/api/v1/board/{self.eng_lesson.id}/')
         self.assertFalse(r.data['chemistry_enabled'])
 
-    def test_math_stroke_only_on_math_course(self):
-        r = self.client.post(
-            f'/api/v1/board/{self.math_lesson.id}/stroke/',
-            {'sheet': 0, 'stroke': self.MATH_STROKE}, format='json',
-        )
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.data['type'], 'math')
-        self.assertEqual(r.data['latex'], r'\frac{x^2-9}{x-3}')
-
-        r = self.client.post(
-            f'/api/v1/board/{self.eng_lesson.id}/stroke/',
-            {'sheet': 0, 'stroke': self.MATH_STROKE}, format='json',
-        )
-        self.assertEqual(r.status_code, 400)
+    def test_math_stroke_allowed_on_any_course(self):
+        """Formula bloki — shunchaki LaTeX matn, xavfsizlik jihatidan oddiy
+        `text` elementidan farqi yo'q, shuning uchun barcha fanlarda chizish
+        mumkin (mahsulot qarori). Faqat YECHUVCHI (`solve/`) matematikaga
+        cheklangan — pastdagi `test_solver_only_on_math_course`ga qarang."""
+        for lesson in (self.math_lesson, self.eng_lesson, self.chem_lesson):
+            r = self.client.post(
+                f'/api/v1/board/{lesson.id}/stroke/',
+                {'sheet': 0, 'stroke': self.MATH_STROKE}, format='json',
+            )
+            self.assertEqual(r.status_code, 201)
+            self.assertEqual(r.data['type'], 'math')
+            self.assertEqual(r.data['latex'], r'\frac{x^2-9}{x-3}')
 
     def test_solver_only_on_math_course(self):
         r = self.client.post(

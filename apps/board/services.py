@@ -90,13 +90,13 @@ def get_board(*, user: User, lesson_id) -> dict:
     return result
 
 
-def _validate_stroke(stroke: dict, *, allow_math: bool = False) -> dict:
-    # MathLive formula bloki (LaTeX) — FAQAT matematika kurslarida
+def _validate_stroke(stroke: dict) -> dict:
+    # MathLive formula bloki (LaTeX) — barcha fanlarda (mahsulot qarori):
+    # bu shunchaki LaTeX matn, oddiy `text` elementidan xavfsizlik jihatidan
+    # farqi yo'q. FAQAT yechuvchi (`solve_formula`, SymPy) matematika
+    # kurslari bilan cheklangan — formulani CHIZISH bilan uni YECHISH boshqa-
+    # boshqa narsa.
     if stroke.get('type') == 'math':
-        if not allow_math:
-            raise ValidationError({'stroke': (
-                _('Matematik formula bloki faqat matematika kurslari doskasida ishlaydi.')
-            )})
         latex = str(stroke.get('latex') or '').strip()
         if not latex:
             raise ValidationError({'stroke': _("Formula bo'sh.")})
@@ -198,7 +198,7 @@ def add_stroke(*, user: User, lesson_id, sheet_index: int, stroke: dict) -> dict
     )
     if len(sheet.strokes) >= MAX_STROKES_PER_SHEET:
         raise ValidationError(_("Bu sheet to'ldi — yangisini oching."))
-    clean = _validate_stroke(stroke, allow_math=is_math_lesson(lesson))
+    clean = _validate_stroke(stroke)
     clean['id'] = uuid.uuid4().hex[:12]
     clean['by'] = user.first_name or user.username
     sheet.strokes = [*sheet.strokes, clean]
