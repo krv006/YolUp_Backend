@@ -15,7 +15,8 @@ _APPROVED = ParentChildLink.Status.APPROVED
 def quizzes_for(user: User) -> QuerySet[Quiz]:
     qs = Quiz.objects.select_related('course', 'lesson')
     if user.role == User.Role.TEACHER:
-        return qs.filter(course__teacher=user)
+        # Guruhdagi testlar + o'zi yozgan guruhsiz (fan bo'yicha) testlar.
+        return qs.filter(Q(course__teacher=user) | Q(author=user))
     # O'quvchi/ota-ona hali "ochilish kuni" kelmagan testni ko'rmaydi —
     # o'qituvchi esa tayyorlash uchun har doim ko'radi (yuqorida qaytdi).
     not_yet_opened = Q(opens_at__isnull=False, opens_at__gt=timezone.now())

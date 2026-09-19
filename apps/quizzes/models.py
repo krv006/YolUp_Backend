@@ -15,16 +15,26 @@ from django.db.models import (
     BooleanField,
     CharField,
     DateTimeField,
+    FloatField,
     ForeignKey,
+    JSONField,
     PositiveIntegerField,
     TextField,
+    TextChoices,
 )
 
 from apps.core.models import TimeStampedUUIDModel
+from apps.lessons.models import Course
 
 
 class Quiz(TimeStampedUUIDModel):
-    course = ForeignKey('lessons.Course', CASCADE, related_name='quizzes')
+    # Guruhsiz (fan bo'yicha) test uchun `course` bo'sh — bunday test o'quvchilarga
+    # ko'rinmaydi, faqat muallif (`author`) o'qituvchi ko'radi va guruhga nusxalaydi.
+    course = ForeignKey('lessons.Course', CASCADE, null=True, blank=True, related_name='quizzes')
+    author = ForeignKey(
+        settings.AUTH_USER_MODEL, SET_NULL, null=True, blank=True, related_name='authored_quizzes',
+    )
+    subject = CharField(max_length=100, choices=Course.Subject.choices, blank=True)
     # Aniq (tugagan yoki tugamagan) darsga bog'lash ixtiyoriy — Assignment bilan bir xil naqsh.
     lesson = ForeignKey(
         'lessons.Lesson', SET_NULL, null=True, blank=True, related_name='quizzes',
@@ -43,14 +53,28 @@ class Quiz(TimeStampedUUIDModel):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.title} @ {self.course.title}'
+        return f'{self.title} @ {self.course.title if self.course_id else self.subject}'
 
 
 class Question(TimeStampedUUIDModel):
+    class Type(TextChoices):
+        SINGLE = 'single', "Bitta to'g'ri javob"
+        MULTIPLE = 'multiple', "Bir nechta to'g'ri javob"
+        TRUE_FALSE = 'true_false', "To'g'ri / noto'g'ri"
+        NUMERIC = 'numeric', 'Son kiritish'
+        TEXT = 'text', 'Matn kiritish'
+        MATCHING = 'matching', 'Moslashtirish'
+        ORDERING = 'ordering', 'Tartibga solish'
+        FILL_BLANK = 'fill_blank', "Bo'sh joyni to'ldirish"
+
     quiz = ForeignKey(Quiz, CASCADE, related_name='questions')
+    type = CharField(max_length=20, choices=Type.choices, default=Type.SINGLE)
     text = TextField()
     order = PositiveIntegerField(default=0)
-    points = PositiveIntegerField(default=1)
+    points = PositiveIntegerField(default=2)
+    # Turga xos javob kaliti (true_false/numeric/text/matching/fill_blank).
+    # single/multiple/ordering javoblari Option jadvalida saqlanadi.
+    answer_key = JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['order', 'created_at']
@@ -77,7 +101,8 @@ class QuizAttempt(TimeStampedUUIDModel):
 
     quiz = ForeignKey(Quiz, CASCADE, related_name='attempts')
     student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='quiz_attempts')
-    score = PositiveIntegerField(default=0)
+    # Qisman ball mumkin (matching/fill_blank) — 2 xonagacha yaxlitlanadi.
+    score = FloatField(default=0)
     max_score = PositiveIntegerField(default=0)
 
     class Meta:
@@ -92,6 +117,10 @@ class AnswerResponse(TimeStampedUUIDModel):
     question = ForeignKey(Question, CASCADE, related_name='+')
     # Savol o'chirilgan variant bilan javob berilgan bo'lsa ham tarix saqlansin — SET_NULL.
     selected_option = ForeignKey(Option, SET_NULL, null=True, blank=True, related_name='+')
+    # O'quvchining xom javobi (turga xos) va o'qiladigan ko'rinishi.
+    answer = JSONField(null=True, blank=True)
+    given_display = TextField(null=True, blank=True)
+    earned_points = FloatField(default=0)
     is_correct = BooleanField(default=False)
 
     class Meta:

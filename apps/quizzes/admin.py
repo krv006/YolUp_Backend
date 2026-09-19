@@ -22,7 +22,7 @@ class QuizAdmin(admin.ModelAdmin):
 
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
-    list_display = ['text', 'quiz', 'points']
+    list_display = ['text', 'type', 'quiz', 'points']
     inlines = [OptionInline]
 
 

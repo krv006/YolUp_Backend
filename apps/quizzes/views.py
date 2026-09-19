@@ -58,7 +58,8 @@ class QuizListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         quiz = services.create_quiz(
-            teacher=request.user, course=data['course'], lesson=data.get('lesson'),
+            teacher=request.user, course=data.get('course'), subject=data.get('subject', ''),
+            lesson=data.get('lesson'),
             title=data['title'], description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
         )
