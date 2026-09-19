@@ -720,7 +720,8 @@ class SwitchRoleTests(APITestCase):
 
         resp = self.switch_role('student')
         new_access = resp.json()['access']
-        me = self.client.get('/api/v1/auth/me/', HTTP_AUTHORIZATION=f'Bearer {new_access}')
+        self.auth(new_access)  # APIClient.credentials() so'rov sarlavhasidan ustun — eski tokenni almashtiramiz
+        me = self.client.get('/api/v1/auth/me/')
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()['role'], 'student')
 
