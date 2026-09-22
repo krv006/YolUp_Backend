@@ -15,6 +15,7 @@ urlpatterns = [
     path('api/v1/auth/', include('apps.accounts.urls')),
     path('api/v1/', include('apps.lessons.urls')),
     path('api/v1/live/', include('apps.live.urls')),
+    path('api/v1/voice-rooms/', include('apps.voice.urls')),
     path('api/v1/chat/', include('apps.chat.urls')),
     path('api/v1/board/', include('apps.board.urls')),
     path('api/v1/homework/', include('apps.homework.urls')),

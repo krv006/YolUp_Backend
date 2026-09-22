@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'apps.accounts',
     'apps.lessons',
     'apps.live',
+    'apps.voice',
     'apps.chat',
     'apps.board',
     'apps.homework',
