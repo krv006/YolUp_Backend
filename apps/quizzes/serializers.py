@@ -120,11 +120,16 @@ class QuestionWriteSerializer(serializers.Serializer):
 class QuizCreateSerializer(serializers.ModelSerializer):
     """Faqat kirish validatsiyasi uchun — obyekt yaratish services.create_quiz'da."""
 
+    # `topic` majburiy (model darajasida `blank=True` — faqat eski qatorlar
+    # migratsiyada muammosiz qolishi uchun); `title` esa ixtiyoriy — bo'sh
+    # bo'lsa frontend ro'yxatda topic'ni ko'rsatadi.
+    topic = serializers.CharField(max_length=200)
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     questions = QuestionWriteSerializer(many=True)
 
     class Meta:
         model = Quiz
-        fields = ['course', 'subject', 'lesson', 'title', 'description', 'due_at', 'opens_at', 'questions']
+        fields = ['course', 'subject', 'lesson', 'topic', 'title', 'description', 'due_at', 'opens_at', 'questions']
 
     def validate_questions(self, questions):
         if not questions:
@@ -144,13 +149,27 @@ class SubjectLabelMixin(serializers.Serializer):
     subject_label = serializers.CharField(source='get_subject_display', read_only=True)
 
 
+class QuizUpdateSerializer(serializers.ModelSerializer):
+    """Faqat metadata tahriri — savollar bu orqali o'zgartirilmaydi."""
+
+    topic = serializers.CharField(max_length=200, required=False)
+
+    class Meta:
+        model = Quiz
+        fields = ['topic', 'title', 'description', 'due_at', 'opens_at']
+        extra_kwargs = {
+            'title': {'required': False, 'allow_blank': True},
+            'description': {'required': False, 'allow_blank': True},
+        }
+
+
 class QuizListSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     question_count = serializers.IntegerField(source='questions.count', read_only=True)
 
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'question_count', 'created_at',
         ]
 
@@ -197,7 +216,7 @@ class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'questions',
         ]
 
@@ -246,7 +265,7 @@ class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'questions', 'created_at',
         ]
 

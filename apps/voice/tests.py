@@ -1,6 +1,8 @@
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
+import jwt as pyjwt
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -60,6 +62,21 @@ class VoiceRoomFlowTests(VoiceRoomTestBase):
         join = self.client.post(f'/api/v1/voice-rooms/{room_id}/join/')
         self.assertEqual(join.status_code, 200, join.content)
         self.assertIn('token', join.json())
+
+    def test_token_grants_use_string_track_sources_not_protobuf_enum(self):
+        """Regression: `VideoGrants` JWT claim (JSON) — protobuf `TrackSource`
+        enumi bo'lsa, LiveKit serveri "cannot unmarshal number into ...
+        string" bilan tokenni rad etadi (production'da topilgan, 2026-09-22).
+        `canPublishSources` haqiqatan satr ro'yxati bo'lishi shart."""
+        room_id = self.create_room(self.teacher_token).json()['id']
+        token = self.client.post(f'/api/v1/voice-rooms/{room_id}/join/').json()['token']
+        claims = pyjwt.decode(
+            token, settings.LIVEKIT_API_SECRET, algorithms=['HS256'],
+            audience='livekit', options={'verify_aud': False},
+        )
+        sources = claims['video']['canPublishSources']
+        self.assertEqual(sources, ['microphone'])
+        self.assertTrue(all(isinstance(s, str) for s in sources))
 
     def test_outsider_cannot_create_or_join(self):
         resp = self.create_room(self.outsider_token)

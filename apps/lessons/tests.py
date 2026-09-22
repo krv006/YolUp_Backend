@@ -534,6 +534,7 @@ class LessonQuizLinkTests(APITestCase):
     def create_quiz(self, course_id=None, lesson_id=None):
         payload = {
             'course': course_id or self.course_id,
+            'topic': '1-bob mavzusi',
             'title': 'Bob 1 testi',
             'questions': [{
                 'text': '2+2=?', 'points': 1,

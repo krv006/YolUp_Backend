@@ -6,7 +6,6 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from livekit.api import AccessToken, VideoGrants
-from livekit.protocol.models import TrackSource
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
@@ -83,7 +82,16 @@ def _token_payload(room: VoiceRoom, user: User) -> dict:
             can_subscribe=True,
             # Ovozli suhbat — faqat mikrofon; kamera/ekran ulashish yo'q
             # (darslardagi video-xonadan farqli, bu shunchaki ovozli kanal).
-            can_publish_sources=[TrackSource.MICROPHONE],
+            # MUHIM: bu yerda protobuf `TrackSource` enumi EMAS, satr kerak —
+            # `VideoGrants` JWT claim (JSON) sifatida kodlanadi, LiveKit
+            # serveri esa `canPublishSources`ni satr ro'yxati deb kutadi
+            # (protobuf enum ishlatilsa, JSON'da RAQAM chiqib, server tokenni
+            # "cannot unmarshal number into ... string" xatosi bilan rad
+            # etadi — production'da aynan shu xato topilgan, 2026-09-22).
+            # `apps.live.services`dagi protobuf enum ishlatilgan joylar
+            # (masalan `ParticipantPermission`) BOSHQA — ular haqiqiy
+            # gRPC/protobuf xabar, JWT emas, shuning uchun to'g'ri qoladi.
+            can_publish_sources=['microphone'],
         ))
     )
     return {

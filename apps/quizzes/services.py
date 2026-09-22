@@ -37,7 +37,7 @@ def _notify_new_quiz(quiz: Quiz) -> None:
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 
-    description = f'«{quiz.course.title}»: yangi test qo\'shildi — «{quiz.title}».'
+    description = f'«{quiz.course.title}»: yangi test qo\'shildi — «{quiz.title or quiz.topic}».'
     for student in _enrolled_students(quiz.course):
         send_notification(
             sender=quiz.course.teacher, description=description,
@@ -99,10 +99,12 @@ def _create_question(quiz: Quiz, index: int, q_data: dict) -> Question:
 
 @transaction.atomic
 def create_quiz(
-    *, teacher: User, title: str, questions: list, course: Course | None = None,
-    subject: str = '', lesson: Lesson | None = None, description: str = '',
+    *, teacher: User, topic: str, questions: list, course: Course | None = None,
+    subject: str = '', lesson: Lesson | None = None, title: str = '', description: str = '',
     due_at=None, opens_at=None,
 ) -> Quiz:
+    if not topic.strip():
+        raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
     if course is None:
         if not subject:
             raise ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
@@ -116,7 +118,7 @@ def create_quiz(
         subject = course.subject  # guruh testi fanini kursdan oladi
 
     quiz = Quiz.objects.create(
-        course=course, author=teacher, subject=subject, lesson=lesson, title=title,
+        course=course, author=teacher, subject=subject, lesson=lesson, topic=topic, title=title,
         description=description, due_at=due_at, opens_at=opens_at,
     )
     for q_index, q_data in enumerate(questions):
@@ -163,6 +165,25 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
     if fmt == 'xlsx':
         return template_export.build_xlsx_template(clamped)
     raise ValidationError({'format': _("Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin.")})
+
+
+_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at')
+
+
+def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
+    """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
+    bu orqali o'zgartirilmaydi (alohida, kattaroq funksiya bo'lardi)."""
+    if not _is_owner(quiz, teacher):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    unknown = set(fields) - set(_EDITABLE_FIELDS)
+    if unknown:
+        raise ValidationError({f: _("Bu maydonni o'zgartirib bo'lmaydi.") for f in unknown})
+    if 'topic' in fields and not fields['topic'].strip():
+        raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
+    for field, value in fields.items():
+        setattr(quiz, field, value)
+    quiz.save(update_fields=list(fields))
+    return quiz
 
 
 def delete_quiz(*, teacher: User, quiz: Quiz) -> None:

@@ -39,7 +39,10 @@ class Quiz(TimeStampedUUIDModel):
     lesson = ForeignKey(
         'lessons.Lesson', SET_NULL, null=True, blank=True, related_name='quizzes',
     )
-    title = CharField(max_length=200)
+    # Mavzu — majburiy (frontend validatsiya qiladi, backend ham talab qiladi).
+    # `title` esa ixtiyoriy nom; bo'sh bo'lsa frontend ro'yxatda `topic`ni ko'rsatadi.
+    topic = CharField(max_length=200, blank=True)
+    title = CharField(max_length=200, blank=True)
     description = TextField(blank=True)
     # Muddat — informatsion (Assignment.due_at bilan bir xil naqsh): topshirishni
     # BLOKLAMAYDI, faqat o'quvchiga/interfeysga qachongacha ekanini ko'rsatadi.
@@ -53,7 +56,8 @@ class Quiz(TimeStampedUUIDModel):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'{self.title} @ {self.course.title if self.course_id else self.subject}'
+        name = self.title or self.topic
+        return f'{name} @ {self.course.title if self.course_id else self.subject}'
 
 
 class Question(TimeStampedUUIDModel):

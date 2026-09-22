@@ -32,7 +32,7 @@ class QuizTestBase(APITestCase):
     def make_quiz(self, questions):
         self.auth(self.teacher_token)
         return self.client.post('/api/v1/quizzes/', {
-            'course': self.course_id, 'title': 'T', 'questions': questions}, format='json')
+            'course': self.course_id, 'topic': 'Mavzu', 'title': 'T', 'questions': questions}, format='json')
 
     def take(self, quiz_id):
         self.auth(self.child_token)
@@ -227,7 +227,10 @@ class SubjectQuizTests(QuizTestBase):
 
     def make_subject_quiz(self, **extra):
         self.auth(self.teacher_token)
-        payload = {'course': None, 'subject': 'chemistry', 'title': 'Kimyo', 'questions': self.QUESTION}
+        payload = {
+            'course': None, 'subject': 'chemistry', 'topic': 'Atom tuzilishi',
+            'title': 'Kimyo', 'questions': self.QUESTION,
+        }
         payload.update(extra)
         return self.client.post('/api/v1/quizzes/', payload, format='json')
 
@@ -243,13 +246,15 @@ class SubjectQuizTests(QuizTestBase):
 
     def test_neither_course_nor_subject_is_400(self):
         self.auth(self.teacher_token)
-        resp = self.client.post('/api/v1/quizzes/', {'title': 'x', 'questions': self.QUESTION}, format='json')
+        resp = self.client.post(
+            '/api/v1/quizzes/', {'topic': 'x', 'title': 'x', 'questions': self.QUESTION}, format='json',
+        )
         self.assertEqual(resp.status_code, 400)
 
     def test_course_quiz_takes_subject_from_course(self):
         self.auth(self.teacher_token)
         resp = self.client.post('/api/v1/quizzes/', {
-            'course': self.course_id, 'subject': 'chemistry', 'title': 'x',
+            'course': self.course_id, 'subject': 'chemistry', 'topic': 'x', 'title': 'x',
             'questions': self.QUESTION}, format='json')
         self.assertEqual(resp.status_code, 201, resp.content)
         self.assertEqual(resp.json()['subject'], 'math')
@@ -289,3 +294,83 @@ class SubjectQuizTests(QuizTestBase):
         self.assertEqual(self.client.delete(f'/api/v1/quizzes/{quiz_id}/').status_code, 404)
         self.auth(self.teacher_token)
         self.assertEqual(self.client.delete(f'/api/v1/quizzes/{quiz_id}/').status_code, 204)
+
+
+class QuizTopicTests(QuizTestBase):
+    """`topic` majburiy, `title` ixtiyoriy; ro'yxat/tafsilotda qaytadi; PATCH bilan tahrirlanadi."""
+
+    def make_quiz_with(self, **extra):
+        self.auth(self.teacher_token)
+        payload = {
+            'course': self.course_id, 'topic': 'Kasrlar', 'title': '', 'questions': [
+                {'text': 'Q', 'options': [{'text': 'a', 'is_correct': True}, {'text': 'b'}]},
+            ],
+        }
+        payload.update(extra)
+        return self.client.post('/api/v1/quizzes/', payload, format='json')
+
+    def test_topic_is_required(self):
+        resp = self.make_quiz_with(topic='')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('topic', resp.json()['error']['details'])
+
+    def test_topic_missing_entirely_is_400(self):
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/quizzes/', {
+            'course': self.course_id, 'title': 'x',
+            'questions': [{'text': 'Q', 'options': [{'text': 'a', 'is_correct': True}, {'text': 'b'}]}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_title_optional_topic_appears_in_list_and_detail(self):
+        resp = self.make_quiz_with()
+        self.assertEqual(resp.status_code, 201, resp.content)
+        body = resp.json()
+        self.assertEqual(body['title'], '')
+        self.assertEqual(body['topic'], 'Kasrlar')
+
+        self.auth(self.teacher_token)
+        listing = self.client.get('/api/v1/quizzes/').json()
+        rows = listing['results'] if isinstance(listing, dict) else listing
+        self.assertEqual(rows[0]['topic'], 'Kasrlar')
+
+        detail = self.client.get(f'/api/v1/quizzes/{body["id"]}/').json()
+        self.assertEqual(detail['topic'], 'Kasrlar')
+
+    def test_patch_updates_topic_and_title_only(self):
+        quiz_id = self.make_quiz_with().json()['id']
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {
+            'topic': "O'nlik kasrlar", 'title': 'Yangilangan nom',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['topic'], "O'nlik kasrlar")
+        self.assertEqual(resp.json()['title'], 'Yangilangan nom')
+        # savollar tegmagan
+        self.assertEqual(len(resp.json()['questions']), 1)
+
+    def test_patch_rejects_blank_topic(self):
+        quiz_id = self.make_quiz_with().json()['id']
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'topic': ''}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_forbidden_for_non_owner(self):
+        quiz_id = self.make_quiz_with().json()['id']
+        register(self.client, 'topic_t2', 'teacher')
+        self.auth(login(self.client, 'topic_t2'))
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'topic': 'x'}, format='json')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_search_by_topic_and_filter_by_subject(self):
+        self.make_quiz_with(topic='Trigonometriya')
+        self.make_quiz_with(topic='Algebra asoslari')
+        self.auth(self.teacher_token)
+        resp = self.client.get('/api/v1/quizzes/?search=Trigono').json()
+        rows = resp['results'] if isinstance(resp, dict) else resp
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['topic'], 'Trigonometriya')
+
+        resp = self.client.get('/api/v1/quizzes/?subject=math').json()
+        rows = resp['results'] if isinstance(resp, dict) else resp
+        self.assertEqual(len(rows), 2)

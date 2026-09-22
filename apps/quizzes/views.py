@@ -24,6 +24,7 @@ from .serializers import (
     QuizDetailSerializer,
     QuizListSerializer,
     QuizTakeSerializer,
+    QuizUpdateSerializer,
 )
 
 _STAFF_ROLES = (User.Role.TEACHER, User.Role.ADMIN, User.Role.SUPER_ADMIN)
@@ -40,7 +41,8 @@ def _get_quiz(user: User, pk) -> Quiz:
 
 
 class QuizListCreateView(generics.ListCreateAPIView):
-    filterset_fields = ['course', 'lesson']
+    filterset_fields = ['course', 'lesson', 'subject']
+    search_fields = ['topic', 'title']
     ordering_fields = ['created_at', 'due_at', 'opens_at']
 
     def get_permissions(self):
@@ -59,8 +61,8 @@ class QuizListCreateView(generics.ListCreateAPIView):
         data = serializer.validated_data
         quiz = services.create_quiz(
             teacher=request.user, course=data.get('course'), subject=data.get('subject', ''),
-            lesson=data.get('lesson'),
-            title=data['title'], description=data.get('description', ''),
+            lesson=data.get('lesson'), topic=data['topic'],
+            title=data.get('title', ''), description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
         )
         return Response(QuizDetailSerializer(quiz).data, status=status.HTTP_201_CREATED)
@@ -113,7 +115,7 @@ class QuizTemplateView(APIView):
 
 class QuizDetailView(APIView):
     def get_permissions(self):
-        perm = 'quiz.create' if self.request.method == 'DELETE' else 'quiz.view'
+        perm = 'quiz.view' if self.request.method == 'GET' else 'quiz.create'
         return [RequirePerm(perm)()]
 
     def get(self, request, pk):
@@ -121,6 +123,15 @@ class QuizDetailView(APIView):
         if request.user.role in _STAFF_ROLES:
             return Response(QuizDetailSerializer(quiz).data)
         return Response(QuizTakeSerializer(quiz).data)
+
+    def patch(self, request, pk):
+        """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
+        bu orqali o'zgartirilmaydi."""
+        quiz = _get_quiz(request.user, pk)
+        serializer = QuizUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        quiz = services.update_quiz(teacher=request.user, quiz=quiz, **serializer.validated_data)
+        return Response(QuizDetailSerializer(quiz).data)
 
     def delete(self, request, pk):
         quiz = _get_quiz(request.user, pk)

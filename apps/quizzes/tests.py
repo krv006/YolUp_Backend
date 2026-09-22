@@ -65,6 +65,7 @@ class QuizFlowTests(APITestCase):
 
         self.quiz_payload = {
             'course': self.course_id,
+            'topic': "1-bob mavzusi",
             'title': "1-bob testi",
             'questions': [
                 _mcq('2 + 2 = ?', correct_index=1, options=['3', '4', '5']),
@@ -106,6 +107,7 @@ class QuizFlowTests(APITestCase):
         self.auth(self.teacher_token)
         bad = {
             'course': self.course_id,
+            'topic': 'Xato mavzu',
             'title': 'Xato test',
             'questions': [{
                 'text': '1+1=?', 'points': 1,
@@ -219,7 +221,7 @@ class QuizFlowTests(APITestCase):
             '/api/v1/courses/', {'title': 'Boshqa kurs', 'subject': 'other'}
         ).json()['id']
         self.client.post('/api/v1/quizzes/', {
-            'course': other_course_id, 'title': 'Boshqa kurs testi',
+            'course': other_course_id, 'topic': 'Boshqa mavzu', 'title': 'Boshqa kurs testi',
             'questions': self.quiz_payload['questions'],
         }, format='json')
         self.create_quiz()
@@ -327,6 +329,7 @@ class QuizDocxImportTests(APITestCase):
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,
+            'topic': 'Import qilingan mavzu',
             'title': preview['title'] or 'Import qilingan test',
             'description': preview['description'],
             'questions': preview['questions'],
@@ -404,6 +407,7 @@ class QuizXlsxImportTests(APITestCase):
         ).json()['id']
         create_resp = self.client.post('/api/v1/quizzes/', {
             'course': course_id,
+            'topic': 'Xlsx mavzusi',
             'title': 'Xlsx testi',
             'questions': preview['questions'],
         }, format='json')
