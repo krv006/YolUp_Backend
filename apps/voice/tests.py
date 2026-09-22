@@ -63,6 +63,17 @@ class VoiceRoomFlowTests(VoiceRoomTestBase):
         self.assertEqual(join.status_code, 200, join.content)
         self.assertIn('token', join.json())
 
+    def test_malformed_room_id_is_404_not_500(self):
+        """Regression: Django UUIDField noto'g'ri qiymat uchun `ValueError`
+        emas, `django.core.exceptions.ValidationError` chiqaradi — buni
+        tutmasa DRF ushlamay qolib, 500ga aylanadi (production'da
+        2026-09-22 topilgan). Router pk regex UUID bilan cheklangani uchun
+        endi bunday so'rov hatto view'gacha yetib bormaydi."""
+        self.auth(self.teacher_token)
+        for action in ('join', 'leave', 'close', 'request-join'):
+            resp = self.client.post(f'/api/v1/voice-rooms/not-a-real-id/{action}/')
+            self.assertEqual(resp.status_code, 404, (action, resp.content))
+
     def test_token_grants_use_string_track_sources_not_protobuf_enum(self):
         """Regression: `VideoGrants` JWT claim (JSON) — protobuf `TrackSource`
         enumi bo'lsa, LiveKit serveri "cannot unmarshal number into ...

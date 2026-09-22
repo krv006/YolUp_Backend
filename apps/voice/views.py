@@ -13,7 +13,18 @@ from .serializers import (
 )
 
 
+_UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+
 class VoiceRoomViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    # DRF router'ning standart pk regex'i ([^/.]+) har qanday satrni qabul
+    # qiladi — noto'g'ri UUID (masalan "undefined") view'gacha yetib borib,
+    # `.get(pk=...)` `django.core.exceptions.ValidationError` bilan
+    # (`ValueError` EMAS!) yiqilib, ushlanmagan 500'ga aylanardi (production'da
+    # 2026-09-22 topilgan). Qolgan app'lar `path('<uuid:pk>/', ...)` orqali
+    # buni URL darajasida 404'ga aylantiradi — shu yerda ham xuddi shunday.
+    lookup_value_regex = _UUID_RE
+
     def get_permissions(self):
         perm = 'voice.create' if self.action == 'create' else 'voice.join'
         return [RequirePerm(perm)()]
@@ -61,12 +72,12 @@ class VoiceRoomViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         qs = services.list_join_requests(user=request.user, room_id=pk)
         return Response(VoiceRoomJoinRequestSerializer(qs, many=True).data)
 
-    @action(detail=True, methods=['post'], url_path=r'requests/(?P<request_id>[^/.]+)/approve')
+    @action(detail=True, methods=['post'], url_path=fr'requests/(?P<request_id>{_UUID_RE})/approve')
     def approve_request(self, request, pk=None, request_id=None):
         join_request = services.approve_request(user=request.user, room_id=pk, request_id=request_id, request=request)
         return Response(VoiceRoomJoinRequestSerializer(join_request).data)
 
-    @action(detail=True, methods=['post'], url_path=r'requests/(?P<request_id>[^/.]+)/deny')
+    @action(detail=True, methods=['post'], url_path=fr'requests/(?P<request_id>{_UUID_RE})/deny')
     def deny_request(self, request, pk=None, request_id=None):
         join_request = services.deny_request(user=request.user, room_id=pk, request_id=request_id, request=request)
         return Response(VoiceRoomJoinRequestSerializer(join_request).data)

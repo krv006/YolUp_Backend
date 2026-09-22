@@ -123,7 +123,10 @@ class QuizCreateSerializer(serializers.ModelSerializer):
     # `topic` majburiy (model darajasida `blank=True` — faqat eski qatorlar
     # migratsiyada muammosiz qolishi uchun); `title` esa ixtiyoriy — bo'sh
     # bo'lsa frontend ro'yxatda topic'ni ko'rsatadi.
-    topic = serializers.CharField(max_length=200)
+    topic = serializers.CharField(max_length=200, error_messages={
+        'required': _("Mavzu bo'sh bo'lishi mumkin emas."),
+        'blank': _("Mavzu bo'sh bo'lishi mumkin emas."),
+    })
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     questions = QuestionWriteSerializer(many=True)
 
@@ -152,7 +155,9 @@ class SubjectLabelMixin(serializers.Serializer):
 class QuizUpdateSerializer(serializers.ModelSerializer):
     """Faqat metadata tahriri — savollar bu orqali o'zgartirilmaydi."""
 
-    topic = serializers.CharField(max_length=200, required=False)
+    topic = serializers.CharField(max_length=200, required=False, error_messages={
+        'blank': _("Mavzu bo'sh bo'lishi mumkin emas."),
+    })
 
     class Meta:
         model = Quiz

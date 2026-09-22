@@ -2,6 +2,7 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -32,7 +33,7 @@ def _is_owner_or_teacher(room: VoiceRoom, user: User) -> bool:
 def _get_room(room_id) -> VoiceRoom:
     try:
         return VoiceRoom.objects.select_related('course').get(pk=room_id)
-    except (VoiceRoom.DoesNotExist, ValueError, TypeError):
+    except (VoiceRoom.DoesNotExist, ValueError, TypeError, DjangoValidationError):
         raise NotFound(_('Xona topilmadi.'))
 
 
@@ -104,7 +105,7 @@ def _token_payload(room: VoiceRoom, user: User) -> dict:
 def join_room(*, user: User, room_id, request=None) -> dict:
     try:
         room = VoiceRoom.objects.select_for_update().select_related('course').get(pk=room_id)
-    except (VoiceRoom.DoesNotExist, ValueError, TypeError):
+    except (VoiceRoom.DoesNotExist, ValueError, TypeError, DjangoValidationError):
         raise NotFound(_('Xona topilmadi.'))
     if room.status == VoiceRoom.Status.ENDED:
         raise ValidationError(_('Bu xona yopilgan.'))
@@ -202,7 +203,7 @@ def _respond_request(*, user: User, room_id, request_id, new_status: str, reques
         join_request = VoiceRoomJoinRequest.objects.select_related('room', 'room__course').get(
             pk=request_id, room_id=room_id,
         )
-    except (VoiceRoomJoinRequest.DoesNotExist, ValueError, TypeError):
+    except (VoiceRoomJoinRequest.DoesNotExist, ValueError, TypeError, DjangoValidationError):
         raise NotFound(_("So'rov topilmadi."))
     if not _is_owner_or_teacher(join_request.room, user):
         raise PermissionDenied(_('Faqat xona egasi yoki kurs o\'qituvchisi javob bera oladi.'))
