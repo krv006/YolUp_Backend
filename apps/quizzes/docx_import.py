@@ -70,7 +70,13 @@ def parse_docx_questions(file_obj) -> dict:
     document = docx.Document(data)
 
     lines = [_normalize(p.text) for p in document.paragraphs if p.text and p.text.strip()]
+    return parse_lines(lines)
 
+
+def parse_lines(lines: list) -> dict:
+    """Matn qatorlaridan savollarni ajratib olish — manbadan mustaqil
+    (`.docx` paragraflari yoki Google Docs'dan olingan oddiy matn qatorlari
+    bo'lishi mumkin, format bir xil — `apps.quizzes.google_docs_import`)."""
     title_lines: list = []
     questions: list = []
     current = None

@@ -10,7 +10,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.accounts.models import User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import docx_import, grading, template_export, xlsx_import
+from . import docx_import, google_docs_import, google_forms_scrape, grading, template_export, xlsx_import
 from .models import AnswerResponse, Option, Question, Quiz, QuizAttempt
 
 _IMPORT_PARSERS = {
@@ -156,6 +156,29 @@ def import_quiz_file(*, upload) -> dict:
     return result
 
 
+def import_google_doc(*, url: str) -> dict:
+    """Ochiq (public) Google Docs havolasidan preview qaytaradi — `.docx`
+    import bilan bir xil format, HECH NARSA DB'ga yozilmaydi."""
+    if not url or not url.strip():
+        raise ValidationError({'url': _('Havola majburiy.')})
+    result = google_docs_import.parse_google_doc(url=url)
+    if not result['questions']:
+        raise ValidationError({'url': _('Hujjatdan birorta ham savol topilmadi.')})
+    return result
+
+
+def import_google_form(*, url: str) -> dict:
+    """Ochiq (public) Google Forms havolasidan preview qaytaradi — TO'G'RI
+    JAVOBLAR ANIQLANMAYDI (Google buni ochiq sahifaga yubormaydi), barcha
+    savol `warnings`da belgilanadi. HECH NARSA DB'ga yozilmaydi."""
+    if not url or not url.strip():
+        raise ValidationError({'url': _('Havola majburiy.')})
+    result = google_forms_scrape.parse_google_form(url=url)
+    if not result['questions']:
+        raise ValidationError({'url': _('Formadan birorta ham qo\'llab-quvvatlanadigan savol topilmadi.')})
+    return result
+
+
 def build_quiz_template(*, fmt: str, count) -> bytes:
     """Bo'sh shablon fayl (.docx / .xlsx) — `count` ta bo'sh savol bloki bilan,
     import parserlariga mos formatda (`template_export.py`)."""
@@ -167,12 +190,17 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
     raise ValidationError({'format': _("Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin.")})
 
 
-_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at')
+_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions')
 
 
+@transaction.atomic
 def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
-    """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
-    bu orqali o'zgartirilmaydi (alohida, kattaroq funksiya bo'lardi)."""
+    """Metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) va ixtiyoriy
+    `questions` (berilsa — to'liq almashtiriladi, yaratishdagi bilan bir
+    xil validatsiya/saqlash). Testda allaqachon urinish(lar) bo'lsa,
+    savollarni o'zgartirish RAD ETILADI — aks holda o'quvchining natijasi
+    (AnswerResponse) endi mavjud bo'lmagan savolga ishora qilib qolardi
+    (Question CASCADE — savol o'chsa, unga tegishli javoblar ham o'chadi)."""
     if not _is_owner(quiz, teacher):
         raise PermissionDenied(_('Bu test sizga tegishli emas.'))
     unknown = set(fields) - set(_EDITABLE_FIELDS)
@@ -180,9 +208,21 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         raise ValidationError({f: _("Bu maydonni o'zgartirib bo'lmaydi.") for f in unknown})
     if 'topic' in fields and not fields['topic'].strip():
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
+
+    questions = fields.pop('questions', None)
+    if questions is not None:
+        if QuizAttempt.objects.filter(quiz=quiz).exists():
+            raise ValidationError({
+                'questions': _("Bu testda allaqachon urinish(lar) bor — savollarni o'zgartirib bo'lmaydi."),
+            })
+        quiz.questions.all().delete()
+        for q_index, q_data in enumerate(questions):
+            _create_question(quiz, q_index, q_data)
+
     for field, value in fields.items():
         setattr(quiz, field, value)
-    quiz.save(update_fields=list(fields))
+    if fields:
+        quiz.save(update_fields=list(fields))
     return quiz
 
 

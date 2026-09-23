@@ -153,19 +153,28 @@ class SubjectLabelMixin(serializers.Serializer):
 
 
 class QuizUpdateSerializer(serializers.ModelSerializer):
-    """Faqat metadata tahriri — savollar bu orqali o'zgartirilmaydi."""
+    """Metadata tahriri + ixtiyoriy `questions` — berilsa, savollar to'liq
+    almashtiriladi (yaratishdagi bilan bir xil shakl). Testda urinishlar
+    (attempts) bo'lsa, `questions` yuborish services.update_quiz'da rad
+    etiladi — natijalarni yo'qotib qo'ymaslik uchun."""
 
     topic = serializers.CharField(max_length=200, required=False, error_messages={
         'blank': _("Mavzu bo'sh bo'lishi mumkin emas."),
     })
+    questions = QuestionWriteSerializer(many=True, required=False)
 
     class Meta:
         model = Quiz
-        fields = ['topic', 'title', 'description', 'due_at', 'opens_at']
+        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions']
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
             'description': {'required': False, 'allow_blank': True},
         }
+
+    def validate_questions(self, questions):
+        if not questions:
+            raise serializers.ValidationError(_("Kamida 1 ta savol bo'lishi kerak."))
+        return questions
 
 
 class QuizListSerializer(SubjectLabelMixin, serializers.ModelSerializer):

@@ -84,6 +84,33 @@ class QuizImportView(APIView):
         return Response(result)
 
 
+class QuizGoogleDocImportView(APIView):
+    """Ochiq (public — "Havolaga ega har kim ko'ra oladi") Google Docs
+    havolasidan test savollarini parse qilib preview qaytaradi. OAuth
+    kerak emas — `QuizImportView` bilan bir xil preview shakli."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request):
+        result = services.import_google_doc(url=request.data.get('url'))
+        return Response(result)
+
+
+class QuizGoogleFormImportView(APIView):
+    """Ochiq Google Forms havolasidan savol/variant matnini o'qib preview
+    qaytaradi. TO'G'RI JAVOBLAR ANIQLANMAYDI (Google buni ochiq sahifaga
+    yubormaydi) — barcha savol `warnings`da, o'qituvchi preview'da
+    to'g'ri variantni o'zi belgilaydi."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request):
+        result = services.import_google_form(url=request.data.get('url'))
+        return Response(result)
+
+
 _TEMPLATE_CONTENT_TYPES = {
     'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -30,3 +30,7 @@ daphne>=4.1
 uvicorn[standard]>=0.30
 pywebpush>=2.0
 psutil>=6.0
+# Google Docs'dan ochiq (public) eksport orqali test import qilish uchun —
+# oldin faqat tranzitiv bog'liqlik edi (google-generativeai orqali), endi
+# to'g'ridan-to'g'ri ishlatilgani uchun aniq belgilandi.
+requests>=2.33

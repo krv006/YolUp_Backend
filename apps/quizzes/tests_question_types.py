@@ -374,3 +374,81 @@ class QuizTopicTests(QuizTestBase):
         resp = self.client.get('/api/v1/quizzes/?subject=math').json()
         rows = resp['results'] if isinstance(resp, dict) else resp
         self.assertEqual(len(rows), 2)
+
+
+class QuizQuestionEditTests(QuizTestBase):
+    """`PATCH /quizzes/{id}/` orqali savollarni to'liq almashtirish."""
+
+    ORIGINAL = [{'type': 'single', 'text': 'Old Q', 'points': 3, 'options': [
+        {'text': 'a', 'is_correct': True}, {'text': 'b', 'is_correct': False}]}]
+    REPLACEMENT = [
+        {'type': 'single', 'text': 'New Q1', 'points': 5, 'options': [
+            {'text': 'x', 'is_correct': True}, {'text': 'y', 'is_correct': False}]},
+        {'type': 'true_false', 'text': 'New Q2', 'correct_bool': True},
+    ]
+
+    def make_editable_quiz(self, questions=None):
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/quizzes/', {
+            'course': self.course_id, 'topic': 'Mavzu', 'title': 'T',
+            'questions': questions or self.ORIGINAL,
+        }, format='json')
+        return resp.json()['id']
+
+    def test_patch_replaces_questions_entirely(self):
+        quiz_id = self.make_editable_quiz()
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {
+            'questions': self.REPLACEMENT,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(len(body['questions']), 2)
+        self.assertEqual(body['questions'][0]['text'], 'New Q1')
+        self.assertEqual(body['questions'][0]['points'], 5)
+        self.assertEqual(body['questions'][1]['type'], 'true_false')
+        self.assertEqual(Question.objects.filter(quiz_id=quiz_id).count(), 2)
+
+    def test_patch_questions_together_with_metadata(self):
+        quiz_id = self.make_editable_quiz()
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {
+            'topic': 'Yangi mavzu', 'questions': self.REPLACEMENT,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['topic'], 'Yangi mavzu')
+        self.assertEqual(len(resp.json()['questions']), 2)
+
+    def test_patch_empty_questions_list_rejected(self):
+        quiz_id = self.make_editable_quiz()
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'questions': []}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Question.objects.filter(quiz_id=quiz_id).count(), 1)
+
+    def test_patch_questions_blocked_once_quiz_has_attempts(self):
+        quiz_id = self.make_editable_quiz()
+        quiz_data = self.take(quiz_id)
+        q = quiz_data['questions'][0]
+        opt_id = q['options'][0]['id']
+        self.submit(quiz_id, [{'question': q['id'], 'selected_option': opt_id}])
+
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {
+            'questions': self.REPLACEMENT,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('questions', resp.json()['error']['details'])
+        self.assertEqual(Question.objects.filter(quiz_id=quiz_id).count(), 1)
+
+    def test_metadata_only_patch_still_works_after_attempts_exist(self):
+        quiz_id = self.make_editable_quiz()
+        quiz_data = self.take(quiz_id)
+        q = quiz_data['questions'][0]
+        opt_id = q['options'][0]['id']
+        self.submit(quiz_id, [{'question': q['id'], 'selected_option': opt_id}])
+
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'topic': 'Yangi'}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['topic'], 'Yangi')
