@@ -101,7 +101,7 @@ def _create_question(quiz: Quiz, index: int, q_data: dict) -> Question:
 def create_quiz(
     *, teacher: User, topic: str, questions: list, course: Course | None = None,
     subject: str = '', lesson: Lesson | None = None, title: str = '', description: str = '',
-    due_at=None, opens_at=None,
+    due_at=None, opens_at=None, status: str = Quiz.Status.PUBLISHED,
 ) -> Quiz:
     if not topic.strip():
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
@@ -119,17 +119,74 @@ def create_quiz(
 
     quiz = Quiz.objects.create(
         course=course, author=teacher, subject=subject, lesson=lesson, topic=topic, title=title,
-        description=description, due_at=due_at, opens_at=opens_at,
+        description=description, due_at=due_at, opens_at=opens_at, status=status,
     )
     for q_index, q_data in enumerate(questions):
         _create_question(quiz, q_index, q_data)
 
-    # Faqat DARHOL ochiq test uchun bildirishnoma yuboriladi — kelajakdagi
-    # "ochilish kuni"si bo'lgan testda hali ko'ra olmaydigan havolaga
-    # bildirishnoma yuborish chalkashlik keltirib chiqaradi (buzuq link).
-    if course is not None and (opens_at is None or opens_at <= timezone.now()):
-        transaction.on_commit(lambda: _notify_new_quiz(quiz))
+    # Faqat DARHOL ochiq, e'lon qilingan test uchun bildirishnoma yuboriladi —
+    # kelajakdagi "ochilish kuni"si bo'lgan yoki qoralama testda hali ko'ra
+    # olmaydigan havolaga bildirishnoma yuborish chalkashlik keltirib chiqaradi.
+    if status == Quiz.Status.PUBLISHED:
+        _notify_if_open(quiz)
     return quiz
+
+
+def _notify_if_open(quiz: Quiz) -> None:
+    if quiz.course_id is not None and (quiz.opens_at is None or quiz.opens_at <= timezone.now()):
+        transaction.on_commit(lambda: _notify_new_quiz(quiz))
+
+
+def incomplete_questions(quiz: Quiz) -> list:
+    """E'lon qilish uchun yetarli bo'lmagan savollarning raqamlari (1 dan) —
+    `QuestionWriteSerializer` (draft bo'lmagan) qoidalari bilan bir xil."""
+    problems = []
+    for number, question in enumerate(quiz.questions.prefetch_related('options'), start=1):
+        options = list(question.options.all())
+        correct = sum(1 for o in options if o.is_correct)
+        if question.type == Question.Type.SINGLE:
+            bad = len(options) < 2 or correct != 1
+        elif question.type == Question.Type.MULTIPLE:
+            bad = len(options) < 2 or correct < 1
+        elif question.type == Question.Type.ORDERING:
+            bad = len(options) < 2
+        else:
+            bad = False  # boshqa turlar yaratishda to'liq validatsiya qilinadi
+        if bad:
+            problems.append(number)
+    return problems
+
+
+@transaction.atomic
+def publish_quiz(*, teacher: User, quiz: Quiz) -> Quiz:
+    """Qoralamani e'lon qiladi — barcha savolda to'g'ri javob belgilangan
+    bo'lishi shart. Allaqachon e'lon qilingan bo'lsa, hech narsa qilmaydi."""
+    if not _is_owner(quiz, teacher):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    if quiz.status == Quiz.Status.PUBLISHED:
+        return quiz
+    if not quiz.questions.exists():
+        raise ValidationError({'questions': _("Kamida 1 ta savol bo'lishi kerak.")})
+    problems = incomplete_questions(quiz)
+    if problems:
+        raise ValidationError({'questions': _(
+            "Quyidagi savollarda to'g'ri javob belgilanmagan yoki variantlar yetarli emas: %(numbers)s."
+        ) % {'numbers': ', '.join(str(n) for n in problems)}})
+    quiz.status = Quiz.Status.PUBLISHED
+    quiz.save(update_fields=['status'])
+    _notify_if_open(quiz)
+    return quiz
+
+
+def save_imported_quiz(*, teacher: User, preview: dict, topic: str, course=None, subject: str = '', title: str = '') -> Quiz:
+    """Import natijasini (preview) DARHOL DB'ga doimiy yozadi — `draft` holatida
+    (o'quvchiga ko'rinmaydi, to'g'ri javobsiz savollar ruxsat). O'qituvchi
+    keyin `PATCH` bilan tahrirlab, `publish` bilan e'lon qiladi."""
+    return create_quiz(
+        teacher=teacher, topic=topic, course=course, subject=subject,
+        title=title or preview.get('title', '') or '', description=preview.get('description', '') or '',
+        questions=preview['questions'], status=Quiz.Status.DRAFT,
+    )
 
 
 def import_quiz_file(*, upload) -> dict:

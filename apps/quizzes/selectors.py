@@ -19,7 +19,8 @@ def quizzes_for(user: User) -> QuerySet[Quiz]:
         return qs.filter(Q(course__teacher=user) | Q(author=user))
     # O'quvchi/ota-ona hali "ochilish kuni" kelmagan testni ko'rmaydi —
     # o'qituvchi esa tayyorlash uchun har doim ko'radi (yuqorida qaytdi).
-    not_yet_opened = Q(opens_at__isnull=False, opens_at__gt=timezone.now())
+    # Qoralama (`draft`) ham faqat o'qituvchiga ko'rinadi.
+    not_yet_opened = Q(opens_at__isnull=False, opens_at__gt=timezone.now()) | Q(status=Quiz.Status.DRAFT)
     if user.role == User.Role.STUDENT:
         return qs.filter(
             course__enrollments__student=user, course__enrollments__status=_ENROLLED,

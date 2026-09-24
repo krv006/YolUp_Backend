@@ -5,6 +5,8 @@ import re
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from apps.lessons.models import Course
+
 from . import grading
 from .models import AnswerResponse, Option, Question, Quiz, QuizAttempt
 
@@ -58,18 +60,25 @@ class QuestionWriteSerializer(serializers.Serializer):
     def _fail(field, message):
         raise serializers.ValidationError({field: message})
 
+    @property
+    def _draft(self) -> bool:
+        # Qoralama (draft) testda to'g'ri javob hali belgilanmagan bo'lishi
+        # mumkin — e'lon qilishda (`services.publish_quiz`) tekshiriladi.
+        return bool(self.context.get('draft'))
+
     def _check_single(self, attrs):
         options = attrs.get('options') or []
         if len(options) < 2:
             self._fail('options', _("Har bir savolda kamida 2 ta variant bo'lishi kerak."))
-        if sum(1 for o in options if o.get('is_correct')) != 1:
+        correct = sum(1 for o in options if o.get('is_correct'))
+        if correct > 1 or (correct != 1 and not self._draft):
             self._fail('options', _("Har bir savolda aynan 1 ta to'g'ri variant belgilanishi kerak."))
 
     def _check_multiple(self, attrs):
         options = attrs.get('options') or []
         if len(options) < 2:
             self._fail('options', _("Har bir savolda kamida 2 ta variant bo'lishi kerak."))
-        if not any(o.get('is_correct') for o in options):
+        if not self._draft and not any(o.get('is_correct') for o in options):
             self._fail('options', _("Kamida 1 ta to'g'ri variant belgilanishi kerak."))
 
     def _check_true_false(self, attrs):
@@ -152,6 +161,21 @@ class SubjectLabelMixin(serializers.Serializer):
     subject_label = serializers.CharField(source='get_subject_display', read_only=True)
 
 
+class ImportSaveSerializer(serializers.Serializer):
+    """Import so'rovida `topic` (+ `course` yoki `subject`) berilsa, natija
+    preview emas — DARHOL saqlanadigan qoralama test bo'ladi."""
+
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
+    subject = serializers.ChoiceField(choices=Course.Subject.choices, required=False, allow_blank=True)
+    topic = serializers.CharField(max_length=200)
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
+
+    def validate(self, attrs):
+        if attrs.get('course') is None and not attrs.get('subject'):
+            raise serializers.ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
+        return attrs
+
+
 class QuizUpdateSerializer(serializers.ModelSerializer):
     """Metadata tahriri + ixtiyoriy `questions` — berilsa, savollar to'liq
     almashtiriladi (yaratishdagi bilan bir xil shakl). Testda urinishlar
@@ -183,7 +207,7 @@ class QuizListSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'question_count', 'created_at',
         ]
 
@@ -230,7 +254,7 @@ class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'questions',
         ]
 
@@ -279,7 +303,7 @@ class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = [
-            'id', 'course', 'subject', 'subject_label', 'lesson', 'topic', 'title', 'description',
+            'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'questions', 'created_at',
         ]
 

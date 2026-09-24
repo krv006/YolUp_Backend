@@ -28,6 +28,10 @@ from apps.lessons.models import Course
 
 
 class Quiz(TimeStampedUUIDModel):
+    class Status(TextChoices):
+        DRAFT = 'draft', 'Qoralama'
+        PUBLISHED = 'published', "E'lon qilingan"
+
     # Guruhsiz (fan bo'yicha) test uchun `course` bo'sh — bunday test o'quvchilarga
     # ko'rinmaydi, faqat muallif (`author`) o'qituvchi ko'radi va guruhga nusxalaydi.
     course = ForeignKey('lessons.Course', CASCADE, null=True, blank=True, related_name='quizzes')
@@ -39,6 +43,10 @@ class Quiz(TimeStampedUUIDModel):
     lesson = ForeignKey(
         'lessons.Lesson', SET_NULL, null=True, blank=True, related_name='quizzes',
     )
+    # `draft` — DB'ga doimiy yozilgan, lekin o'quvchi/ota-onaga ko'rinmaydi va
+    # to'g'ri javoblari to'liq belgilanmagan bo'lishi mumkin (import qilingan
+    # test); `published` — hamma ko'radi, faqat to'liq test bo'la oladi.
+    status = CharField(max_length=10, choices=Status.choices, default=Status.PUBLISHED, db_index=True)
     # Mavzu — majburiy (frontend validatsiya qiladi, backend ham talab qiladi).
     # `title` esa ixtiyoriy nom; bo'sh bo'lsa frontend ro'yxatda `topic`ni ko'rsatadi.
     topic = CharField(max_length=200, blank=True)

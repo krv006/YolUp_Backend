@@ -17,6 +17,7 @@ from apps.core.permissions import RequirePerm
 from . import selectors, services
 from .models import Quiz
 from .serializers import (
+    ImportSaveSerializer,
     AttemptListSerializer,
     AttemptResultSerializer,
     AttemptSubmitSerializer,
@@ -40,6 +41,24 @@ def _get_quiz(user: User, pk) -> Quiz:
         raise NotFound(_('Test topilmadi.'))
 
 
+def _import_response(request, preview: dict) -> Response:
+    """Import so'rovida `topic` bo'lsa — natija DARHOL doimiy `draft` test
+    sifatida saqlanadi (201, to'liq test tafsiloti + `warnings`); aks holda
+    eski xatti-harakat: hech narsa saqlanmaydigan preview (200)."""
+    if 'topic' not in request.data:
+        return Response(preview)
+    serializer = ImportSaveSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    quiz = services.save_imported_quiz(
+        teacher=request.user, preview=preview, topic=data['topic'], course=data.get('course'),
+        subject=data.get('subject', ''), title=data.get('title', ''),
+    )
+    payload = dict(QuizDetailSerializer(quiz).data)
+    payload['warnings'] = preview.get('warnings', [])
+    return Response(payload, status=status.HTTP_201_CREATED)
+
+
 class QuizListCreateView(generics.ListCreateAPIView):
     filterset_fields = ['course', 'lesson', 'subject']
     search_fields = ['topic', 'title']
@@ -56,7 +75,8 @@ class QuizListCreateView(generics.ListCreateAPIView):
         return QuizListSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = QuizCreateSerializer(data=request.data)
+        as_draft = request.data.get('status') == Quiz.Status.DRAFT
+        serializer = QuizCreateSerializer(data=request.data, context={'draft': as_draft})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         quiz = services.create_quiz(
@@ -64,6 +84,7 @@ class QuizListCreateView(generics.ListCreateAPIView):
             lesson=data.get('lesson'), topic=data['topic'],
             title=data.get('title', ''), description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
+            status=Quiz.Status.DRAFT if as_draft else Quiz.Status.PUBLISHED,
         )
         return Response(QuizDetailSerializer(quiz).data, status=status.HTTP_201_CREATED)
 
@@ -81,7 +102,7 @@ class QuizImportView(APIView):
 
     def post(self, request):
         result = services.import_quiz_file(upload=request.FILES.get('file'))
-        return Response(result)
+        return _import_response(request, result)
 
 
 class QuizGoogleDocImportView(APIView):
@@ -94,7 +115,7 @@ class QuizGoogleDocImportView(APIView):
 
     def post(self, request):
         result = services.import_google_doc(url=request.data.get('url'))
-        return Response(result)
+        return _import_response(request, result)
 
 
 class QuizGoogleFormImportView(APIView):
@@ -108,7 +129,7 @@ class QuizGoogleFormImportView(APIView):
 
     def post(self, request):
         result = services.import_google_form(url=request.data.get('url'))
-        return Response(result)
+        return _import_response(request, result)
 
 
 _TEMPLATE_CONTENT_TYPES = {
@@ -155,7 +176,9 @@ class QuizDetailView(APIView):
         """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
         bu orqali o'zgartirilmaydi."""
         quiz = _get_quiz(request.user, pk)
-        serializer = QuizUpdateSerializer(data=request.data, partial=True)
+        serializer = QuizUpdateSerializer(
+            data=request.data, partial=True, context={'draft': quiz.status == Quiz.Status.DRAFT},
+        )
         serializer.is_valid(raise_exception=True)
         quiz = services.update_quiz(teacher=request.user, quiz=quiz, **serializer.validated_data)
         return Response(QuizDetailSerializer(quiz).data)
@@ -164,6 +187,18 @@ class QuizDetailView(APIView):
         quiz = _get_quiz(request.user, pk)
         services.delete_quiz(teacher=request.user, quiz=quiz)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QuizPublishView(APIView):
+    """Qoralamani e'lon qiladi — barcha savolda to'g'ri javob belgilangan bo'lishi shart."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        quiz = services.publish_quiz(teacher=request.user, quiz=quiz)
+        return Response(QuizDetailSerializer(quiz).data)
 
 
 class QuizAttemptListCreateView(APIView):
