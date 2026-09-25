@@ -189,7 +189,7 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Quiz
-        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions']
+        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'status']
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
             'description': {'required': False, 'allow_blank': True},

@@ -108,25 +108,57 @@ class DraftVisibilityAndPublishTests(QuizTestBase):
         self.assertIn('1', str(resp.json()['error']['details']['questions']))
         self.assertEqual(Quiz.objects.get(pk=quiz_id).status, 'draft')
 
-    def test_edit_draft_then_publish_makes_it_visible_and_notifies(self):
+    COMPLETE = [{'type': 'single', 'text': 'Q1', 'options': [{'text': 'a', 'is_correct': True}, {'text': 'b'}]}]
+
+    def test_saving_incomplete_draft_keeps_it_a_draft(self):
         quiz_id = self.make_draft().json()['id']
         self.auth(self.teacher_token)
-        # draft'da to'liq bo'lmagan savollar bilan tahrirlash ruxsat
-        edited = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'questions': self.SINGLE_NO_ANSWER}, format='json')
-        self.assertEqual(edited.status_code, 200, edited.content)
-        fixed = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'questions': [
-            {'type': 'single', 'text': 'Q1', 'options': [{'text': 'a', 'is_correct': True}, {'text': 'b'}]},
-        ]}, format='json')
-        self.assertEqual(fixed.status_code, 200, fixed.content)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'questions': self.SINGLE_NO_ANSWER}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['status'], 'draft')
 
+    def test_saving_a_complete_draft_auto_publishes_it_and_notifies(self):
+        quiz_id = self.make_draft().json()['id']
+        self.auth(self.teacher_token)
         with self.captureOnCommitCallbacks(execute=True):
-            published = self.client.post(f'/api/v1/quizzes/{quiz_id}/publish/')
-        self.assertEqual(published.status_code, 200, published.content)
-        self.assertEqual(published.json()['status'], 'published')
+            resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'questions': self.COMPLETE}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['status'], 'published')
         self.assertTrue(Notification.objects.filter(link_type='quiz').exists())
-
         self.auth(self.child_token)
         self.assertEqual(self.client.get(f'/api/v1/quizzes/{quiz_id}/').status_code, 200)
+
+    def test_metadata_only_save_of_already_complete_draft_publishes_too(self):
+        self.auth(self.teacher_token)
+        quiz_id = self.client.post('/api/v1/quizzes/', {
+            'course': self.course_id, 'topic': 'M', 'status': 'draft', 'questions': self.COMPLETE,
+        }, format='json').json()['id']
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'title': 'Yangi nom'}, format='json')
+        self.assertEqual(resp.json()['status'], 'published')
+
+    def test_status_draft_keeps_a_complete_quiz_as_draft(self):
+        quiz_id = self.make_draft().json()['id']
+        self.auth(self.teacher_token)
+        resp = self.client.patch(
+            f'/api/v1/quizzes/{quiz_id}/', {'questions': self.COMPLETE, 'status': 'draft'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()['status'], 'draft')
+
+    def test_explicit_status_published_on_incomplete_draft_is_400(self):
+        quiz_id = self.make_draft().json()['id']
+        self.auth(self.teacher_token)
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'status': 'published'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Quiz.objects.get(pk=quiz_id).status, 'draft')
+
+    def test_published_quiz_cannot_be_moved_back_to_draft(self):
+        self.auth(self.teacher_token)
+        quiz_id = self.client.post('/api/v1/quizzes/', {
+            'course': self.course_id, 'topic': 'M', 'questions': self.COMPLETE,
+        }, format='json').json()['id']
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz_id}/', {'status': 'draft'}, format='json')
+        self.assertEqual(resp.status_code, 400)
 
     def test_published_quiz_edit_still_requires_correct_answers(self):
         self.auth(self.teacher_token)

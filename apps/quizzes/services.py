@@ -247,7 +247,7 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
     raise ValidationError({'format': _("Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin.")})
 
 
-_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions')
+_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'status')
 
 
 @transaction.atomic
@@ -267,6 +267,9 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
 
     questions = fields.pop('questions', None)
+    requested_status = fields.pop('status', None)
+    if requested_status == Quiz.Status.DRAFT and quiz.status == Quiz.Status.PUBLISHED:
+        raise ValidationError({'status': _("E'lon qilingan testni qoralamaga qaytarib bo'lmaydi.")})
     if questions is not None:
         if QuizAttempt.objects.filter(quiz=quiz).exists():
             raise ValidationError({
@@ -280,6 +283,19 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         setattr(quiz, field, value)
     if fields:
         quiz.save(update_fields=list(fields))
+
+    # Qoralama saqlanganda, agar TO'LIQ bo'lsa (har savolda to'g'ri javob bor),
+    # avtomatik e'lon qilinadi. To'liq bo'lmasa qoralama bo'lib qoladi (progress
+    # yo'qolmaydi) — faqat `status: "published"` ANIQ so'ralgan bo'lsa 400.
+    # `status: "draft"` — ataylab qoralamada ushlab turish.
+    if quiz.status == Quiz.Status.DRAFT and requested_status != Quiz.Status.DRAFT:
+        complete = quiz.questions.exists() and not incomplete_questions(quiz)
+        if complete:
+            quiz.status = Quiz.Status.PUBLISHED
+            quiz.save(update_fields=['status'])
+            _notify_if_open(quiz)
+        elif requested_status == Quiz.Status.PUBLISHED:
+            publish_quiz(teacher=teacher, quiz=quiz)  # tushunarli 400 xabari uchun
     return quiz
 
 
