@@ -13,6 +13,8 @@ from .models import Notification
 from .serializers import (
     InboxItemSerializer,
     NotificationSerializer,
+    PushDeviceRemoveSerializer,
+    PushDeviceSerializer,
     PushSubscribeSerializer,
     PushUnsubscribeSerializer,
     RecipientStatusSerializer,
@@ -103,3 +105,32 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             user=request.user, endpoint=serializer.validated_data['endpoint'],
         )
         return Response({'removed': removed})
+
+    @action(detail=False, methods=['post', 'delete'], url_path='push/device')
+    def push_device(self, request):
+        """Mobil (FCM) qurilma — PUSH-BACKEND.md 2.1/2.2.
+        POST: ro'yxatga olish/yangilash (har ilova ochilganda chaqiriladi).
+        DELETE: chiqishda (yoki eskirgan qurilmani) o'chirish."""
+        if request.method == 'DELETE':
+            serializer = PushDeviceRemoveSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            removed = services.remove_push_device(
+                user=request.user, device_id=serializer.validated_data['device_id'],
+            )
+            return Response({'removed': removed})
+
+        serializer = PushDeviceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.register_push_device(user=request.user, **serializer.validated_data)
+        return Response({'ok': True}, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='push/test')
+    def push_test(self, request):
+        """O'ziga sinov bildirishnomasi — token -> baza -> FCM -> telefon
+        zanjirini bitta tugma bilan tekshirish uchun (PUSH-BACKEND.md 2.3)."""
+        notification = services.send_notification(
+            sender=request.user, description='Bu — sinov bildirishnomasi.',
+            target_type=Notification.Target.USER, user_id=request.user.id,
+            kind='push_test', request=request,
+        )
+        return Response(NotificationSerializer(notification).data, status=status.HTTP_201_CREATED)

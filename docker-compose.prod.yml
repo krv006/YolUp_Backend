@@ -50,6 +50,11 @@ services:
       RECORDINGS_DIR: /app/recordings
       # Server-server LiveKit API — Caddy/TLS orqali emas, to'g'ridan-to'g'ri
       LIVEKIT_API_URL: http://livekit:7880
+      # Mobil push (FCM) — sozlanmasa (bo'sh) mobil push jim o'chiriladi,
+      # Web Push'ga ta'sir qilmaydi. Fayl joylashuvi uchun quyidagi
+      # `volumes:`dagi izohga qarang.
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
     # `record_resource_sample` ATAYLAB shu yerda (cron konteynerida EMAS) —
     # Docker socket ulanmagan (xavfsizlik sababli), shuning uchun faqat
     # buyruq ishga tushirilgan konteynerning o'z holati ko'rinadi. `cron`
@@ -71,6 +76,11 @@ services:
       - media:/app/media
       - logs:/app/logs   # log fayllar konteyner qayta yaratilsa ham saqlanadi
       - recordings:/app/recordings   # o'qituvchi brauzeridan yuklangan video/audio (faqat auth stream orqali beriladi)
+      # Mobil push (FCM) tayyor bo'lgach: Firebase service account JSON'ni
+      # serverga (masalan /etc/yolup/firebase-service-account.json) qo'yib,
+      # quyidagi qatorni izohdan chiqaring va .env'da
+      # GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/firebase-service-account.json qo'shing.
+      # - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
     depends_on:
       db:
         condition: service_healthy

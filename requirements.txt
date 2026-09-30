@@ -34,3 +34,5 @@ psutil>=6.0
 # oldin faqat tranzitiv bog'liqlik edi (google-generativeai orqali), endi
 # to'g'ridan-to'g'ri ishlatilgani uchun aniq belgilandi.
 requests>=2.33
+# Mobil push (FCM) — apps.notifications, PUSH-BACKEND.md
+firebase-admin>=6.5

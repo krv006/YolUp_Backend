@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from apps.accounts.serializers import UserSerializer
 
-from .models import Notification, NotificationRecipient
+from .models import Notification, NotificationRecipient, PushDevice
 
 
 class NotificationSerializer(serializers.ModelSerializer):
@@ -77,3 +77,16 @@ class PushSubscribeSerializer(serializers.Serializer):
 
 class PushUnsubscribeSerializer(serializers.Serializer):
     endpoint = serializers.URLField(max_length=500)
+
+
+class PushDeviceSerializer(serializers.Serializer):
+    """Mobil (FCM) qurilmani ro'yxatga olish — PUSH-BACKEND.md 2.1."""
+
+    token = serializers.CharField(max_length=512)
+    platform = serializers.ChoiceField(choices=PushDevice.Platform.choices)
+    device_id = serializers.CharField(max_length=128)
+    app_version = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
+
+
+class PushDeviceRemoveSerializer(serializers.Serializer):
+    device_id = serializers.CharField(max_length=128)

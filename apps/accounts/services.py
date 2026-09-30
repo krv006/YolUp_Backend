@@ -335,16 +335,22 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     return target
 
 
-def logout(*, user: User, refresh_token: str | None = None, request=None) -> None:
+def logout(*, user: User, refresh_token: str | None = None, device_id: str | None = None, request=None) -> None:
     """Chiqish — berilgan refresh token bekor qilinadi (blacklist), qayta
     ishlatib bo'lmaydi. Access token o'z muddati tugaguncha amal qiladi
     (JWT'ning odatiy xatti-harakati); boshqa qurilmalardagi sessiyalarga
-    ta'sir qilmaydi."""
+    ta'sir qilmaydi. `device_id` berilsa — mobil push qurilma yozuvi ham
+    o'chiriladi (chiqib ketgan foydalanuvchiga push kelib turmasin;
+    PUSH-BACKEND.md 2.2 — `push/device/` DELETE'ga qo'shimcha himoya)."""
     if refresh_token:
         try:
             from rest_framework_simplejwt.tokens import RefreshToken
             RefreshToken(refresh_token).blacklist()
         except Exception:  # noqa: BLE001 — token allaqachon yaroqsiz/eskirgan bo'lishi mumkin
             pass
+
+    if device_id:
+        from apps.notifications.services import remove_push_device
+        remove_push_device(user=user, device_id=device_id)
 
     audit.record(action='auth.logout', actor=user, target=user, request=request)

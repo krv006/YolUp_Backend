@@ -68,6 +68,36 @@ class NotificationRecipient(TimeStampedUUIDModel):
         return f'{self.user.username} · {state}'
 
 
+class PushDevice(TimeStampedUUIDModel):
+    """Mobil ilova (FCM) qurilmasi — `PushSubscription` (Web Push, brauzer)
+    bilan yonma-yon, alohida yo'l. `token` FCM registration token, o'zgarib
+    turadi (ilova qayta o'rnatilsa, ma'lumot tozalansa va h.k.), shuning
+    uchun barqaror kalit `(user, device_id)` — `token` yangilanadigan maydon.
+
+    Bitta qurilmada hisoblar orasida almashish bor (`switch/{id}/`) — shuning
+    uchun `device_id` bir xil, `user` boshqa bo'lgan bir nechta qator normal
+    holat (`unique_together` aynan shuni ko'zda tutadi, `device_id`ning o'zi
+    UNIQUE emas)."""
+
+    class Platform(TextChoices):
+        ANDROID = 'android', 'Android'
+        IOS = 'ios', 'iOS'
+
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='push_devices')
+    device_id = CharField(max_length=128)
+    token = CharField(max_length=512)
+    platform = CharField(max_length=16, choices=Platform.choices)
+    app_version = CharField(max_length=32, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['user', 'device_id'], name='unique_push_device'),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} · {self.platform} · {self.device_id[:8]}'
+
+
 class PushSubscription(TimeStampedUUIDModel):
     """Brauzerning Push API orqali bergan obuna ma'lumoti — bitta foydalanuvchi
     bir nechta qurilma/brauzerdan obuna bo'lishi mumkin, har biri alohida

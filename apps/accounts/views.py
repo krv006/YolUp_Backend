@@ -94,6 +94,7 @@ class LogoutView(APIView):
         services.logout(
             user=request.user,
             refresh_token=request.data.get('refresh'),
+            device_id=request.data.get('device_id'),
             request=request,
         )
         return Response(status=status.HTTP_204_NO_CONTENT)

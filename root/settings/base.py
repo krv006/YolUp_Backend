@@ -271,6 +271,11 @@ VAPID_PRIVATE_KEY = os.getenv(
 # Push protokoli talabi — muammo bo'lsa push xizmati shu manzilga yozadi
 VAPID_CLAIM_EMAIL = os.getenv('VAPID_CLAIM_EMAIL', 'mailto:admin@thesofmebel.uz')
 
+# Mobil push (FCM) — PUSH-BACKEND.md. Sozlanmasa (bo'sh yoki fayl mavjud
+# emas) mobil push jim o'chiriladi — Web Push'ga ta'sir qilmaydi.
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+FCM_PROJECT_ID = os.getenv('FCM_PROJECT_ID', '')
+
 # 'uz' — manba til: kodda yozilgan xato/tekshiruv matnlarining o'zi shu (izoh
 # yozilmagan bo'lsa ham gettext ularni "tarjima kerak emas" deb qabul qiladi).
 # Frontend `Accept-Language: ru`/`en` yuborsa, LocaleMiddleware navbatdagi
