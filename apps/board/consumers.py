@@ -23,10 +23,18 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         user = self.scope['user']
         lesson_id = self.scope['url_route']['kwargs']['lesson_id']
+        # `accept()`dan OLDIN `close()` chaqirilsa, ASGI server ulanishni
+        # qabul qilish o'rniga butunlay rad etadi (HTTP 403) — maxsus kod
+        # (4401/4403) brauzerga hech qachon yetib bormaydi, frontendning
+        # "4401 kelsa tokenni yangila" mantig'i ishlamay qoladi (2026-09-30
+        # production'da topilgan haqiqiy xato). Shuning uchun avval qabul
+        # qilib, SHUNDAN KEYIN kod bilan yopamiz.
         if not getattr(user, 'is_authenticated', False):
+            await self.accept()
             await self.close(code=4401)
             return
         if not await self._can_view(user, lesson_id):
+            await self.accept()
             await self.close(code=4403)
             return
         self.lesson_id = lesson_id

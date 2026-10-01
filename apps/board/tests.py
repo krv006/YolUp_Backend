@@ -397,9 +397,29 @@ class BoardWebSocketTests(TransactionTestCase):
         await comm.disconnect()
 
     async def test_stranger_rejected(self):
+        """`accept()`dan keyin `close(4403)` — ulanish QABUL qilinadi, so'ng
+        darhol aniq kod bilan yopiladi (2026-09-30 production'da topilgan
+        haqiqiy xato: oldin `close()` `accept()`dan OLDIN chaqirilib, brauzer
+        maxsus kodni hech qachon ko'rmas edi)."""
         comm = self.ws(self.stranger)
         connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        self.assertTrue(connected)
+        closed = await comm.receive_output(timeout=3)
+        self.assertEqual(closed['type'], 'websocket.close')
+        self.assertEqual(closed['code'], 4403)
+        await comm.disconnect()
+
+    async def test_no_token_rejected_with_4401(self):
+        from channels.testing import WebsocketCommunicator
+
+        from root.asgi import application
+
+        comm = WebsocketCommunicator(application, f'/ws/board/{self.lesson.id}/')
+        connected, _ = await comm.connect()
+        self.assertTrue(connected)
+        closed = await comm.receive_output(timeout=3)
+        self.assertEqual(closed['type'], 'websocket.close')
+        self.assertEqual(closed['code'], 4401)
         await comm.disconnect()
 
     async def test_focus_exit_broadcast_to_teacher(self):

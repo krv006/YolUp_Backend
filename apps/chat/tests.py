@@ -200,15 +200,26 @@ class ChatWebSocketTests(TransactionTestCase):
         await student_comm.disconnect()
 
     async def test_stranger_rejected(self):
+        """`accept()`dan keyin `close(4403)` — ulanish QABUL qilinadi (`connected`
+        True), so'ng darhol aniq kod bilan yopiladi. Oldin `close()` `accept()`dan
+        OLDIN chaqirilib, ASGI server ulanishni butunlay rad etardi (HTTP 403) —
+        brauzer 4403 kodini hech qachon ko'rmas edi, frontend buni ajrata olmasdi
+        (2026-09-30 production'da topilgan haqiqiy xato)."""
         comm, connected, _ = await self._connect(self.stranger)
-        self.assertFalse(connected)
+        self.assertTrue(connected)
+        closed = await comm.receive_output(timeout=3)
+        self.assertEqual(closed['type'], 'websocket.close')
+        self.assertEqual(closed['code'], 4403)
         await comm.disconnect()
 
     async def test_no_token_rejected(self):
         from root.asgi import application
         comm = WebsocketCommunicator(application, f'/ws/chat/{self.room.id}/')
         connected, _ = await comm.connect()
-        self.assertFalse(connected)
+        self.assertTrue(connected)
+        closed = await comm.receive_output(timeout=3)
+        self.assertEqual(closed['type'], 'websocket.close')
+        self.assertEqual(closed['code'], 4401)
         await comm.disconnect()
 
     async def test_lesson_live_and_ended_broadcast(self):

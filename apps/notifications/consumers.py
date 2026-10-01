@@ -15,6 +15,13 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         user = self.scope['user']
         if not getattr(user, 'is_authenticated', False):
+            # `accept()`dan OLDIN `close()` chaqirilsa, ASGI server ulanishni
+            # qabul qilish o'rniga butunlay rad etadi (HTTP 403) — maxsus kod
+            # (4401) brauzerga hech qachon yetib bormaydi, frontendning
+            # "4401 kelsa tokenni yangila" mantig'i ishlamay qoladi (2026-09-30
+            # production'da topilgan haqiqiy xato). Shuning uchun avval qabul
+            # qilib, SHUNDAN KEYIN kod bilan yopamiz.
+            await self.accept()
             await self.close(code=4401)
             return
         self.group = group_name(user.id)
