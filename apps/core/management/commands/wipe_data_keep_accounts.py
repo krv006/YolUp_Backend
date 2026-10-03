@@ -29,6 +29,14 @@ def _label(model) -> str:
     return model._meta.label_lower
 
 
+def _rows(model):
+    """`SoftDeleteModel` (Course, Lesson) uchun `objects` yashirin
+    (`is_deleted=True`) qatorlarni ko'rsatmaydi va `.delete()` ham qatorni
+    o'chirmay, faqat belgilaydi — shuning uchun to'liq tozalash `all_objects`
+    orqali (oddiy Manager: `.delete()` haqiqatan o'chiradi)."""
+    return getattr(model, 'all_objects', model.objects)
+
+
 class Command(BaseCommand):
     help = "Hisoblardan (User, ParentChildLink) tashqari barcha ma'lumotni o'chiradi."
 
@@ -52,14 +60,14 @@ class Command(BaseCommand):
         ]
         self._guard_kept_models(kept_models, wipe_models)
 
-        counts = {_label(m): m.objects.count() for m in wipe_models}
+        counts = {_label(m): _rows(m).count() for m in wipe_models}
         total = sum(counts.values())
         self.stdout.write("O'chiriladigan qatorlar (0 dan katta jadvallar):")
         for label, n in sorted(counts.items(), key=lambda x: -x[1]):
             if n:
                 self.stdout.write(f'  {label}: {n}')
         self.stdout.write(f'JAMI: {total} qator, {sum(1 for n in counts.values() if n)} jadvaldan.')
-        self.stdout.write("Qoladi: " + ', '.join(f'{_label(m)}={m.objects.count()}' for m in kept_models))
+        self.stdout.write("Qoladi: " + ', '.join(f'{_label(m)}={_rows(m).count()}' for m in kept_models))
 
         if not options['confirm']:
             self.stdout.write(self.style.WARNING("DRY-RUN — hech narsa o'chirilmadi. Haqiqiy o'chirish: --confirm --backup-file <fayl>"))
@@ -95,7 +103,7 @@ class Command(BaseCommand):
             for model in pending:
                 try:
                     with transaction.atomic():
-                        model.objects.all().delete()
+                        _rows(model).all().delete()
                 except ProtectedError:
                     failed.append(model)
             if len(failed) == len(pending):
