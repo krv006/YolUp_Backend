@@ -23,6 +23,15 @@
 		file_server
 	}
 
+	# Education Center CRM (education_center_crm-web-1) — CRM jamoasi o'z
+	# endpointlarini shu domen ostida beradi. Caddy `education_center_crm`
+	# docker tarmog'iga docker-compose.prod.yml orqali ulanadi.
+	# handle_path prefiksni kesadi: /crm/api/x -> /api/x
+	# DIQQAT: bu blok pastdagi umumiy `handle` (redir) dan OLDIN turishi shart.
+	handle_path /crm/* {
+		reverse_proxy education_center_crm-web-1:8000
+	}
+
 	# Qolgan yo'llar — API hujjatlariga yo'naltiramiz
 	handle {
 		redir * /api/docs/ 302

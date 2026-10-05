@@ -154,6 +154,7 @@ services:
       - default
       - navigo   # Navigo CRM nginx'iga proxy uchun (Caddyfile'dagi navigocrm bloki)
       - eslatbot # Eslat bot adminkasiga proxy uchun (Caddyfile'dagi eslat bloki)
+      - education_center_crm # Education Center CRM web'iga proxy uchun (Caddyfile'dagi /crm/* bloki)
     depends_on:
       - backend
       - livekit
@@ -174,4 +175,7 @@ networks:
     external: true
   eslatbot:
     name: eslat_bot_default
+    external: true
+  education_center_crm:
+    name: education_center_crm_default
     external: true
