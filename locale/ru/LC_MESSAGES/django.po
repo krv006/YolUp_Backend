@@ -694,3 +694,15 @@ msgstr "Выбранный вариант не относится к этому 
 #: apps/quizzes/views.py:39
 msgid "Test topilmadi."
 msgstr "Тест не найден."
+
+#: apps/accounts
+msgid "Bu login band."
+msgstr "Этот логин уже занят."
+
+#: apps/accounts
+msgid "Bunday o'quvchi topilmadi."
+msgstr "Такой ученик не найден."
+
+#: apps/accounts
+msgid "O'quvchi logini yoki taklif kodini kiriting."
+msgstr "Введите логин ученика или код приглашения."

@@ -197,30 +197,35 @@ class CertificateTests(APITestCase):
 
 
 class TeacherActivationTests(APITestCase):
-    """O'qituvchi ro'yxatdan o'tgach kira oladi, lekin admin tasdiqlamaguncha
-    kurs ochish kabi amallarga ruxsati yo'q (real oqim, `register()`
-    yordamchisidagi avto-tasdiqni chetlab o'tib)."""
+    """Yangi o'qituvchi darhol ishlay oladi (loyiha egasi qarori, 2026-10-05):
+    `is_approved` standart True. Bayroq saqlanib qolgan — admin uni qo'lda
+    False qilsa, o'qituvchi yana bloklanadi."""
 
-    def test_teacher_actions_blocked_until_admin_approves(self):
+    def test_new_teacher_can_work_immediately(self):
         resp = self.client.post('/api/v1/auth/register/', {
             'username': 'newteacher', 'password': PASSWORD, 'role': 'teacher',
         })
-        self.assertFalse(resp.json()['is_approved'])
+        self.assertTrue(resp.json()['is_approved'])
 
-        token = login(self.client, 'newteacher')  # kira oladi
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "newteacher")}')
+        self.assertEqual(
+            self.client.post('/api/v1/courses/', {'title': 'Algebra'}).status_code, 201,
+        )
+
+    def test_admin_can_still_block_a_teacher_by_clearing_the_flag(self):
+        register(self.client, 'blockedteacher', 'teacher')
+        User.objects.filter(username='blockedteacher').update(is_approved=False)
+        token = login(self.client, 'blockedteacher')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
         self.assertEqual(self.client.post('/api/v1/courses/', {'title': 'Hack'}).status_code, 403)
 
         User.objects.create_user(username='admin1', password=PASSWORD, role=User.Role.ADMIN)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, "admin1")}')
-        teacher_id = User.objects.get(username='newteacher').id
-        resp = self.client.post(f'/api/v1/auth/teachers/{teacher_id}/approve/')
-        self.assertTrue(resp.json()['is_approved'])
+        teacher_id = User.objects.get(username='blockedteacher').id
+        self.assertTrue(self.client.post(f'/api/v1/auth/teachers/{teacher_id}/approve/').json()['is_approved'])
 
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
-        self.assertEqual(
-            self.client.post('/api/v1/courses/', {'title': 'Algebra'}).status_code, 201,
-        )
+        self.assertEqual(self.client.post('/api/v1/courses/', {'title': 'Algebra'}).status_code, 201)
 
     def test_admin_is_notified_when_teacher_registers(self):
         from apps.notifications.models import NotificationRecipient
@@ -326,6 +331,73 @@ class LinkFlowTests(APITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
         resp = self.client.post('/api/v1/auth/links/request/', {'invite_code': 'FK-XXXX'})
         self.assertEqual(resp.status_code, 404)
+
+    def _second_parent(self, name='parent9'):
+        register(self.client, name, 'parent')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, name)}')
+
+    def test_link_request_by_username(self):
+        self._second_parent()
+        resp = self.client.post('/api/v1/auth/links/request/', {'username': 'child1'})
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.json()['status'], 'pending')
+        self.assertEqual(resp.json()['student']['username'], 'child1')
+
+    def test_link_request_username_tolerates_keyboard_capitalisation(self):
+        self._second_parent()
+        resp = self.client.post('/api/v1/auth/links/request/', {'username': 'Child1'})
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.json()['student']['username'], 'child1')
+
+    def test_ambiguous_case_variants_are_rejected_unless_exact(self):
+        """`child1` bilan birga `CHILD1` ham bo'lsa, `Child1` qaysi biriga tegishli — noaniq."""
+        User.objects.create_user(username='CHILD1', password=PASSWORD, role=User.Role.STUDENT)
+        self._second_parent()
+        self.assertEqual(
+            self.client.post('/api/v1/auth/links/request/', {'username': 'Child1'}).status_code, 404,
+        )
+        resp = self.client.post('/api/v1/auth/links/request/', {'username': 'CHILD1'})
+        self.assertEqual(resp.json()['student']['username'], 'CHILD1')
+
+    def test_unknown_username_404_and_non_students_not_linkable(self):
+        self._second_parent()
+        self.assertEqual(
+            self.client.post('/api/v1/auth/links/request/', {'username': 'nobody'}).status_code, 404,
+        )
+        register(self.client, 'some_teacher', 'teacher')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.parent_token}')
+        self.assertEqual(
+            self.client.post('/api/v1/auth/links/request/', {'username': 'some_teacher'}).status_code, 404,
+        )
+
+    def test_link_request_needs_username_or_invite_code(self):
+        self._second_parent()
+        resp = self.client.post('/api/v1/auth/links/request/', {})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('username', resp.json()['error']['details'])
+
+    def test_username_wins_when_both_given(self):
+        self._second_parent()
+        resp = self.client.post('/api/v1/auth/links/request/', {
+            'username': 'child1', 'invite_code': 'FK-XXXX',
+        })
+        self.assertEqual(resp.status_code, 201, resp.content)
+
+    def test_taken_username_on_profile_update_reports_under_username_key(self):
+        register(self.client, 'taken_name', 'student')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.child_token}')
+        resp = self.client.patch('/api/v1/auth/me/', {'username': 'taken_name'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()['error']['details']['username'], ['Bu login band.'])
+        # o'zining loginini qayta yuborish xato emas
+        resp = self.client.patch('/api/v1/auth/me/', {'username': 'child1'}, format='json')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_taken_username_message_is_translated(self):
+        register(self.client, 'taken_name2', 'student')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.child_token}', HTTP_ACCEPT_LANGUAGE='ru')
+        resp = self.client.patch('/api/v1/auth/me/', {'username': 'taken_name2'}, format='json')
+        self.assertEqual(resp.json()['error']['details']['username'], ['Этот логин уже занят.'])
 
     def test_consent_requires_approved_link(self):
         register(self.client, 'parent4', 'parent')
@@ -641,14 +713,14 @@ class SwitchRoleTests(APITestCase):
         self.assertEqual(body['user']['phone'], self.PHONE)
         self.assertTrue(User.objects.filter(phone=self.PHONE, role='parent').exists())
 
-    def test_auto_provisioned_teacher_needs_approval(self):
+    def test_auto_provisioned_teacher_is_approved_immediately(self):
         register(self.client, 'srp_parent', 'parent', phone=self.PHONE)
         self.auth(login(self.client, 'srp_parent'))
 
         resp = self.switch_role('teacher')
         self.assertEqual(resp.status_code, 200)
         new_teacher = User.objects.get(phone=self.PHONE, role='teacher')
-        self.assertFalse(new_teacher.is_approved)
+        self.assertTrue(new_teacher.is_approved)
 
     def test_switching_to_existing_role_reuses_same_account(self):
         register(self.client, 'sre_teacher', 'teacher', phone=self.PHONE)

@@ -172,8 +172,10 @@ class LinkRequestView(APIView):
     def post(self, request):
         serializer = LinkRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         link, created = services.request_link(
-            parent=request.user, invite_code=serializer.validated_data['invite_code'], request=request,
+            parent=request.user, username=data.get('username'),
+            invite_code=data.get('invite_code'), request=request,
         )
         return Response(
             LinkSerializer(link).data,

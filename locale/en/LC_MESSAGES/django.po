@@ -694,3 +694,15 @@ msgstr "The selected option does not belong to this question."
 #: apps/quizzes/views.py:39
 msgid "Test topilmadi."
 msgstr "Quiz not found."
+
+#: apps/accounts
+msgid "Bu login band."
+msgstr "This username is already taken."
+
+#: apps/accounts
+msgid "Bunday o'quvchi topilmadi."
+msgstr "No such student found."
+
+#: apps/accounts
+msgid "O'quvchi logini yoki taklif kodini kiriting."
+msgstr "Enter the student's username or invite code."

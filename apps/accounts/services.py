@@ -21,9 +21,10 @@ TEACHER_LESSON_REMINDER_MINUTES = 10
 
 
 def _notify_admins_of_pending_teacher(teacher: User, request=None) -> None:
-    """Yangi o'qituvchi ro'yxatdan o'tganda BARCHA adminlarga bildirishnoma —
-    aks holda admin tasdiqlash kerakligini bilishi uchun ro'yxatni o'zi
-    tekshirib turishga majbur bo'lardi."""
+    """Yangi o'qituvchi ro'yxatdan o'tganda BARCHA adminlarga bildirishnoma.
+    (Tasdiqlash endi to'siq emas — o'qituvchi darhol ishlay oladi — lekin
+    admin yangi o'qituvchidan xabardor bo'lib turadi. `kind` nomi frontend
+    bilan moslik uchun o'zgarmagan.)"""
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 
@@ -34,7 +35,7 @@ def _notify_admins_of_pending_teacher(teacher: User, request=None) -> None:
     for admin_id in admin_ids:
         send_notification(
             sender=teacher,
-            description=_("Yangi o'qituvchi ro'yxatdan o'tdi: %(name)s (@%(username)s) — tasdiqlash kerak.") % {
+            description=_("Yangi o'qituvchi ro'yxatdan o'tdi: %(name)s (@%(username)s).") % {
                 'name': full_name, 'username': teacher.username,
             },
             target_type=Notification.Target.USER, user_id=admin_id,
@@ -63,9 +64,9 @@ def register_user(*, username: str, password: str, role: str, request=None, **ex
         raise ValidationError({'role': _("Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi.")})
     user = User(username=username, role=role, **extra)
     if role == User.Role.TEACHER:
-        # Kira oladi, lekin admin tasdiqlamaguncha kurs/dars ochish kabi
-        # amallarga ruxsati yo'q (RequirePerm — apps.core.permissions).
-        user.is_approved = False
+        # `is_approved` standart True: yangi o'qituvchi darhol ishlay oladi
+        # (loyiha egasi qarori, 2026-10-05). Bayroq saqlanib qolgan — admin
+        # uni qo'lda False qilsa, o'qituvchi yana bloklanadi (apps.core.permissions).
         user.lesson_reminder_minutes = TEACHER_LESSON_REMINDER_MINUTES
     user.set_password(password)
     user.save()
@@ -117,13 +118,36 @@ def create_child(*, creator: User, username: str, password: str, request=None, *
     return child
 
 
+def _student_by_username(username: str) -> User:
+    """Aniq moslik birinchi; topilmasa — katta/kichik harfdan qat'i nazar,
+    FAQAT bitta o'quvchi mos kelsagina (mobil klaviatura birinchi harfni
+    katta qilib yuborishi mumkin). `krv006` va `KRV006` ikkalasi ham mavjud
+    bo'lsa va aniq mos kelmasa — qaysi bolaga ulanayotgani noaniq, rad etiladi."""
+    username = username.strip()
+    students = User.objects.filter(role=User.Role.STUDENT)
+    exact = students.filter(username=username).first()
+    if exact is not None:
+        return exact
+    loose = list(students.filter(username__iexact=username)[:2])
+    if len(loose) == 1:
+        return loose[0]
+    raise NotFound(_("Bunday o'quvchi topilmadi."))
+
+
 @transaction.atomic
-def request_link(*, parent: User, invite_code: str, request=None) -> tuple[ParentChildLink, bool]:
-    """Taklif-kod orqali so'rov — o'quvchi tasdig'igacha PENDING (rozilik oqimi)."""
-    try:
-        student = User.objects.get(invite_code=invite_code.strip().upper(), role=User.Role.STUDENT)
-    except User.DoesNotExist:
-        raise NotFound(_('Bunday taklif kodi topilmadi.'))
+def request_link(
+    *, parent: User, invite_code: str | None = None, username: str | None = None, request=None,
+) -> tuple[ParentChildLink, bool]:
+    """O'quvchi logini (`username`) yoki taklif kodi (`invite_code`) orqali
+    so'rov — o'quvchi tasdig'igacha PENDING (rozilik oqimi). Ikkalasidan
+    biri yetarli; ikkalasi ham kelsa, login ustun."""
+    if username:
+        student = _student_by_username(username)
+    else:
+        try:
+            student = User.objects.get(invite_code=(invite_code or '').strip().upper(), role=User.Role.STUDENT)
+        except User.DoesNotExist:
+            raise NotFound(_('Bunday taklif kodi topilmadi.'))
 
     link, created = ParentChildLink.objects.get_or_create(
         parent=parent, student=student,
@@ -314,10 +338,6 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
             first_name=current_user.first_name,
             last_name=current_user.last_name,
         )
-        if role == User.Role.TEACHER:
-            # Oddiy ro'yxatdan o'tish bilan bir xil qoida — admin
-            # tasdiqlamaguncha kurs/dars ochilmaydi.
-            target.is_approved = False
         target.set_password(secrets.token_urlsafe(32))
         target.save()
         auto_provisioned = True

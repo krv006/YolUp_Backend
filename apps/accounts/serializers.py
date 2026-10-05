@@ -1,8 +1,21 @@
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 from . import selectors
 from .models import Consent, ParentChildLink, TeacherCertificate, User
+
+
+def username_validators():
+    """Band login uchun aniq, `username` kaliti ostidagi xabar (mobil ilova
+    maydon xatosini shu kalit bo'yicha ko'rsatadi). Model maydonining
+    standart xabari inglizcha ("A user with that username already exists.")."""
+    return [
+        UnicodeUsernameValidator(),
+        UniqueValidator(queryset=User.objects.all(), message=_('Bu login band.')),
+    ]
 
 
 class CertificateSerializer(serializers.ModelSerializer):
@@ -30,6 +43,7 @@ class UserSerializer(serializers.ModelSerializer):
             'lesson_reminder_minutes',
         ]
         read_only_fields = ['role', 'invite_code', 'is_approved']
+        extra_kwargs = {'username': {'validators': username_validators()}}
 
     def get_certificates(self, obj):
         if obj.role != User.Role.TEACHER:
@@ -90,6 +104,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'password', 'first_name', 'last_name', 'role', 'phone', 'is_approved']
         read_only_fields = ['is_approved']
+        extra_kwargs = {'username': {'validators': username_validators()}}
 
 
 class ChildCreateSerializer(serializers.ModelSerializer):
@@ -99,6 +114,7 @@ class ChildCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'password', 'first_name', 'last_name', 'invite_code']
         read_only_fields = ['invite_code']
+        extra_kwargs = {'username': {'validators': username_validators()}}
 
 
 class LinkSerializer(serializers.ModelSerializer):
@@ -111,7 +127,18 @@ class LinkSerializer(serializers.ModelSerializer):
 
 
 class LinkRequestSerializer(serializers.Serializer):
-    invite_code = serializers.CharField(max_length=12)
+    """Ikkalasidan biri yetarli: `username` (o'quvchi logini) yoki `invite_code`
+    (eski veb ilova hali ishlatadi — o'tish davri uchun saqlangan)."""
+
+    username = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    invite_code = serializers.CharField(max_length=12, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        if not (attrs.get('username') or '').strip() and not (attrs.get('invite_code') or '').strip():
+            raise serializers.ValidationError(
+                {'username': _("O'quvchi logini yoki taklif kodini kiriting.")},
+            )
+        return attrs
 
 
 class LinkRespondSerializer(serializers.Serializer):
