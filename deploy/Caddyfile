@@ -71,3 +71,10 @@ smart.thesofmebel.uz {
 
 	reverse_proxy unix//run/smart_project/smart_project.sock
 }
+
+# --- Ombor CRM (ombor.thesofmebel.uz) ---
+# Serverda qo'lda qo'shilgan edi (gitda yo'q edi) — endi repoda. ombor-crm konteyneri
+# caddy ulangan docker tarmoqlaridan birida turadi.
+ombor.thesofmebel.uz {
+	reverse_proxy ombor-crm:8000
+}
