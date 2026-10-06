@@ -70,7 +70,27 @@ class ScoringEngineTests(SimpleTestCase):
             _section('math_1', 0, 22, group='math'), _section('math_2', 0, 22, group='math'),
         ]
         groups = {g['key']: g['score'] for g in scoring.compute({'type': 'sat'}, half)['groups']}
-        self.assertEqual(groups, {'rw': 500, 'math': 200})
+        self.assertEqual(groups, {'rw': 480, 'math': 200})  # 33/66 -> 470-490 (College Board jadvali)
+
+    def test_sat_uses_official_conversion_table_not_a_straight_line(self):
+        # Math 27/54 -> rasmiy jadvalda 430-460 (chiziqli hisob 500 berar edi)
+        math = [_section('math_1', 13.5, 27, group='math'), _section('math_2', 13.5, 27, group='math')]
+        group = scoring.compute({'type': 'sat'}, math)['groups'][0]
+        self.assertEqual(group['range'], [430, 460])
+        self.assertEqual(group['score'], 450)
+        # jadval chegaralari: 0 -> 200, maksimum -> 800
+        self.assertEqual(scoring.sat_section_score('rw', 0)[0], 200)
+        self.assertEqual(scoring.sat_section_score('rw', 1)[0], 800)
+        self.assertEqual(scoring.sat_section_score('math', 1)[1:], (790, 800))
+
+    def test_sat_total_range_adds_lower_and_upper(self):
+        mixed = [
+            _section('rw_1', 13.5, 27, group='rw'), _section('rw_2', 13.5, 27, group='rw'),
+            _section('math_1', 13.5, 27, group='math'), _section('math_2', 13.5, 27, group='math'),
+        ]
+        total = scoring.compute({'type': 'sat'}, mixed)['total']
+        self.assertEqual(total['range'], [470 + 430, 490 + 460])
+        self.assertEqual(total['score'], 480 + 450)
 
     def test_milliy_levels(self):
         full = scoring.compute({'type': 'milliy'}, [_section('main', 50, 50)])

@@ -10,14 +10,19 @@ DIQQAT — aniqlik haqida:
   * IELTS Listening/Reading: to'g'ri javoblar -> band jadvali (Academic,
     ochiq ma'lumot). Rasmiy jadval test versiyasiga qarab biroz farq qilishi
     mumkin. Umumiy band 0.5 gacha yaxlitlanadi.
-  * SAT: haqiqiy SAT moslashuvchan (adaptive) va rasmiy jadvali yopiq —
-    bu yerda 200-800 chiziqli TAXMINIY o'tkazma (`approximate: True`).
+  * SAT: haqiqiy SAT moslashuvchan (adaptive), har test shakli o'z jadvaliga
+    ega. Bu yerda College Board'ning rasmiy amaliy test (Practice Test #4)
+    o'tkazma jadvali ishlatiladi (`sat_tables.py`): natija foizi jadval
+    shkalasiga (Reading&Writing 66, Math 54) keltiriladi va (past, yuqori)
+    oralig'ining o'rtasi olinadi — TAXMINIY (`approximate: True`).
   * Milliy sertifikat: rasmiy ball Rasch modeli bilan 75 ballik T-shkalada
     hisoblanadi (savol qiyinligi va ishtirokchilar natijasiga bog'liq) —
     bu yerda foiz * 75 TAXMINIY o'tkazma (`approximate: True`); daraja
     chegaralari rasmiy (A+ >= 70, A 65, B+ 60, B 55, C+ 50, C 46).
 """
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+
+from . import sat_tables
 
 # (kamida to'g'ri javob soni, band) — kamayish tartibida; 40 savolga normallashtirilgan
 _IELTS_LISTENING = [
@@ -124,6 +129,18 @@ def _ielts(sections: list) -> dict:
     return {'sections': rows, 'total': total, 'pending': pending, 'approximate': False}
 
 
+def sat_section_score(group: str, fraction: float) -> tuple:
+    """Natija foizi -> (ball, past, yuqori). Ball — oraliq o'rtasi, 10 ga yaxlitlangan."""
+    if group == 'math':
+        table, top = sat_tables.MATH_RANGES, sat_tables.MATH_MAX_RAW
+    else:
+        table, top = sat_tables.RW_RANGES, sat_tables.RW_MAX_RAW
+    raw = int(Decimal(str(fraction * top)).quantize(Decimal('1'), ROUND_HALF_UP))
+    lower, upper = table[max(0, min(top, raw))]
+    score = int(Decimal(str((lower + upper) / 20)).quantize(Decimal('1'), ROUND_HALF_UP)) * 10
+    return score, lower, upper
+
+
 def _sat(sections: list) -> dict:
     rows = [_base_section(s) for s in sections]
     groups: dict = {}
@@ -135,14 +152,18 @@ def _sat(sections: list) -> dict:
     group_rows = []
     for key, bucket in groups.items():
         fraction = bucket['earned'] / bucket['max'] if bucket['max'] else 0.0
-        scaled = 200 + int(Decimal(str(600 * fraction / 10)).quantize(Decimal('1'), ROUND_HALF_UP)) * 10
+        score, lower, upper = sat_section_score(key, fraction)
         group_rows.append({
             'key': key, 'title': SAT_SECTION_TITLES.get(key, key),
-            'score': scaled, 'min': 200, 'max': 800,
+            'score': score, 'range': [lower, upper], 'min': 200, 'max': 800,
         })
     total = None
     if len(group_rows) == 2:
-        total = {'score': sum(g['score'] for g in group_rows), 'max': 1600, 'label': 'SAT total'}
+        total = {
+            'score': sum(g['score'] for g in group_rows),
+            'range': [sum(g['range'][0] for g in group_rows), sum(g['range'][1] for g in group_rows)],
+            'max': 1600, 'label': 'SAT total',
+        }
     return {'sections': rows, 'groups': group_rows, 'total': total, 'pending': [], 'approximate': True}
 
 
