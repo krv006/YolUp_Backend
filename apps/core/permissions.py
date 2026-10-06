@@ -28,6 +28,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'user.manage',
         'notification.send',
         'quiz.view',
+        'exam.view',
     },
     TEACHER: {
         'course.create', 'course.edit', 'course.view', 'course.enroll',
@@ -39,6 +40,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'homework.assign', 'homework.view',
         'child.create',
         'quiz.create', 'quiz.view',
+        'exam.manage', 'exam.view',
         'certificate.manage',
         'rating.view_own',
         'stats.view_own',
@@ -53,6 +55,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'chat.use',
         'homework.submit', 'homework.view',
         'quiz.view', 'quiz.attempt',
+        'exam.view', 'exam.take',
         'stats.view_own',
     },
     PARENT: {
@@ -64,6 +67,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'attendance.view',
         'homework.view',
         'quiz.view',
+        'exam.view',
     },
 }
 

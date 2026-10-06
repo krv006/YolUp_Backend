@@ -31,6 +31,14 @@ def _is_owner(quiz: Quiz, teacher: User) -> bool:
     return quiz.course_id is not None and quiz.course.teacher_id == teacher.id
 
 
+def _used_in_exam(quiz: Quiz) -> bool:
+    """Test imtihon (mock test) bo'limiga biriktirilgan bo'lsa — savollarini
+    o'zgartirish/o'chirish o'quvchilar javoblarini (ExamAnswer) buzadi."""
+    from apps.exams.models import ExamSection
+
+    return ExamSection.objects.filter(quiz=quiz).exists()
+
+
 def _notify_new_quiz(quiz: Quiz) -> None:
     """apps.homework._notify_new_assignment bilan bir xil naqsh — real-time
     push (WebSocket) send_notification ichida avtomatik bo'ladi."""
@@ -275,6 +283,10 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
             raise ValidationError({
                 'questions': _("Bu testda allaqachon urinish(lar) bor — savollarni o'zgartirib bo'lmaydi."),
             })
+        if _used_in_exam(quiz):
+            raise ValidationError({
+                'questions': _("Bu test imtihonga biriktirilgan — savollarni o'zgartirib bo'lmaydi."),
+            })
         quiz.questions.all().delete()
         for q_index, q_data in enumerate(questions):
             _create_question(quiz, q_index, q_data)
@@ -302,6 +314,8 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
 def delete_quiz(*, teacher: User, quiz: Quiz) -> None:
     if not _is_owner(quiz, teacher):
         raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    if _used_in_exam(quiz):
+        raise ValidationError({'detail': _("Bu test imtihonga biriktirilgan — o'chirib bo'lmaydi.")})
     quiz.delete()
 
 
