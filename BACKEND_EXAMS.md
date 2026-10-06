@@ -215,14 +215,64 @@ Faqat `manual: true` bo'limlar. IELTS: 0–9, qadam 0.5. Boshqa shablonlar: 0–
 
 ---
 
-## 7. Xatolar
+## 7. IELTS Writing — AI baholash (o'qituvchi tasdiqlaydi)
+
+**Qanday ishlaydi:** o'quvchi Writing bo'limida insho yozadi (bo'limdagi test savollari `text` turida: **oxirgi savol = Task 2**, qolganlari = Task 1; savol matni — topshiriq sharti). Imtihon tugagach **server o'zi** (har 5 daqiqada) insholarni Gemini bilan IELTS mezonlari bo'yicha baholaydi va **TAKLIF** sifatida saqlaydi. **Ball o'qituvchi tasdiqlamaguncha o'quvchiga ham, umumiy bandga ham o'tmaydi.**
+
+Har task uchun 4 mezon (0–9, 0.5 qadam): `task_response`, `coherence_cohesion`, `lexical_resource`, `grammatical_range_accuracy`. Task bandi — mezonlar o'rtachasi; **Writing bandi = (Task1 + 2×Task2) / 3**, 0.5 gacha yaxlitlanadi (Task 2 ikki baravar). Hisobni server qiladi.
+
+### Natijadagi `ai` bloki (`results/` va `results/{student_id}/` ichida)
+```json
+"ai": {
+  "writing": {
+    "status": "proposed",              // running | proposed | approved | failed
+    "proposed_band": 6.5,              // faqat o'qituvchiga
+    "approved_band": null,
+    "error": "",
+    "generated_at": "2026-10-20T08:12:00Z",
+    "result": {
+      "writing_band": 6.5,
+      "tasks": [{
+        "task_number": 1, "words": 160, "min_words": 150, "band": 6.0,
+        "criteria": {"task_response": 6.0, "coherence_cohesion": 6.0,
+                     "lexical_resource": 6.0, "grammatical_range_accuracy": 6.0},
+        "strengths": ["..."], "weaknesses": ["..."],
+        "corrections": [{"original": "He go", "corrected": "He goes", "explanation": "..."}],
+        "feedback": "..."
+      }],
+      "summary": {"overall_comment": "...", "recommendations": ["..."]}
+    }
+  }
+}
+```
+- **O'qituvchi/admin** hamma holatni va `proposed_band`ni ko'radi.
+- **O'quvchi/ota-ona** faqat `status: "approved"` bo'lganda va faqat `result` (izoh, mezonlar) ni ko'radi; oldin `ai: {}`.
+- `failed` — `error` da sabab; qayta urinish mumkin.
+
+### `POST /api/v1/exams/{id}/results/{student_id}/ai/` — qo'lda boshlash / qayta urinish (o'qituvchi)
+Odatda kerak emas (server o'zi baholaydi); xatodan keyin yoki darhol kerak bo'lsa. `202 {"status": "running"}` — fon oqimida ishlaydi, natijani `results/{student_id}/` dan `ai.writing.status` bilan kuzating (10–60 soniya). Imtihon tugagandan keyin ishlaydi; tasdiqlangan natija qayta baholanmaydi; allaqachon ketayotgan bo'lsa `400`. Xato avtomatik 3 martagacha qayta uriladi.
+
+### `POST /api/v1/exams/{id}/results/{student_id}/ai/approve/` — tasdiqlash (o'qituvchi)
+```json
+{}                  // AI taklif qilgan band tasdiqlanadi
+{"band": 7.0}       // yoki o'qituvchi o'zgartirib tasdiqlaydi (0–9, 0.5 qadam)
+```
+Band Writing balli sifatida yoziladi (umumiy band hisoblanadi, Speaking kirilmaguncha `pending`), AI izohi o'quvchiga ochiladi. Javob — yangilangan o'quvchi natijasi. Taklif tayyor bo'lmasa `400`.
+
+> **Tavsiya (UI):** o'qituvchi sahifasida o'quvchi inshosi (`manual_answers`), AI mezonlari, tuzatishlar va `[Tasdiqlash] [Bandni o'zgartirish]` tugmalari. O'quvchida tasdiqlangunga qadar "Writing bahosi o'qituvchi tasdig'ini kutmoqda" yozuvi.
+
+> **Eslatma:** Speaking hozircha o'qituvchi qo'lda band kiritadi (`PUT .../manual/`); audio yozuv va AI baholash keyingi bosqich.
+
+---
+
+## 8. Xatolar
 Umumiy format: `{"success": false, "error": {"code", "message", "details"}}`.
 - `403` — vaqt oynasi tashqarisida javob yuborish, tugagan/boshlanmagan imtihon, rol ruxsati yo'q.
 - `404` — imtihon topilmadi **yoki sizniki emas** (boshqa guruh).
 - `400` — maydon xatolari (`details.items`, `details.sections`, `details.starts_at`, `details.scores`).
 
-## 8. Hali yo'q (keyingi bosqichlar)
+## 9. Hali yo'q (keyingi bosqichlar)
 - ~~IELTS Listening audiosi va Reading/SAT matn parchasi~~ — **tayyor**, `BACKEND_QUIZ_GROUPS.md` ga qarang (`current/` javobidagi `item.groups`).
-- IELTS **Writing/Speaking**ni AI (Gemini) bilan baholash — hozir o'qituvchi qo'lda band qo'yadi.
+- ~~IELTS Writing AI~~ — **tayyor** (7-bo'lim). IELTS **Speaking**ni AI bilan baholash (o'quvchi ovoz yozuvi yuklashi kerak) — hozir o'qituvchi qo'lda band qo'yadi.
 - Tasodifiy variantlar (har o'quvchiga boshqa savollar), imtihon eslatmalari (boshlanishidan oldin).
 - IELTS Speaking'ni alohida vaqtda topshirish (hozir `offline` qism sifatida faqat ball kiritiladi).

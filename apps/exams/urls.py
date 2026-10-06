@@ -13,4 +13,6 @@ urlpatterns = [
     path('<uuid:pk>/results/', views.ExamResultsView.as_view(), name='exam-results'),
     path('<uuid:pk>/results/<uuid:student_id>/', views.ExamResultDetailView.as_view(), name='exam-result-detail'),
     path('<uuid:pk>/results/<uuid:student_id>/manual/', views.ExamManualScoreView.as_view(), name='exam-manual-score'),
+    path('<uuid:pk>/results/<uuid:student_id>/ai/', views.ExamAIGradeView.as_view(), name='exam-ai-grade'),
+    path('<uuid:pk>/results/<uuid:student_id>/ai/approve/', views.ExamAIApproveView.as_view(), name='exam-ai-approve'),
 ]

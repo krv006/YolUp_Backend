@@ -106,6 +106,10 @@ class ExamAttempt(TimeStampedUUIDModel):
     finished_at = DateTimeField(null=True, blank=True)
     # {bo'lim_kaliti: ball} — o'qituvchi qo'lda kiritgan (IELTS Writing/Speaking va h.k.)
     manual_scores = JSONField(default=dict, blank=True)
+    # {bo'lim_kaliti: {status: running|proposed|approved|failed, proposed_band,
+    # result, error, attempts, ...}} — IELTS Writing'ning AI taklifi. Ball
+    # (`manual_scores`)ga FAQAT o'qituvchi tasdiqlagach o'tadi.
+    ai_results = JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-created_at']

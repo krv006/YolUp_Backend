@@ -433,14 +433,16 @@ def _student_info(student: User) -> dict:
     return {'id': student.id, 'username': student.username, 'name': full_name or student.username}
 
 
-def build_results(exam: Exam, attempts: list) -> list:
+def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
+    from . import writing
+
     inputs = _section_inputs(exam, [a.id for a in attempts])
     results = []
     for attempt in attempts:
         data = scoring_engines.compute(exam.scoring, inputs[attempt.id])
         data.update({
             'student': _student_info(attempt.student), 'participated': True,
-            'finished_at': attempt.finished_at,
+            'finished_at': attempt.finished_at, 'ai': writing.ai_payload(attempt, staff),
         })
         results.append(data)
     return results
@@ -468,7 +470,7 @@ def list_results(*, user: User, exam: Exam) -> dict:
         a.student_id: a for a in ExamAttempt.objects.filter(
             exam=exam, student__in=students).select_related('student')
     }
-    computed = {r['student']['id']: r for r in build_results(exam, list(attempts.values()))}
+    computed = {r['student']['id']: r for r in build_results(exam, list(attempts.values()), staff)}
     now = timezone.now()
     items = []
     for student in students:

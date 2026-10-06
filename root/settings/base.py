@@ -249,6 +249,8 @@ FOCUS_PARENT_ALERT_THRESHOLD = int(os.getenv('FOCUS_PARENT_ALERT_THRESHOLD', '3'
 # Uy vazifasi AI tekshiruvi (Gemini) — apps/homework
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')
+# IELTS Writing AI baholash (apps/exams) — fon oqimida (testlarda False: sinxron)
+EXAM_AI_ASYNC = True
 # Tekshiruv fonda (thread) yuradi; testlar False qilib sinxron ishlatadi
 HOMEWORK_CHECK_ASYNC = True
 
