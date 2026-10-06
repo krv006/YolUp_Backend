@@ -8,7 +8,7 @@ from rest_framework import serializers
 from apps.lessons.models import Course
 
 from . import grading
-from .models import AnswerResponse, Option, Question, Quiz, QuizAttempt
+from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
 
 T = Question.Type
 _BLANK_RE = re.compile(r'\{\{(\d+)\}\}')
@@ -33,6 +33,15 @@ class BlankWriteSerializer(serializers.Serializer):
     )
 
 
+class GroupWriteSerializer(serializers.Serializer):
+    """Savollar guruhi (umumiy matn parchasi/audio). `id` berilsa — mavjud guruh
+    saqlanadi (yuklangan audio yo'qolmasligi uchun), berilmasa yangi yaratiladi."""
+
+    id = serializers.UUIDField(required=False)
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
+    passage = serializers.CharField(max_length=30000, required=False, allow_blank=True, default='')
+
+
 class QuestionWriteSerializer(serializers.Serializer):
     """Savol turiga qarab maydonlar `validate()`da tekshiriladi (frontend kontrakti:
     BACKEND_QUIZ_TYPES.md). `type` kelmasa — `single` (eski format)."""
@@ -41,6 +50,8 @@ class QuestionWriteSerializer(serializers.Serializer):
     text = serializers.CharField()
     points = serializers.IntegerField(min_value=1, max_value=100, default=2)
     order = serializers.IntegerField(min_value=0, required=False)
+    # Shu so'rovdagi `groups` ro'yxatidagi guruhning tartib raqami (0 dan)
+    group = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     options = OptionWriteSerializer(many=True, required=False)
     correct_bool = serializers.BooleanField(required=False)
     accepted_answers = serializers.ListField(
@@ -138,10 +149,14 @@ class QuizCreateSerializer(serializers.ModelSerializer):
     })
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     questions = QuestionWriteSerializer(many=True)
+    groups = GroupWriteSerializer(many=True, required=False)
 
     class Meta:
         model = Quiz
-        fields = ['course', 'subject', 'lesson', 'topic', 'title', 'description', 'due_at', 'opens_at', 'questions']
+        fields = [
+            'course', 'subject', 'lesson', 'topic', 'title', 'description', 'due_at', 'opens_at',
+            'questions', 'groups',
+        ]
 
     def validate_questions(self, questions):
         if not questions:
@@ -186,10 +201,11 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
         'blank': _("Mavzu bo'sh bo'lishi mumkin emas."),
     })
     questions = QuestionWriteSerializer(many=True, required=False)
+    groups = GroupWriteSerializer(many=True, required=False)
 
     class Meta:
         model = Quiz
-        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'status']
+        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status']
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
             'description': {'required': False, 'allow_blank': True},
@@ -212,6 +228,24 @@ class QuizListSerializer(SubjectLabelMixin, serializers.ModelSerializer):
         ]
 
 
+class GroupReadSerializer(serializers.ModelSerializer):
+    """Guruh materiali — o'quvchiga ham, o'qituvchiga ham bir xil ko'rinadi
+    (javob kaliti yo'q). `audio_url` — to'liq (absolyut) manzil, frontend boshqa
+    domenda turadi."""
+
+    audio_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuestionGroup
+        fields = ['id', 'order', 'title', 'passage', 'audio_url']
+
+    def get_audio_url(self, group):
+        if not group.audio:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(group.audio.url) if request else group.audio.url
+
+
 class OptionTakeSerializer(serializers.ModelSerializer):
     """O'quvchi/ota-ona ko'radi — `is_correct` YO'Q (javob oldindan ko'rinmasin)."""
 
@@ -227,7 +261,8 @@ class QuestionTakeSerializer(serializers.Serializer):
     def to_representation(self, question):
         data = {
             'id': question.id, 'type': question.type, 'text': question.text,
-            'points': question.points, 'order': question.order, 'options': [],
+            'points': question.points, 'order': question.order, 'group': question.group_id,
+            'options': [],
         }
         key = question.answer_key or {}
         options = list(question.options.all())
@@ -250,12 +285,13 @@ class QuestionTakeSerializer(serializers.Serializer):
 
 class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     questions = QuestionTakeSerializer(many=True, read_only=True)
+    groups = GroupReadSerializer(many=True, read_only=True)
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'questions',
+            'due_at', 'opens_at', 'groups', 'questions',
         ]
 
 
@@ -271,7 +307,8 @@ class QuestionDetailSerializer(serializers.Serializer):
     def to_representation(self, question):
         data = {
             'id': question.id, 'type': question.type, 'text': question.text,
-            'points': question.points, 'order': question.order, 'options': [],
+            'points': question.points, 'order': question.order, 'group': question.group_id,
+            'options': [],
         }
         key = question.answer_key or {}
         options = list(question.options.all())
@@ -299,12 +336,13 @@ class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     """Faqat o'qituvchi/admin uchun — to'g'ri javoblar bilan (javob kaliti)."""
 
     questions = QuestionDetailSerializer(many=True, read_only=True)
+    groups = GroupReadSerializer(many=True, read_only=True)
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'questions', 'created_at',
+            'due_at', 'opens_at', 'groups', 'questions', 'created_at',
         ]
 
 

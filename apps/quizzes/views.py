@@ -6,7 +6,7 @@ apps.core.permissions registry'sida.
 from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,6 +17,7 @@ from apps.core.permissions import RequirePerm
 from . import selectors, services
 from .models import Quiz
 from .serializers import (
+    GroupReadSerializer,
     ImportSaveSerializer,
     AttemptListSerializer,
     AttemptResultSerializer,
@@ -54,7 +55,7 @@ def _import_response(request, preview: dict) -> Response:
         teacher=request.user, preview=preview, topic=data['topic'], course=data.get('course'),
         subject=data.get('subject', ''), title=data.get('title', ''),
     )
-    payload = dict(QuizDetailSerializer(quiz).data)
+    payload = dict(QuizDetailSerializer(quiz, context={'request': request}).data)
     payload['warnings'] = preview.get('warnings', [])
     return Response(payload, status=status.HTTP_201_CREATED)
 
@@ -84,9 +85,11 @@ class QuizListCreateView(generics.ListCreateAPIView):
             lesson=data.get('lesson'), topic=data['topic'],
             title=data.get('title', ''), description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
-            status=Quiz.Status.DRAFT if as_draft else Quiz.Status.PUBLISHED,
+            groups=data.get('groups'), status=Quiz.Status.DRAFT if as_draft else Quiz.Status.PUBLISHED,
         )
-        return Response(QuizDetailSerializer(quiz).data, status=status.HTTP_201_CREATED)
+        return Response(
+            QuizDetailSerializer(quiz, context={'request': request}).data, status=status.HTTP_201_CREATED,
+        )
 
 
 class QuizImportView(APIView):
@@ -168,9 +171,10 @@ class QuizDetailView(APIView):
 
     def get(self, request, pk):
         quiz = _get_quiz(request.user, pk)
+        context = {'request': request}
         if request.user.role in _STAFF_ROLES:
-            return Response(QuizDetailSerializer(quiz).data)
-        return Response(QuizTakeSerializer(quiz).data)
+            return Response(QuizDetailSerializer(quiz, context=context).data)
+        return Response(QuizTakeSerializer(quiz, context=context).data)
 
     def patch(self, request, pk):
         """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
@@ -181,11 +185,34 @@ class QuizDetailView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         quiz = services.update_quiz(teacher=request.user, quiz=quiz, **serializer.validated_data)
-        return Response(QuizDetailSerializer(quiz).data)
+        return Response(QuizDetailSerializer(quiz, context={'request': request}).data)
 
     def delete(self, request, pk):
         quiz = _get_quiz(request.user, pk)
         services.delete_quiz(teacher=request.user, quiz=quiz)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QuizGroupAudioView(APIView):
+    """Guruhga audio yuklash (IELTS Listening): `POST` multipart `file` — mavjud
+    audio almashtiriladi; `DELETE` — audioni olib tashlaydi. Faqat test egasi."""
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request, pk, group_id):
+        quiz = _get_quiz(request.user, pk)
+        upload = request.FILES.get('file')
+        if upload is None:
+            raise ValidationError({'file': _('Audio fayl yuboring.')})
+        group = services.set_group_audio(teacher=request.user, quiz=quiz, group_id=group_id, upload=upload)
+        return Response(GroupReadSerializer(group, context={'request': request}).data)
+
+    def delete(self, request, pk, group_id):
+        quiz = _get_quiz(request.user, pk)
+        services.remove_group_audio(teacher=request.user, quiz=quiz, group_id=group_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -198,7 +225,7 @@ class QuizPublishView(APIView):
     def post(self, request, pk):
         quiz = _get_quiz(request.user, pk)
         quiz = services.publish_quiz(teacher=request.user, quiz=quiz)
-        return Response(QuizDetailSerializer(quiz).data)
+        return Response(QuizDetailSerializer(quiz, context={'request': request}).data)
 
 
 class QuizAttemptListCreateView(APIView):

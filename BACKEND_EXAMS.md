@@ -135,7 +135,8 @@ Tayyor + o'qituvchining custom shablonlari:
   "item": {
     "kind": "section", "key": "reading", "title": "Reading", "group": "", "minutes": 60,
     "starts_at": "...", "ends_at": "2026-10-20T06:30:00Z",
-    "questions": [ /* quizzes `GET {id}/` dagi o'quvchi ko'rinishi bilan bir xil — is_correct YO'Q */ ],
+    "groups": [ /* umumiy matn parchasi / audio — BACKEND_QUIZ_GROUPS.md */ ],
+    "questions": [ /* quizzes `GET {id}/` dagi o'quvchi ko'rinishi bilan bir xil — is_correct YO'Q, `group` bor */ ],
     "saved": [ {"question": "<id>", "answer": { "selected_option": "<id>" }} ]
   },
   "next": {"kind": "break", "title": "Tanaffus", "starts_at": "...", "ends_at": "..."}
@@ -221,7 +222,7 @@ Umumiy format: `{"success": false, "error": {"code", "message", "details"}}`.
 - `400` — maydon xatolari (`details.items`, `details.sections`, `details.starts_at`, `details.scores`).
 
 ## 8. Hali yo'q (keyingi bosqichlar)
-- IELTS **Listening audiosi** va **Reading/SAT matn parchasi** (bir parcha ostida bir nechta savol) — hozir savol matniga qo'lda yoziladi.
+- ~~IELTS Listening audiosi va Reading/SAT matn parchasi~~ — **tayyor**, `BACKEND_QUIZ_GROUPS.md` ga qarang (`current/` javobidagi `item.groups`).
 - IELTS **Writing/Speaking**ni AI (Gemini) bilan baholash — hozir o'qituvchi qo'lda band qo'yadi.
 - Tasodifiy variantlar (har o'quvchiga boshqa savollar), imtihon eslatmalari (boshlanishidan oldin).
 - IELTS Speaking'ni alohida vaqtda topshirish (hozir `offline` qism sifatida faqat ball kiritiladi).

@@ -330,6 +330,7 @@ def current_payload(*, student: User, exam: Exam, now=None) -> dict:
                     return payload
                 item['questions'] = list(
                     section.quiz.questions.prefetch_related('options')) if section.quiz_id else []
+                item['groups'] = list(section.quiz.groups.all()) if section.quiz_id else []
                 item['saved'] = [
                     {'question': a.question_id, 'answer': a.answer}
                     for a in ExamAnswer.objects.filter(attempt=attempt, section=section)

@@ -113,7 +113,9 @@ class ExamCurrentView(APIView):
 
     def get(self, request, pk):
         exam = _get_exam(request.user, pk)
-        return Response(current_response(services.current_payload(student=request.user, exam=exam)))
+        return Response(current_response(
+            services.current_payload(student=request.user, exam=exam), request=request,
+        ))
 
 
 class ExamAnswersView(APIView):

@@ -5,13 +5,13 @@ from pathlib import Path
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
 from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import docx_import, google_docs_import, google_forms_scrape, grading, template_export, xlsx_import
-from .models import AnswerResponse, Option, Question, Quiz, QuizAttempt
+from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
 
 _IMPORT_PARSERS = {
     '.docx': docx_import.parse_docx_questions,
@@ -86,11 +86,47 @@ def _build_answer_key(q_data: dict) -> dict:
     return {}
 
 
-def _create_question(quiz: Quiz, index: int, q_data: dict) -> Question:
+def _group_for(q_data: dict, groups: list, index: int):
+    group_index = q_data.get('group')
+    if group_index is None:
+        return None
+    if group_index >= len(groups):
+        raise ValidationError({
+            'questions': _("%(n)s-savol mavjud bo'lmagan guruhga ishora qilmoqda.") % {'n': index + 1},
+        })
+    return groups[group_index]
+
+
+def sync_groups(quiz: Quiz, groups_data: list) -> list:
+    """`groups_data` bo'yicha test guruhlarini moslaydi: `id` berilganlar saqlanadi
+    (audio yo'qolmaydi), qolganlari yangi yaratiladi, ro'yxatda yo'qlari
+    o'chiriladi (ularning savollari guruhsiz qoladi). Tartib ro'yxat tartibi."""
+    existing = {g.id: g for g in quiz.groups.all()}
+    result, kept = [], set()
+    for order, data in enumerate(groups_data):
+        group = existing.get(data.get('id'))
+        if group is None:
+            group = QuestionGroup(quiz=quiz)
+        elif group.id in kept:
+            raise ValidationError({'groups': _("Bir guruh ikki marta ko'rsatilgan.")})
+        group.order = order
+        group.title = data.get('title', '')
+        group.passage = data.get('passage', '')
+        group.save()
+        kept.add(group.id)
+        result.append(group)
+    for group_id, group in existing.items():
+        if group_id not in kept:
+            group.delete()
+    return result
+
+
+def _create_question(quiz: Quiz, index: int, q_data: dict, groups: list = ()) -> Question:
     qtype = q_data.get('type', T.SINGLE)
     question = Question.objects.create(
         quiz=quiz, type=qtype, text=q_data['text'], points=q_data.get('points', 2),
         order=q_data.get('order', index), answer_key=_build_answer_key(q_data),
+        group=_group_for(q_data, list(groups), index),
     )
     if qtype in (T.SINGLE, T.MULTIPLE):
         for o_index, o_data in enumerate(q_data['options']):
@@ -109,7 +145,7 @@ def _create_question(quiz: Quiz, index: int, q_data: dict) -> Question:
 def create_quiz(
     *, teacher: User, topic: str, questions: list, course: Course | None = None,
     subject: str = '', lesson: Lesson | None = None, title: str = '', description: str = '',
-    due_at=None, opens_at=None, status: str = Quiz.Status.PUBLISHED,
+    due_at=None, opens_at=None, status: str = Quiz.Status.PUBLISHED, groups: list | None = None,
 ) -> Quiz:
     if not topic.strip():
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
@@ -129,8 +165,9 @@ def create_quiz(
         course=course, author=teacher, subject=subject, lesson=lesson, topic=topic, title=title,
         description=description, due_at=due_at, opens_at=opens_at, status=status,
     )
+    group_objs = sync_groups(quiz, groups or [])
     for q_index, q_data in enumerate(questions):
-        _create_question(quiz, q_index, q_data)
+        _create_question(quiz, q_index, q_data, group_objs)
 
     # Faqat DARHOL ochiq, e'lon qilingan test uchun bildirishnoma yuboriladi —
     # kelajakdagi "ochilish kuni"si bo'lgan yoki qoralama testda hali ko'ra
@@ -255,7 +292,7 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
     raise ValidationError({'format': _("Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin.")})
 
 
-_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'status')
+_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status')
 
 
 @transaction.atomic
@@ -275,6 +312,7 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
 
     questions = fields.pop('questions', None)
+    groups = fields.pop('groups', None)
     requested_status = fields.pop('status', None)
     if requested_status == Quiz.Status.DRAFT and quiz.status == Quiz.Status.PUBLISHED:
         raise ValidationError({'status': _("E'lon qilingan testni qoralamaga qaytarib bo'lmaydi.")})
@@ -287,9 +325,14 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
             raise ValidationError({
                 'questions': _("Bu test imtihonga biriktirilgan — savollarni o'zgartirib bo'lmaydi."),
             })
+        # `groups` berilmasa — mavjud guruhlar o'z tartibida saqlanadi (savollar
+        # ularga tartib raqami bilan ishora qiladi), audio yo'qolmaydi.
+        group_objs = sync_groups(quiz, groups) if groups is not None else list(quiz.groups.all())
         quiz.questions.all().delete()
         for q_index, q_data in enumerate(questions):
-            _create_question(quiz, q_index, q_data)
+            _create_question(quiz, q_index, q_data, group_objs)
+    elif groups is not None:
+        sync_groups(quiz, groups)
 
     for field, value in fields.items():
         setattr(quiz, field, value)
@@ -317,6 +360,39 @@ def delete_quiz(*, teacher: User, quiz: Quiz) -> None:
     if _used_in_exam(quiz):
         raise ValidationError({'detail': _("Bu test imtihonga biriktirilgan — o'chirib bo'lmaydi.")})
     quiz.delete()
+
+
+ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.m4a', '.aac', '.ogg', '.wav'}
+MAX_AUDIO_MB = 60
+
+
+def _owned_group(teacher: User, quiz: Quiz, group_id) -> QuestionGroup:
+    if not _is_owner(quiz, teacher):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    try:
+        return quiz.groups.get(pk=group_id)
+    except (QuestionGroup.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_('Guruh topilmadi.'))
+
+
+def set_group_audio(*, teacher: User, quiz: Quiz, group_id, upload) -> QuestionGroup:
+    group = _owned_group(teacher, quiz, group_id)
+    extension = Path(upload.name).suffix.lower()
+    if extension not in ALLOWED_AUDIO_EXTENSIONS:
+        raise ValidationError({'file': _("Audio formati qo'llab-quvvatlanmaydi: %(allowed)s.") % {
+            'allowed': ', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}})
+    if upload.size > MAX_AUDIO_MB * 1024 * 1024:
+        raise ValidationError({'file': _("Audio %(max)s MB dan katta bo'lmasligi kerak.") % {'max': MAX_AUDIO_MB}})
+    if group.audio:
+        group.audio.delete(save=False)
+    group.audio.save(upload.name, upload, save=True)
+    return group
+
+
+def remove_group_audio(*, teacher: User, quiz: Quiz, group_id) -> None:
+    group = _owned_group(teacher, quiz, group_id)
+    if group.audio:
+        group.audio.delete(save=True)
 
 
 @transaction.atomic

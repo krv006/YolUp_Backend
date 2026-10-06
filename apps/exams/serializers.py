@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from apps.lessons.models import Course
 from apps.quizzes.models import Quiz
-from apps.quizzes.serializers import AnswerSubmitSerializer, QuestionTakeSerializer
+from apps.quizzes.serializers import AnswerSubmitSerializer, GroupReadSerializer, QuestionTakeSerializer
 
 from . import services
 from .models import Exam, ExamSection
@@ -87,10 +87,15 @@ def exam_detail(exam: Exam, user, now=None) -> dict:
     return data
 
 
-def current_response(payload: dict) -> dict:
+def current_response(payload: dict, request=None) -> dict:
     item = payload.get('item')
     if item and 'questions' in item:
-        item = {**item, 'questions': QuestionTakeSerializer(item['questions'], many=True).data}
+        context = {'request': request}
+        item = {
+            **item,
+            'groups': GroupReadSerializer(item.get('groups', []), many=True, context=context).data,
+            'questions': QuestionTakeSerializer(item['questions'], many=True).data,
+        }
         payload = {**payload, 'item': item}
     return payload
 

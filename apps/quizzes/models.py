@@ -8,6 +8,9 @@ Oqim:
   - Baholash DARHOL va AVTOMATIK — AI kerak emas, oddiy taqqoslash
     (apps.homework'dagi AI-tekshiruvdan farqli, shu sabab alohida app).
 """
+import os
+import uuid
+
 from django.conf import settings
 from django.db.models import (
     CASCADE,
@@ -15,6 +18,7 @@ from django.db.models import (
     BooleanField,
     CharField,
     DateTimeField,
+    FileField,
     FloatField,
     ForeignKey,
     JSONField,
@@ -23,8 +27,17 @@ from django.db.models import (
     TextChoices,
 )
 
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+
 from apps.core.models import TimeStampedUUIDModel
 from apps.lessons.models import Course
+
+
+def quiz_audio_path(instance, filename: str) -> str:
+    """Taxmin qilib bo'lmaydigan fayl nomi (uuid) — audio URL'i ochiq `/media/`
+    orqali beriladi, shuning uchun nomni topib bo'lmasligi himoya vazifasini o'taydi."""
+    return f'quiz_audio/{uuid.uuid4().hex}{os.path.splitext(filename)[1].lower()}'
 
 
 class Quiz(TimeStampedUUIDModel):
@@ -68,6 +81,30 @@ class Quiz(TimeStampedUUIDModel):
         return f'{name} @ {self.course.title if self.course_id else self.subject}'
 
 
+class QuestionGroup(TimeStampedUUIDModel):
+    """Bir nechta savolga umumiy material: sarlavha, matn parchasi va/yoki audio
+    (IELTS Reading/Listening, SAT passage). Savol `group` orqali bog'lanadi;
+    guruhsiz savollar (eski testlar, importlar) o'zgarishsiz ishlaydi."""
+
+    quiz = ForeignKey('quizzes.Quiz', CASCADE, related_name='groups')
+    order = PositiveIntegerField(default=0)
+    title = CharField(max_length=200, blank=True)
+    passage = TextField(blank=True)
+    audio = FileField(upload_to=quiz_audio_path, null=True, blank=True)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+
+    def __str__(self):
+        return self.title or str(self.id)
+
+
+@receiver(post_delete, sender=QuestionGroup)
+def _delete_group_audio(sender, instance, **kwargs):
+    if instance.audio:
+        instance.audio.delete(save=False)
+
+
 class Question(TimeStampedUUIDModel):
     class Type(TextChoices):
         SINGLE = 'single', "Bitta to'g'ri javob"
@@ -80,6 +117,9 @@ class Question(TimeStampedUUIDModel):
         FILL_BLANK = 'fill_blank', "Bo'sh joyni to'ldirish"
 
     quiz = ForeignKey(Quiz, CASCADE, related_name='questions')
+    group = ForeignKey(
+        'quizzes.QuestionGroup', SET_NULL, null=True, blank=True, related_name='questions',
+    )
     type = CharField(max_length=20, choices=Type.choices, default=Type.SINGLE)
     text = TextField()
     order = PositiveIntegerField(default=0)
