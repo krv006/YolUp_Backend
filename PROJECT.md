@@ -18,7 +18,7 @@ loyihada rivojlantiriladi va shu API'ni chaqiradi.
 | Backend | Django 6 + DRF + SimpleJWT (ASGI) |
 | Real-time (chat + doska) | Django Channels 4 + Redis channel layer (WebSocket) |
 | Video darslar | LiveKit (self-hosted, WebRTC) + Egress (dars yozuvi MP4) |
-| AI tekshiruv | Google Gemini (`google-generativeai`) |
+| AI tekshiruv | Google Gemini (`google-genai`) |
 | DB / Cache | PostgreSQL 17 / Redis 7 (dev'da sqlite/in-memory fallback) |
 | Admin panel | Django admin + **Jazzmin** (Fokus brendi, ikonkalar) |
 | Loglar | Fayl rotatsiya: `logs/app.log`, `logs/errors.log` (`make applog/errlog`) |

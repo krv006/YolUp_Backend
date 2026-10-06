@@ -10,8 +10,12 @@ Farqlar (maktab platformasi uchun moslashuv):
 
 Gemini kaliti settings.GEMINI_API_KEY dan olinadi (env: GEMINI_API_KEY).
 PDF/rasm/audio to'g'ridan-to'g'ri multimodal yuboriladi; DOCX matni lokal
-ajratiladi (python-docx). google-generativeai importi kech (lazy) — kalit
+ajratiladi (python-docx). `google-genai` importi kech (lazy) — kalit
 ishlatilmaydigan joylarda (testlar, boshqa app'lar) paket talab qilinmaydi.
+
+2026-10: eski `google-generativeai` paketi Google tomonidan to'xtatilgan
+(yangilanish/xato tuzatish yo'q) — rasmiy vorisi `google-genai` ga o'tkazildi.
+Promptlar, JSON sxema va qayta urinish mantig'i o'zgarmagan.
 """
 import json
 import re
@@ -31,6 +35,11 @@ ALLOWED_EXTENSIONS = {
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.ogg'}
 MAX_FILE_SIZE_MB = 25
+# Gemini so'rovi shuncha vaqtdan oshsa uziladi (osilib qolgan fon oqimi
+# topshiriqni abadiy "tekshirilmoqda" holatida ushlab turmasligi uchun)
+REQUEST_TIMEOUT_MS = 180_000
+# Katta fayl yuklangach Gemini uni qayta ishlaguncha kutish (soniya)
+FILE_PROCESSING_TIMEOUT_S = 60
 
 # Gemini rasmni 768x768 tile'larga bo'lib tokenlaydi — telefon kamerasidan
 # kelgan 3000-4000px rasm shu sababli foydasiz ko'p token sarflaydi. AI'ga
@@ -607,6 +616,21 @@ def _extract_docx_text(path: Path) -> str:
     return '\n'.join(parts)
 
 
+def _wait_until_active(client, uploaded):
+    """File API'ga yuklangan katta fayl (ayniqsa audio) darhol ishlatishga
+    tayyor bo'lmasligi mumkin — holati ACTIVE bo'lguncha kutadi."""
+    deadline = time.monotonic() + FILE_PROCESSING_TIMEOUT_S
+    current = uploaded
+    while str(getattr(current, 'state', '') or '').upper().endswith('PROCESSING'):
+        if time.monotonic() >= deadline:
+            raise HomeworkAIError('Fayl Gemini tomonida vaqtida qayta ishlanmadi.')
+        time.sleep(2)
+        current = client.files.get(name=current.name)
+    if str(getattr(current, 'state', '') or '').upper().endswith('FAILED'):
+        raise HomeworkAIError('Gemini faylni qayta ishlay olmadi.')
+    return current
+
+
 # ---------------------------------------------------------------------------
 # Asosiy kirish nuqtasi — asl HomeworkChecker.analyze porti
 # ---------------------------------------------------------------------------
@@ -626,7 +650,8 @@ def grade_file(
             'GEMINI_API_KEY sozlanmagan — serverda env o\'zgaruvchisini bering.'
         )
 
-    import google.generativeai as genai  # lazy — paket faqat shu yerda kerak
+    from google import genai  # lazy — paket faqat shu yerda kerak
+    from google.genai import types
 
     subject_key, custom_name, language_key = detect_profile(subject_text)
     system_prompt = build_system_prompt(
@@ -637,11 +662,11 @@ def grade_file(
         feedback_language=feedback_language,
     )
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name=getattr(settings, 'GEMINI_MODEL', 'gemini-3.5-flash'),
-        system_instruction=system_prompt,
+    client = genai.Client(
+        api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
     )
+    model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-3.5-flash')
+    config = types.GenerateContentConfig(system_instruction=system_prompt, **GENERATION_CONFIG)
 
     path = Path(file_path)
     user_prompt = build_user_prompt(extra_instructions)
@@ -657,21 +682,28 @@ def grade_file(
             data, mime_type = _prepare_image_bytes(path)
         except Exception as exc:
             raise HomeworkAIError(f"'{path.name}' rasmni tayyorlab bo'lmadi: {exc}") from exc
-        content_parts = [user_prompt, {'mime_type': mime_type, 'data': data}]
+        content_parts = [user_prompt, types.Part.from_bytes(data=data, mime_type=mime_type)]
     else:
         mime_type = _MIME_TYPES.get(ext)
         try:
             if path.stat().st_size <= INLINE_SIZE_LIMIT_BYTES:
-                content_parts = [user_prompt, {'mime_type': mime_type, 'data': path.read_bytes()}]
+                content_parts = [
+                    user_prompt, types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type),
+                ]
             else:
-                content_parts = [user_prompt, genai.upload_file(path=str(path), mime_type=mime_type)]
+                uploaded = client.files.upload(
+                    file=str(path), config=types.UploadFileConfig(mime_type=mime_type),
+                )
+                content_parts = [user_prompt, _wait_until_active(client, uploaded)]
         except Exception as exc:
             raise HomeworkAIError(f"'{path.name}' faylini Gemini'ga tayyorlab bo'lmadi: {exc}") from exc
 
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            response = model.generate_content(content_parts, generation_config=GENERATION_CONFIG)
+            response = client.models.generate_content(
+                model=model_name, contents=content_parts, config=config,
+            )
             return parse_and_validate_json(response.text)
         except InvalidModelResponseError as exc:
             last_error = exc

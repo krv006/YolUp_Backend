@@ -19,7 +19,7 @@ reportlab>=4.2
 sympy>=1.13
 matplotlib>=3.8
 django-jazzmin>=3.0
-google-generativeai>=0.8
+google-genai>=1.0
 python-docx>=1.1
 openpyxl>=3.1
 nh3>=0.2
@@ -31,8 +31,8 @@ uvicorn[standard]>=0.30
 pywebpush>=2.0
 psutil>=6.0
 # Google Docs'dan ochiq (public) eksport orqali test import qilish uchun —
-# oldin faqat tranzitiv bog'liqlik edi (google-generativeai orqali), endi
-# to'g'ridan-to'g'ri ishlatilgani uchun aniq belgilandi.
+# oldin faqat tranzitiv bog'liqlik edi, endi to'g'ridan-to'g'ri
+# ishlatilgani uchun aniq belgilandi.
 requests>=2.33
 # Mobil push (FCM) — apps.notifications, PUSH-BACKEND.md
 firebase-admin>=6.5
