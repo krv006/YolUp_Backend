@@ -19,6 +19,7 @@ from django.db.models import (
 )
 
 from apps.core.models import TimeStampedUUIDModel
+from apps.core.uploads import certificate_path
 
 
 def generate_invite_code() -> str:
@@ -130,7 +131,7 @@ class TeacherCertificate(TimeStampedUUIDModel):
     """O'qituvchi profiliga yuklaydigan malaka sertifikati (rasm yoki PDF)."""
 
     teacher = ForeignKey('accounts.User', CASCADE, related_name='certificates')
-    file = FileField(upload_to='certificates/%Y/%m/')
+    file = FileField(upload_to=certificate_path)
     title = CharField(max_length=200, blank=True)
 
     class Meta:

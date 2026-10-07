@@ -17,6 +17,14 @@
 		reverse_proxy livekit:7880
 	}
 
+	# Uy vazifasi fayllari (o'quvchilar topshirgan daftar/rasm/audio va o'qituvchi
+	# biriktirmalari) OCHIQ tarqatilmaydi — ular faqat login va ruxsat tekshiradigan
+	# API orqali olinadi (/api/v1/homework/.../file/). Bu blok quyidagi umumiy
+	# /media/* dan OLDIN turishi shart (birinchi mos kelgan handle ishlaydi).
+	handle /media/homework/* {
+		respond 404
+	}
+
 	# Media fayllar (upload) — backend bilan umumiy volume
 	handle /media/* {
 		root * /srv

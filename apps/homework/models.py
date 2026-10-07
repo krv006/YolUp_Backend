@@ -21,6 +21,7 @@ from django.db.models import (
 )
 
 from apps.core.models import TimeStampedUUIDModel
+from apps.core.uploads import homework_submission_path, homework_task_path
 
 
 class Assignment(TimeStampedUUIDModel):
@@ -39,7 +40,7 @@ class Assignment(TimeStampedUUIDModel):
     body = TextField(blank=True)
     # Vazifa fayli (Word/PDF/rasm) — o'qituvchi tayyorini yuklaydi,
     # o'quvchilar yuklab oladi
-    attachment = FileField(upload_to='homework/tasks/%Y/%m/', null=True, blank=True)
+    attachment = FileField(upload_to=homework_task_path, null=True, blank=True)
     attachment_name = CharField(max_length=255, blank=True)
     due_at = DateTimeField(null=True, blank=True, db_index=True)
     # Til fanlari uchun ko'nikma: writing / reading / listening / speaking.
@@ -78,7 +79,7 @@ class Submission(TimeStampedUUIDModel):
 
     assignment = ForeignKey('homework.Assignment', CASCADE, related_name='submissions')
     student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='homework_submissions')
-    file = FileField(upload_to='homework/%Y/%m/')
+    file = FileField(upload_to=homework_submission_path)
     original_name = CharField(max_length=255)
     status = CharField(max_length=15, choices=Status.choices, default=Status.CHECKING, db_index=True)
     # Yakuniy (hozirgi) natija — dastlab AI'nikidan nusxa, o'qituvchi
