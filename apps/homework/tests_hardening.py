@@ -196,3 +196,48 @@ class RecoverStuckChecksTests(HomeworkBase):
         self.run_recovery()
         self.run_recovery()
         grade.assert_called_once()
+
+
+class HomeworkNotificationTests(HomeworkBase):
+    def received(self, user, kind):
+        from apps.notifications.models import NotificationRecipient
+
+        return list(NotificationRecipient.objects.filter(user=user, notification__kind=kind)
+                    .select_related('notification'))
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_teacher_is_told_when_a_submission_is_ready_for_review(self, _):
+        resp = self.submit(self.assignment())
+        rows = self.received(self.teacher, 'homework_pending_review')
+        self.assertEqual(len(rows), 1)
+        notification = rows[0].notification
+        self.assertEqual(notification.link_type, 'submission')
+        self.assertEqual(notification.link_id, resp.data['id'])
+        self.assertIn('tekshirishga tayyor', notification.description)
+        self.assertIn('Kvadrat tenglamalar', notification.description)
+        # o'quvchiga hali hech narsa (natija tasdiqlanmagan)
+        self.assertEqual(self.received(self.student, 'homework_reviewed'), [])
+
+    @patch(GRADE, side_effect=RuntimeError('kvota tugadi'))
+    def test_no_teacher_notification_when_the_ai_check_failed(self, _):
+        self.submit(self.assignment())
+        self.assertEqual(self.received(self.teacher, 'homework_pending_review'), [])
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_student_is_told_when_the_teacher_approves(self, _):
+        submission_id = self.submit(self.assignment()).data['id']
+        self.api(self.teacher).post(f'/api/v1/homework/submissions/{submission_id}/review/')
+        rows = self.received(self.student, 'homework_reviewed')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].notification.link_id, submission_id)
+        self.assertIn('natijasi tayyor', rows[0].notification.description)
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_notification_failure_never_breaks_the_check_or_review(self, _):
+        assignment_id = self.assignment()
+        with patch('apps.notifications.services.send_notification', side_effect=RuntimeError('boom')):
+            resp = self.submit(assignment_id)
+            self.assertEqual(resp.status_code, 201)
+            self.assertEqual(resp.data['status'], 'pending_review')
+            review = self.api(self.teacher).post(f"/api/v1/homework/submissions/{resp.data['id']}/review/")
+            self.assertEqual(review.status_code, 200)

@@ -4,6 +4,7 @@ Tekshiruv fonda (thread) yuradi: o'quvchi faylni yuklagach darhol javob oladi
 (status=checking), frontend polling bilan natijani kutadi. Testlarda
 settings.HOMEWORK_CHECK_ASYNC=False qilib sinxron ishlatiladi.
 """
+import logging
 import re
 import threading
 from datetime import timedelta
@@ -22,6 +23,8 @@ from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import ai
 from .models import Assignment, AssignmentFocusEvent, Submission
+
+logger = logging.getLogger('apps')
 
 # Vazifa fayli (o'qituvchi biriktiradi) — AI'ga bormaydi, faqat yuklab olinadi
 ATTACHMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp'}
@@ -473,6 +476,49 @@ def submit(*, student: User, assignment_id, upload, feedback_language: str = 'uz
     return _submission_dict(submission)
 
 
+def _student_label(student: User) -> str:
+    return f'{student.first_name} {student.last_name}'.strip() or student.username
+
+
+def _notify_ready_for_review(submission: Submission) -> None:
+    """AI tekshirib bo'ldi — o'qituvchiga "tasdiqlash uchun tayyor" deb xabar beradi.
+    Bildirishnoma xatosi tekshiruv natijasiga ta'sir qilmasligi kerak."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    assignment = submission.assignment
+    try:
+        send_notification(
+            sender=submission.student,
+            description=(
+                f'«{assignment.course.title}»: {_student_label(submission.student)} vazifasi '
+                f'tekshirishga tayyor — «{assignment.title}».'
+            ),
+            target_type=Notification.Target.USER, user_id=assignment.course.teacher_id,
+            link_type='submission', link_id=str(submission.id), kind='homework_pending_review',
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy
+        logger.warning('homework_pending_review bildirishnomasi yuborilmadi', exc_info=True)
+
+
+def _notify_reviewed(submission: Submission, teacher: User, updated: bool) -> None:
+    """O'qituvchi natijani tasdiqlagach (yoki tuzatgach) o'quvchiga xabar beradi."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    assignment = submission.assignment
+    verb = 'yangilandi' if updated else 'tayyor'
+    try:
+        send_notification(
+            sender=teacher,
+            description=f'«{assignment.course.title}»: «{assignment.title}» vazifasi natijasi {verb}.',
+            target_type=Notification.Target.USER, user_id=submission.student_id,
+            link_type='submission', link_id=str(submission.id), kind='homework_reviewed',
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy
+        logger.warning('homework_reviewed bildirishnomasi yuborilmadi', exc_info=True)
+
+
 def run_check(submission_id) -> None:
     """AI tekshiruvni bajaradi va natijani saqlaydi (thread ichida chaqiriladi).
 
@@ -511,6 +557,8 @@ def run_check(submission_id) -> None:
         submission.error = str(exc)[:2000]
     submission.checked_at = timezone.now()
     submission.save()
+    if submission.status == Submission.Status.PENDING_REVIEW:
+        _notify_ready_for_review(submission)
 
 
 def _dispatch_check(submission: Submission) -> None:
@@ -625,6 +673,7 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
     s.reviewed_by = teacher
     s.reviewed_at = timezone.now()
     s.save()
+    _notify_reviewed(s, teacher, updated=False)
     return _submission_dict(s, is_teacher=True)
 
 
