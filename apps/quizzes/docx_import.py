@@ -32,26 +32,39 @@ _APOSTROPHE_MAP = str.maketrans({
 _QUESTION_RE = re.compile(r'^\s*\d+[.\)]\s+(.+)$')
 _OPTION_RE = re.compile(r'^\s*([A-Za-z])[.\)]\s+(.+)$')
 _ANSWER_RE = re.compile(
-    r"^(?:to'g'ri\s+javob|javob|answer|correct\s+answer)\s*[:\-]\s*([A-Za-z])\.?\s*$",
+    r"^(?:to'g'ri\s+javoblar|to'g'ri\s+javob|javob|answers?|correct\s+answers?)\s*[:\-]\s*(.+?)\s*\.?\s*$",
     re.IGNORECASE,
 )
+# "B" yoki bir nechta to'g'ri javob: "A, C" / "A; C" / "A/C" / "A va C" / "A and C"
+_ANSWER_LETTERS_RE = re.compile(r'^[A-Za-z](?:\s*(?:,|;|/|&|va|and)\s*[A-Za-z])*$', re.IGNORECASE)
+# Izoh/tushuntirish qatorlari (Test-creator eksporti va shunga o'xshash fayllar) — savolga kirmaydi
+_EXPLANATION_RE = re.compile(r'^(?:izoh|tushuntirish|explanation)\s*[:\-]', re.IGNORECASE)
 
 
 def _normalize(line: str) -> str:
     return line.translate(_APOSTROPHE_MAP).strip()
 
 
+def parse_answer_letters(text: str):
+    """"B" -> ['B'], "A, C" -> ['A', 'C']; javob harflariga o'xshamasa None."""
+    if not _ANSWER_LETTERS_RE.match(text or ''):
+        return None
+    return sorted({letter.upper() for letter in re.findall(r'[A-Za-z]', re.sub(r'\b(?:va|and)\b', ' ', text, flags=re.I))})
+
+
 def _finalize_question(question: dict) -> dict:
-    answer_letter = question.pop('answer_letter', None)
+    answer_letters = set(question.pop('answer_letters', None) or [])
     options = []
     for index, opt in enumerate(question['options']):
         options.append({
             'text': opt['text'].strip(),
-            'is_correct': bool(answer_letter) and opt['letter'] == answer_letter,
+            'is_correct': opt['letter'] in answer_letters,
             'order': index,
         })
     question['options'] = options
     question['text'] = question['text'].strip()
+    if len(answer_letters) > 1:
+        question['type'] = 'multiple'  # bir nechta to'g'ri javob
     return question
 
 
@@ -80,20 +93,30 @@ def parse_lines(lines: list) -> dict:
     title_lines: list = []
     questions: list = []
     current = None
+    in_explanation = False
 
     for line in lines:
         m_question = _QUESTION_RE.match(line)
         m_option = _OPTION_RE.match(line) if current is not None else None
         m_answer = _ANSWER_RE.match(line) if current is not None else None
+        letters = parse_answer_letters(m_answer.group(1)) if m_answer else None
+        is_explanation = current is not None and bool(_EXPLANATION_RE.match(line))
 
         if m_question:
+            in_explanation = False
             if current is not None:
                 questions.append(_finalize_question(current))
-            current = {'text': m_question.group(1), 'order': len(questions), 'options': [], 'answer_letter': None}
-        elif m_answer:
-            current['answer_letter'] = m_answer.group(1).upper()
+            current = {'text': m_question.group(1), 'order': len(questions), 'options': [], 'answer_letters': []}
+        elif letters:
+            in_explanation = False
+            current['answer_letters'] = letters
+        elif is_explanation:
+            in_explanation = True  # izoh matni (va uning davomi) savolga qo'shilmaydi
         elif m_option:
+            in_explanation = False
             current['options'].append({'letter': m_option.group(1).upper(), 'text': m_option.group(2)})
+        elif in_explanation:
+            continue
         elif current is not None:
             # Ko'p qatorli savol/variant matnining davomi
             if current['options']:
@@ -111,7 +134,7 @@ def parse_lines(lines: list) -> dict:
         correct_count = sum(1 for o in q['options'] if o['is_correct'])
         if len(q['options']) < 2:
             warnings.append({'question_number': q['order'] + 1, 'reason': 'not_enough_options'})
-        elif correct_count != 1:
+        elif correct_count != 1 and not (q.get('type') == 'multiple' and correct_count >= 2):
             warnings.append({'question_number': q['order'] + 1, 'reason': 'answer_not_detected'})
 
     return {

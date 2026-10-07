@@ -15,6 +15,7 @@ qoladi) — bu xato emas, shunchaki o'sha variant qatorga qo'shilmaydi.
 `docx_import.py` bilan bir xil preview strukturasini qaytaradi, shuning
 uchun `QuizImportView` ikkalasini ham bab-baravar ishlatadi.
 """
+import re
 from pathlib import Path
 
 MAX_IMPORT_FILE_SIZE_MB = 10
@@ -58,6 +59,10 @@ def parse_xlsx_questions(file_obj) -> dict:
     workbook = openpyxl.load_workbook(file_obj, data_only=True)
     sheet = workbook.active
 
+    header = [_cell_text(cell.value).translate(_APOSTROPHES).lower() for cell in sheet[1]]
+    if 'savol' in header and 'variantlar' in header:
+        return _parse_test_creator_layout(sheet, header)
+
     questions = []
     warnings = []
     for row in sheet.iter_rows(min_row=2):
@@ -90,6 +95,61 @@ def parse_xlsx_questions(file_obj) -> dict:
         elif correct_count != 1:
             warnings.append({'question_number': order + 1, 'reason': 'answer_not_detected'})
 
+    return {'title': '', 'description': '', 'questions': questions, 'warnings': warnings}
+
+
+_APOSTROPHES = str.maketrans({'‘': "'", '’': "'", 'ʻ': "'", 'ʼ': "'", '`': "'"})
+_OPTION_SPLIT_RE = re.compile(r';\s*(?=[A-Za-z][.\)])')
+_OPTION_PART_RE = re.compile(r'^([A-Za-z])[.\)]\s*(.*)$', re.DOTALL)
+
+
+def _parse_test_creator_layout(sheet, header: list) -> dict:
+    """Test-creator eksporti: `# | Savol | Turi | Qiyinlik | Variantlar | Ball | To'g'ri javob | Izoh`.
+    "Variantlar" bitta katakda: `A) matn; B) matn; ...`; "To'g'ri javob" — harf(lar): `B` yoki `A, C`.
+    Ustunlar tartibiga emas, sarlavha nomiga qarab topiladi."""
+
+    def column(*names):
+        for index, title in enumerate(header):
+            if any(title.startswith(name) for name in names):
+                return index
+        return None
+
+    question_col, options_col = header.index('savol'), header.index('variantlar')
+    answer_col, points_col = column("to'g'ri javob"), column('ball')
+
+    questions, warnings = [], []
+    for row in sheet.iter_rows(min_row=2):
+        text = _cell_text(_row_value(row, question_col))
+        if not text:
+            continue
+        options = []
+        for part in _OPTION_SPLIT_RE.split(_cell_text(_row_value(row, options_col))):
+            match = _OPTION_PART_RE.match(part.strip())
+            if match and match.group(2).strip():
+                options.append({'letter': match.group(1).upper(), 'text': match.group(2).strip()})
+        letters = set()
+        if answer_col is not None:
+            letters = {c.upper() for c in re.findall(r'[A-Za-z]', _cell_text(_row_value(row, answer_col)))}
+        order = len(questions)
+        question = {
+            'text': text, 'order': order,
+            'options': [{'text': o['text'], 'is_correct': o['letter'] in letters, 'order': i}
+                        for i, o in enumerate(options)],
+        }
+        if len(letters) > 1:
+            question['type'] = 'multiple'
+        if points_col is not None:
+            try:
+                question['points'] = min(100, max(1, int(round(float(_row_value(row, points_col))))))
+            except (TypeError, ValueError):
+                pass
+        questions.append(question)
+
+        correct = sum(1 for o in question['options'] if o['is_correct'])
+        if len(options) < 2:
+            warnings.append({'question_number': order + 1, 'reason': 'not_enough_options'})
+        elif correct != 1 and not (question.get('type') == 'multiple' and correct >= 2):
+            warnings.append({'question_number': order + 1, 'reason': 'answer_not_detected'})
     return {'title': '', 'description': '', 'questions': questions, 'warnings': warnings}
 
 

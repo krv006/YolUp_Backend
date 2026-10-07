@@ -10,12 +10,21 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from apps.accounts.models import User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import docx_import, google_docs_import, google_forms_scrape, grading, template_export, xlsx_import
+from . import (
+    docx_import,
+    google_docs_import,
+    google_forms_scrape,
+    grading,
+    template_export,
+    test_creator_import,
+    xlsx_import,
+)
 from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
 
 _IMPORT_PARSERS = {
     '.docx': docx_import.parse_docx_questions,
     '.xlsx': xlsx_import.parse_xlsx_questions,
+    '.json': test_creator_import.parse_test_creator_json,  # Test-creator eksporti
 }
 
 _ENROLLED = Enrollment.Status.APPROVED
@@ -243,7 +252,7 @@ def import_quiz_file(*, upload) -> dict:
     ext = Path(upload.name or '').suffix.lower()
     parser = _IMPORT_PARSERS.get(ext)
     if parser is None:
-        raise ValidationError({'file': _("Faqat .docx yoki .xlsx fayl qo'llab-quvvatlanadi.")})
+        raise ValidationError({'file': _("Faqat .docx, .xlsx yoki .json (Test-creator) fayl qo'llab-quvvatlanadi.")})
     if upload.size > docx_import.MAX_IMPORT_FILE_SIZE_MB * 1024 * 1024:
         raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
             'size': upload.size / 1024 / 1024, 'max_mb': docx_import.MAX_IMPORT_FILE_SIZE_MB,
