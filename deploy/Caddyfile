@@ -86,3 +86,26 @@ smart.thesofmebel.uz {
 ombor.thesofmebel.uz {
 	reverse_proxy ombor-crm:8000
 }
+
+# --- Test-creator (tests.thesofmebel.uz) ---
+# Savollar banki / test generatori (RJalol/Test-creator), alohida xizmat: deploy/test-creator/.
+# Ishlashi uchun DNS'da A yozuv kerak: tests.thesofmebel.uz -> 75.119.154.71 (aks holda Caddy
+# faqat shu sayt uchun sertifikat ololmaydi, boshqa saytlarga ta'sir qilmaydi).
+# Domenni o'zgartirish: shu qator va deploy/test-creator/ dagi TC_DOMAIN.
+{$TC_DOMAIN:tests.thesofmebel.uz} {
+	encode zstd gzip
+
+	# API hujjatlari (Swagger) tashqariga ko'rsatilmaydi
+	@apidocs path /docs /docs/* /redoc /openapi.json
+	handle @apidocs {
+		respond 404
+	}
+
+	handle /api/* {
+		reverse_proxy tc-api:8000
+	}
+
+	handle {
+		reverse_proxy tc-frontend:3000
+	}
+}

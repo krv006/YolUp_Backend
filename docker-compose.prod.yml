@@ -144,7 +144,9 @@ services:
       - "443:443"
       - "443:443/udp"   # HTTP/3
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Butun deploy/ papkasi ulanadi (bitta fayl emas): `git pull` faylni almashtirganda
+      # konteyner eski nusxani ko'rib qolmasin va `caddy reload` ishlayversin.
+      - ./deploy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
       - media:/srv/media:ro
