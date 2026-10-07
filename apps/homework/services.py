@@ -5,6 +5,7 @@ Tekshiruv fonda (thread) yuradi: o'quvchi faylni yuklagach darhol javob oladi
 settings.HOMEWORK_CHECK_ASYNC=False qilib sinxron ishlatiladi.
 """
 import logging
+import math
 import re
 import threading
 from datetime import timedelta
@@ -678,19 +679,27 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
                       grade: str = '', result=None) -> dict:
     """O'qituvchi AI natijasini ko'rib chiqadi — xohlasa ball/baho/feedbackni
     o'zgartiradi, so'ng tasdiqlaydi. Shundan keyingina o'quvchi natijani ko'radi.
-    Faqat AI tekshirib bo'lgan (PENDING_REVIEW) topshiriqqa tegishli."""
+    AI tekshirib bo'lgan (PENDING_REVIEW) topshiriqqa tegishli; tasdiqlangan (DONE)
+    natijani ham tuzatish mumkin (o'qituvchi xatosini to'g'rilash uchun) — o'quvchiga
+    "natija yangilandi" deb xabar boradi."""
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi tasdiqlaydi."))
-    if s.status != Submission.Status.PENDING_REVIEW:
+    if s.status not in (Submission.Status.PENDING_REVIEW, Submission.Status.DONE):
         raise ValidationError(
-            _("Faqat AI tekshirib bo'lgan (ko'rib chiqish kutilayotgan) topshiriqni tasdiqlash mumkin.")
+            _("Faqat AI tekshirib bo'lgan (ko'rib chiqish kutilayotgan yoki tasdiqlangan) topshiriqni tasdiqlash mumkin.")
         )
     if overall_score is not None:
         try:
-            s.overall_score = float(overall_score)
+            value = float(overall_score)
         except (TypeError, ValueError):
             raise ValidationError({'overall_score': _("Ball raqam bo'lishi kerak.")})
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            raise ValidationError({'overall_score': _("Ball 0 dan 100 gacha bo'lishi kerak.")})
+        s.overall_score = value
+    if result is not None and not isinstance(result, dict):
+        raise ValidationError({'result': _("Natija obyekt (JSON) shaklida bo'lishi kerak.")})
+    was_done = s.status == Submission.Status.DONE
     if grade:
         s.grade = grade.strip()[:40]
     if result is not None:
@@ -699,7 +708,7 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
     s.reviewed_by = teacher
     s.reviewed_at = timezone.now()
     s.save()
-    _notify_reviewed(s, teacher, updated=False)
+    _notify_reviewed(s, teacher, updated=was_done)
     return _submission_dict(s, is_teacher=True)
 
 

@@ -350,15 +350,18 @@ class HomeworkTests(TestCase):
         self.assertEqual(r.status_code, 403)
 
     @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_cannot_review_twice(self, _):
+    def test_approved_result_can_be_corrected_by_the_teacher(self, _):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
         ).data['id']
 
         self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/')
-        r = self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/')
-        self.assertEqual(r.status_code, 400)
+        r = self.api(self.teacher).post(
+            f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 91}, format='json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data['overall_score'], 91.0)
+        self.assertEqual(r.data['status'], 'done')
 
     # ── vazifa sahifasida vaqt kuzatuvi (focus) ──
     def test_focus_tracking_exit_return(self):
