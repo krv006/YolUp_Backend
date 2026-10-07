@@ -11,6 +11,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import close_old_connections
+from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
@@ -513,6 +514,7 @@ def run_check(submission_id) -> None:
 
 
 def _dispatch_check(submission: Submission) -> None:
+    Submission.objects.filter(pk=submission.pk).update(check_attempts=F('check_attempts') + 1)
     if not getattr(settings, 'HOMEWORK_CHECK_ASYNC', True):
         run_check(submission.id)
         return
@@ -524,6 +526,43 @@ def _dispatch_check(submission: Submission) -> None:
             close_old_connections()
 
     threading.Thread(target=_target, args=(submission.id,), daemon=True).start()
+
+
+# Fon oqimi deploy/qayta ishga tushishda yo'qolsa, topshiriq "tekshirilmoqda"da
+# qotib qoladi. Cron shunday topshiriqlarni qayta tekshiradi (`recover_stuck_checks`).
+STUCK_AFTER = timedelta(minutes=10)
+MAX_CHECK_ATTEMPTS = 3
+RECOVER_BATCH = 10
+
+
+def recover_stuck_checks(*, now=None) -> dict:
+    """10 daqiqadan beri `checking`da turgan topshiriqlarni qayta tekshiradi.
+    3 urinishdan keyin ham tugamasa — `error` (o'qituvchi qo'lda "qayta tekshirish"
+    ni bosadi). Parallel ishga tushishdan himoya: topshiriqni compare-and-set
+    bilan "egallaydi"."""
+    now = now or timezone.now()
+    stuck = list(
+        Submission.objects.filter(status=Submission.Status.CHECKING, updated_at__lt=now - STUCK_AFTER)
+        .order_by('updated_at')[:RECOVER_BATCH]
+    )
+    retried = failed = 0
+    for submission in stuck:
+        if submission.check_attempts >= MAX_CHECK_ATTEMPTS:
+            updated = Submission.objects.filter(
+                pk=submission.pk, status=Submission.Status.CHECKING, updated_at=submission.updated_at,
+            ).update(
+                status=Submission.Status.ERROR, updated_at=now, checked_at=now,
+                error=str(_("Tekshiruv bir necha urinishda ham yakunlanmadi. O'qituvchi \"qayta tekshirish\"ni bosishi mumkin.")),
+            )
+            failed += updated
+            continue
+        claimed = Submission.objects.filter(
+            pk=submission.pk, status=Submission.Status.CHECKING, updated_at=submission.updated_at,
+        ).update(updated_at=now, check_attempts=F('check_attempts') + 1)
+        if claimed:
+            run_check(submission.pk)
+            retried += 1
+    return {'retried': retried, 'failed': failed}
 
 
 def get_submission(*, user: User, submission_id) -> dict:
@@ -553,7 +592,8 @@ def recheck(*, user: User, submission_id) -> dict:
         raise PermissionDenied(_("Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."))
     s.status = Submission.Status.CHECKING
     s.error = ''
-    s.save(update_fields=['status', 'error', 'updated_at'])
+    s.check_attempts = 0  # o'qituvchi qo'lda boshlayapti — avtomatik urinishlar hisobi qayta boshlanadi
+    s.save(update_fields=['status', 'error', 'check_attempts', 'updated_at'])
     _dispatch_check(s)
     s.refresh_from_db()
     return _submission_dict(s, is_teacher=True)

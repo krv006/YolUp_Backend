@@ -123,3 +123,76 @@ class CaddyConfigTests(SimpleTestCase):
         self.assertLess(blocked, public)
         self.assertRegex(text[blocked:public], r'respond 404')
         self.assertIsNotNone(re.search(r'handle /media/homework/\*\s*\{\s*respond 404', text))
+
+
+class RecoverStuckChecksTests(HomeworkBase):
+    def stuck(self, minutes_ago=30, attempts=1):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        submission = Submission.objects.create(
+            assignment_id=self.assignment(), student=self.student, file=pdf_upload('x.pdf'),
+            original_name='x.pdf', status=Submission.Status.CHECKING, check_attempts=attempts,
+        )
+        Submission.objects.filter(pk=submission.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=minutes_ago))
+        return submission
+
+    def run_recovery(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command('recover_stuck_submissions', stdout=out)
+        return out.getvalue()
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_stuck_submission_is_rechecked(self, grade):
+        submission = self.stuck()
+        self.assertIn('Qayta tekshirildi: 1', self.run_recovery())
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, Submission.Status.PENDING_REVIEW)
+        self.assertEqual(submission.check_attempts, 2)  # 1 (avvalgi) + 1 (shu tiklash urinishi)
+        grade.assert_called_once()
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_recent_checks_are_left_alone(self, grade):
+        submission = self.stuck(minutes_ago=3)
+        self.assertIn('Qayta tekshirildi: 0', self.run_recovery())
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, Submission.Status.CHECKING)
+        grade.assert_not_called()
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_gives_up_after_max_attempts(self, grade):
+        submission = self.stuck(attempts=3)
+        self.assertIn("xatoga o'tkazildi: 1", self.run_recovery())
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, Submission.Status.ERROR)
+        self.assertIn('qayta tekshirish', submission.error)
+        grade.assert_not_called()
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_finished_submissions_are_ignored(self, grade):
+        submission = self.stuck()
+        Submission.objects.filter(pk=submission.pk).update(status=Submission.Status.DONE)
+        self.run_recovery()
+        grade.assert_not_called()
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_teacher_recheck_resets_the_attempt_counter(self, _):
+        submission = self.stuck(attempts=3)
+        resp = self.api(self.teacher).post(f'/api/v1/homework/submissions/{submission.id}/recheck/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        submission.refresh_from_db()
+        self.assertEqual(submission.check_attempts, 1)
+        self.assertEqual(submission.status, Submission.Status.PENDING_REVIEW)
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_second_run_does_not_recheck_again(self, grade):
+        self.stuck()
+        self.run_recovery()
+        self.run_recovery()
+        grade.assert_called_once()

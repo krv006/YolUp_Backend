@@ -16,6 +16,7 @@ from django.db.models import (
     FloatField,
     ForeignKey,
     JSONField,
+    PositiveSmallIntegerField,
     TextChoices,
     TextField,
 )
@@ -105,6 +106,9 @@ class Submission(TimeStampedUUIDModel):
     # birinchi tekshiruvdagi til shu yerda saqlanib, keyingi qayta
     # tekshirishlarda ham izchil ishlatiladi (2026-09-06).
     feedback_language = CharField(max_length=8, default='uz')
+    # AI tekshiruv necha marta boshlangan (qotib qolgan tekshiruvlarni tiklash
+    # cheklovi uchun — `recover_stuck_checks`)
+    check_attempts = PositiveSmallIntegerField(default=0)
 
     class Meta:
         ordering = ['-created_at']

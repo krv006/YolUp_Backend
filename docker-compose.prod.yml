@@ -117,6 +117,7 @@ services:
                python manage.py send_deadline_reminders;
                python manage.py close_stale_voice_rooms;
                python manage.py grade_exam_writing;
+               python manage.py recover_stuck_submissions;
                sleep 300;
              done) &
              while true; do
