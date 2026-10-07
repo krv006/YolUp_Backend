@@ -1,0 +1,98 @@
+# AI-home-checker (RJalol/AI-home-checker) — uy vazifasini AI bilan tekshiruvchi ALOHIDA xizmat.
+# Asosiy docker-compose.prod.yml'dan mustaqil: bu fayl ishlamasa ham platforma ishlayveradi
+# (uy vazifasi o'qituvchiga qo'lda baholashga tushadi).
+#
+# Ishga tushirish (serverda, /var/www/edu_platform ichida):
+#   docker compose -f deploy/ai-home-checker/docker-compose.ai.yml \
+#       --env-file /var/www/ai-home-checker/.env up -d --build
+# To'liq qadamlar: deploy/ai-home-checker/README.md
+#
+# Tashqariga PORT OCHILMAYDI — xizmatga faqat bizning backend ichki Docker tarmog'i orqali
+# (http://checker-api:8000) murojaat qiladi.
+name: ai_checker
+
+x-checker: &checker
+  build:
+    context: ${CHECKER_SRC:-/var/www/ai-home-checker}
+    dockerfile_inline: |
+      FROM python:3.12-slim
+      WORKDIR /app
+      COPY requirements.txt .
+      RUN pip install --no-cache-dir -r requirements.txt
+      COPY . .
+      # `.env` (kalitlar) image ichiga tushib qolmasin — sozlamalar runtime'da env orqali beriladi
+      RUN rm -f .env
+  restart: unless-stopped
+  environment:
+    GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY .env da berilishi shart}
+    INTERNAL_API_KEY: ${INTERNAL_API_KEY:?INTERNAL_API_KEY .env da berilishi shart}
+    DATABASE_URL: postgresql+psycopg2://checker:${CHECKER_DB_PASSWORD:?CHECKER_DB_PASSWORD .env da berilishi shart}@checker-db:5432/homework_checker
+    REDIS_URL: redis://checker-redis:6379/0
+    MODEL_BACKEND: gemini
+    # Bolalarning topshiriqlari "o'qitish ma'lumotlari" papkasiga nusxalanmasin
+    COLLECT_TRAINING_DATA: "false"
+    ENABLE_CONTEXT_CACHING: ${ENABLE_CONTEXT_CACHING:-true}
+  volumes:
+    - checker_uploads:/app/uploads
+    - checker_reports:/app/reports
+    - checker_training:/app/training_data
+  depends_on:
+    checker-db:
+      condition: service_healthy
+    checker-redis:
+      condition: service_started
+
+services:
+  checker-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homework_checker
+      POSTGRES_USER: checker
+      POSTGRES_PASSWORD: ${CHECKER_DB_PASSWORD:?CHECKER_DB_PASSWORD .env da berilishi shart}
+    volumes:
+      - checker_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checker -d homework_checker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  checker-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy volatile-ttl
+
+  checker-api:
+    <<: *checker
+    # Jadvallarni yaratadi (mavjud bo'lsa tegmaydi), keyin API'ni ishga tushiradi
+    command: >
+      sh -c "python -c 'from db import init_db; init_db()' &&
+             uvicorn api:app --host 0.0.0.0 --port 8000 --workers 2"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      default: {}
+      edu:
+        aliases:
+          - checker-api
+
+  checker-worker:
+    <<: *checker
+    # Baholash navbatini (Redis) ishlovchi jarayon; `webhook_delivery` — natijani yuboruvchi navbat
+    command: sh -c 'rq worker homework_grading webhook_delivery --url "$$REDIS_URL"'
+
+volumes:
+  checker_pgdata:
+  checker_uploads:
+  checker_reports:
+  checker_training:
+
+networks:
+  # Bizning backend turgan tarmoq (docker-compose.prod.yml, loyiha nomi `edu_platform`)
+  edu:
+    name: edu_platform_default
+    external: true

@@ -114,6 +114,8 @@ class Submission(TimeStampedUUIDModel):
     # AI tekshiruv necha marta boshlangan (qotib qolgan tekshiruvlarni tiklash
     # cheklovi uchun — `recover_stuck_checks`)
     check_attempts = PositiveSmallIntegerField(default=0)
+    # Tashqi AI xizmatidagi submission id (HOMEWORK_AI_URL sozlangan bo'lsa)
+    ai_external_id = CharField(max_length=64, blank=True, db_index=True)
 
     class Meta:
         ordering = ['-created_at']

@@ -246,6 +246,14 @@ EGRESS_OUTPUT_PREFIX = os.getenv('EGRESS_OUTPUT_PREFIX', '/out')
 # shu chegaradan keyin ota-onaga signal (EPAM imtihon nazorati uslubi — EduTech.docx)
 FOCUS_PARENT_ALERT_THRESHOLD = int(os.getenv('FOCUS_PARENT_ALERT_THRESHOLD', '3'))
 
+# Tashqi AI-home-checker xizmati (uy vazifasini AI bilan tekshirish). Sozlanmasa
+# (HOMEWORK_AI_URL bo'sh) uy vazifasi to'g'ridan-to'g'ri o'qituvchiga tushadi.
+HOMEWORK_AI_URL = os.getenv('HOMEWORK_AI_URL', '')              # masalan http://checker-api:8000
+HOMEWORK_AI_ORG_KEY = os.getenv('HOMEWORK_AI_ORG_KEY', '')      # xizmatdagi tashkilot kaliti (hwck_...)
+HOMEWORK_AI_INTERNAL_KEY = os.getenv('HOMEWORK_AI_INTERNAL_KEY', '')
+HOMEWORK_AI_TIMEOUT = 30                                          # soniya (bitta HTTP so'rov)
+HOMEWORK_AI_GIVE_UP_MINUTES = 15                                  # shundan keyin qo'lda baholashga o'tadi
+
 # Web Push (ilova/tab yopiq bo'lganda ham bildirishnoma) — apps/notifications.
 # DIQQAT: pastdagi kalitlar faqat DEV/TEST uchun (bir marta generatsiya
 # qilingan, haqiqiy foydalanuvchiga hech qachon push yuborilmagan juftlik).

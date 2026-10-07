@@ -10,6 +10,8 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
+from django.conf import settings
+from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
@@ -18,7 +20,7 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import rules
+from . import ai_client, rules
 from .models import Assignment, AssignmentFocusEvent, Submission
 
 logger = logging.getLogger('apps')
@@ -131,14 +133,19 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
     due = s.assignment.due_at
     # O'qituvchi tasdiqlamaguncha (PENDING_REVIEW) AI'ning taklif qilgan
     # ball/bahosi o'quvchi/ota-onaga ko'rsatilmaydi — faqat o'qituvchiga.
-    hide_result = s.status == Submission.Status.PENDING_REVIEW and not is_teacher
+    # AI ishlayotgan paytda (CHECKING) o'quvchi uchun ham "o'qituvchi kutilmoqda" ko'rinadi.
+    waiting = s.status in (Submission.Status.PENDING_REVIEW, Submission.Status.CHECKING)
+    hide_result = waiting and not is_teacher
+    shown_status = (
+        Submission.Status.PENDING_REVIEW if (s.status == Submission.Status.CHECKING and not is_teacher) else s.status
+    )
     data = {
         'id': str(s.id),
         'assignment_id': str(s.assignment_id),
         'student_id': str(s.student_id),
         'student_name': f'{s.student.first_name} {s.student.last_name}'.strip() or s.student.username,
         'file_name': s.original_name,
-        'status': s.status,
+        'status': shown_status,
         'overall_score': None if hide_result else s.overall_score,
         'grade': '' if hide_result else s.grade,
         'error': s.error,
@@ -483,8 +490,30 @@ def submit(*, student: User, assignment_id, upload) -> dict:
         original_name=(upload.name or 'homework')[:255],
         status=Submission.Status.PENDING_REVIEW,
     )
-    _notify_new_submission(submission)
+    if not _start_ai_check(submission):
+        # AI sozlanmagan yoki ishlamayapti — o'qituvchi to'g'ridan-to'g'ri baholaydi
+        _notify_new_submission(submission)
     return _submission_dict(submission)
+
+
+def _start_ai_check(submission: Submission) -> bool:
+    """Tashqi AI xizmatiga yuboradi (sozlangan bo'lsa). Muvaffaqiyatli bo'lsa topshiriq
+    `checking` holatiga o'tadi va natijani `sync_ai_results` (cron) olib keladi.
+    Xizmat ishlamasa — False qaytaradi, topshiriq o'qituvchiga qo'lda baholashga tushadi."""
+    if not ai_client.enabled():
+        return False
+    attempt = submission.check_attempts
+    try:
+        external_id = ai_client.submit(submission, attempt=attempt)
+    except ai_client.AIServiceError as exc:
+        logger.warning('Uy vazifasi AI xizmatiga yuborilmadi (%s): %s', submission.id, exc)
+        return False
+    Submission.objects.filter(pk=submission.pk).update(
+        status=Submission.Status.CHECKING, ai_external_id=external_id, error='',
+        check_attempts=F('check_attempts') + 1,
+    )
+    submission.refresh_from_db()
+    return True
 
 
 def _student_label(student: User) -> str:
@@ -552,14 +581,90 @@ def submission_file(*, user: User, submission_id) -> tuple:
 
 
 def recheck(*, user: User, submission_id) -> dict:
-    """AI tekshiruv olib tashlangan — "qayta tekshirish" endi yo'q. Endpoint eski
-    frontend/mobil versiyalar buzilmasligi uchun qoldirilgan: tushunarli xato qaytaradi."""
+    """AI'ni qayta ishga tushiradi (faqat AI xizmati sozlangan bo'lsa). Sozlanmagan bo'lsa
+    — tushunarli xato: topshiriqni qo'lda baholash kerak."""
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != user.id:
         raise PermissionDenied(_("Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."))
-    raise ValidationError({'detail': _(
-        "AI tekshiruv o'chirilgan. Topshiriqni o'zingiz baholang (ball qo'yib tasdiqlang)."
-    )})
+    if not ai_client.enabled():
+        raise ValidationError({'detail': _(
+            "AI tekshiruv o'chirilgan. Topshiriqni o'zingiz baholang (ball qo'yib tasdiqlang)."
+        )})
+    if s.status == Submission.Status.CHECKING:
+        raise ValidationError({'detail': _("AI tekshiruv allaqachon davom etmoqda.")})
+    if s.status == Submission.Status.DONE:
+        raise ValidationError({'detail': _("Tasdiqlangan natijani qayta tekshirib bo'lmaydi.")})
+    if not _start_ai_check(s):
+        raise ValidationError({'detail': _("AI xizmati hozir javob bermayapti. Birozdan keyin urinib ko'ring.")})
+    return _submission_dict(s, is_teacher=True)
+
+
+# ── AI natijasini olib kelish (cron: `manage.py sync_homework_ai`) ──────────
+def _apply_ai_result(s: Submission, payload: dict) -> None:
+    result = payload.get('ai_result') or payload.get('final_result') or {}
+    score = result.get('overall_score')
+    try:
+        value = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        value = None
+    if value is not None and not (math.isfinite(value) and 0 <= value <= 100):
+        value = None
+    grade = rules.grade_label(value) if value is not None else str(result.get('grade') or '')[:40]
+    s.ai_result, s.ai_overall_score, s.ai_grade = result, value, grade
+    # Yakuniy maydonlar dastlab AI'nikidan nusxa — o'qituvchi tasdiqlaganda ustidan yozadi
+    s.result, s.overall_score, s.grade = result, value, grade
+    s.error = ''
+
+
+def _release_for_manual(s: Submission, reason: str = '') -> None:
+    s.status = Submission.Status.PENDING_REVIEW
+    s.error = reason[:2000]
+    s.checked_at = timezone.now()
+    s.save()
+    _notify_new_submission(s)
+
+
+def sync_ai_results(*, now=None, batch: int = 50) -> dict:
+    """`checking` topshiriqlar uchun AI xizmatidan natijani oladi. Tayyor bo'lsa — o'qituvchi
+    baholashiga (ball AI taklifi bilan to'ldirilgan), xato yoki uzoq kutilsa — qo'lda baholashga."""
+    now = now or timezone.now()
+    give_up = timedelta(minutes=getattr(settings, 'HOMEWORK_AI_GIVE_UP_MINUTES', 15))
+    done = failed = waiting = 0
+    pending = Submission.objects.filter(status=Submission.Status.CHECKING).select_related(
+        'assignment__course__teacher', 'student').order_by('updated_at')[:batch]
+    for s in pending:
+        too_old = now - s.updated_at > give_up
+        if not s.ai_external_id or not ai_client.enabled():
+            _release_for_manual(s, "AI xizmati sozlanmagan — o'zingiz baholang.")
+            failed += 1
+            continue
+        try:
+            payload = ai_client.fetch(s.ai_external_id)
+        except ai_client.AIServiceError as exc:
+            logger.warning('AI natijasini olib bo\'lmadi (%s): %s', s.id, exc)
+            if too_old:
+                _release_for_manual(s, "AI xizmati javob bermadi — o'zingiz baholang.")
+                failed += 1
+            else:
+                waiting += 1
+            continue
+        status = payload.get('status')
+        if status in ('pending_review', 'approved') and (payload.get('ai_result') or payload.get('final_result')):
+            _apply_ai_result(s, payload)
+            s.status = Submission.Status.PENDING_REVIEW
+            s.checked_at = now
+            s.save()
+            _notify_new_submission(s)
+            done += 1
+        elif status in ('grading_failed', 'not_found'):
+            _release_for_manual(s, "AI baholay olmadi — o'zingiz baholang.")
+            failed += 1
+        elif too_old:
+            _release_for_manual(s, "AI kutilgandan uzoq ishladi — o'zingiz baholang.")
+            failed += 1
+        else:
+            waiting += 1
+    return {'done': done, 'failed': failed, 'waiting': waiting}
 
 
 # ── o'qituvchi baholashi/tasdiqlashi ────────────────────────────────────────

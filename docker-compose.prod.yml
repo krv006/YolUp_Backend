@@ -120,6 +120,7 @@ services:
              done) &
              while true; do
                python manage.py send_lesson_reminders;
+               python manage.py sync_homework_ai;
                sleep 60;
              done"
     volumes:
