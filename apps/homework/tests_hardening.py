@@ -241,3 +241,104 @@ class HomeworkNotificationTests(HomeworkBase):
             self.assertEqual(resp.data['status'], 'pending_review')
             review = self.api(self.teacher).post(f"/api/v1/homework/submissions/{resp.data['id']}/review/")
             self.assertEqual(review.status_code, 200)
+
+
+class RetryDelayTests(SimpleTestCase):
+    def test_rate_limit_errors_wait_much_longer(self):
+        from . import ai
+
+        class RateLimited(Exception):
+            code = 429
+
+        self.assertEqual(ai.retry_delay(RateLimited('x'), 0), 15.0)
+        self.assertEqual(ai.retry_delay(RateLimited('x'), 1), 30.0)
+        self.assertEqual(ai.retry_delay(RuntimeError('RESOURCE_EXHAUSTED: quota'), 0), 15.0)
+        self.assertEqual(ai.retry_delay(RuntimeError('429 Too Many Requests'), 0), 15.0)
+
+    def test_other_errors_keep_the_short_delay(self):
+        from . import ai
+
+        self.assertEqual(ai.retry_delay(RuntimeError('connection reset'), 0), 1.5)
+        self.assertEqual(ai.retry_delay(RuntimeError('connection reset'), 2), 4.5)
+
+
+class ConcurrencyLimitTests(SimpleTestCase):
+    def test_no_more_than_the_allowed_number_of_gemini_calls_run_at_once(self):
+        import threading
+        import time
+
+        from . import services
+
+        state = {'now': 0, 'max': 0}
+        lock = threading.Lock()
+
+        def slow_grade(*args, **kwargs):
+            with lock:
+                state['now'] += 1
+                state['max'] = max(state['max'], state['now'])
+            time.sleep(0.05)
+            with lock:
+                state['now'] -= 1
+            return FAKE_RESULT
+
+        with patch.object(services, '_ai_slots', threading.BoundedSemaphore(2)), \
+                patch('apps.homework.services.ai.grade_file', side_effect=slow_grade):
+            threads = [threading.Thread(target=services._grade_limited, args=('f.pdf',)) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertLessEqual(state['max'], 2)
+        self.assertGreaterEqual(state['max'], 1)
+
+
+class SubmitThrottleTests(HomeworkBase):
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_per_assignment_hourly_limit(self, grade):
+        from . import services
+
+        assignment_id = self.assignment()
+        for _n in range(services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR):
+            self.assertEqual(self.submit(assignment_id).status_code, 201)
+        blocked = self.submit(assignment_id)
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('file', blocked.json()['error']['details'])
+        self.assertEqual(grade.call_count, services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR)  # Gemini'ga bormadi
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_overall_hourly_limit_across_assignments(self, _):
+        from . import services
+
+        sent = 0
+        for _a in range(services.MAX_SUBMITS_PER_HOUR // services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR):
+            assignment_id = self.assignment()
+            for _n in range(services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR):
+                self.assertEqual(self.submit(assignment_id).status_code, 201)
+                sent += 1
+        self.assertEqual(sent, services.MAX_SUBMITS_PER_HOUR)
+        self.assertEqual(self.submit(self.assignment()).status_code, 400)
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_old_submissions_do_not_count(self, _):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from . import services
+
+        assignment_id = self.assignment()
+        for _n in range(services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR):
+            self.submit(assignment_id)
+        Submission.objects.update(created_at=timezone.now() - timedelta(hours=2))
+        self.assertEqual(self.submit(assignment_id).status_code, 201)
+
+    @patch(GRADE, return_value=FAKE_RESULT)
+    def test_other_students_are_not_affected(self, _):
+        from . import services
+
+        other = make('s9', User.Role.STUDENT)
+        Enrollment.objects.create(course=self.course, student=other, status=Enrollment.Status.APPROVED)
+        assignment_id = self.assignment()
+        for _n in range(services.MAX_SUBMITS_PER_ASSIGNMENT_HOUR):
+            self.submit(assignment_id)
+        self.assertEqual(self.submit(assignment_id, user=other).status_code, 201)

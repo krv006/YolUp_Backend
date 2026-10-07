@@ -26,6 +26,21 @@ from .models import Assignment, AssignmentFocusEvent, Submission
 
 logger = logging.getLogger('apps')
 
+# Bir vaqtda Gemini'ga ketadigan so'rovlar soni (har gunicorn jarayoni uchun).
+# Dars oxirida 30 o'quvchi birdan yuklasa, hammasi birdan ketib kvotani
+# urmasligi uchun navbatga tizadi.
+AI_CONCURRENCY = 4
+_ai_slots = threading.BoundedSemaphore(AI_CONCURRENCY)
+
+# Suiiste'moldan himoya: har topshirish pulli AI so'rovi
+MAX_SUBMITS_PER_ASSIGNMENT_HOUR = 5
+MAX_SUBMITS_PER_HOUR = 20
+
+
+def _grade_limited(*args, **kwargs):
+    with _ai_slots:
+        return ai.grade_file(*args, **kwargs)
+
 # Vazifa fayli (o'qituvchi biriktiradi) — AI'ga bormaydi, faqat yuklab olinadi
 ATTACHMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp'}
 
@@ -463,6 +478,17 @@ def submit(*, student: User, assignment_id, upload, feedback_language: str = 'uz
             'size': upload.size / 1024 / 1024, 'max_mb': ai.MAX_FILE_SIZE_MB,
         }})
 
+    hour_ago = timezone.now() - timedelta(hours=1)
+    recent = Submission.objects.filter(student=student, created_at__gte=hour_ago)
+    if recent.filter(assignment=a).count() >= MAX_SUBMITS_PER_ASSIGNMENT_HOUR:
+        raise ValidationError({'file': _(
+            "Bu vazifaga soatiga %(n)s martadan ko'p topshirib bo'lmaydi. Birozdan keyin urinib ko'ring."
+        ) % {'n': MAX_SUBMITS_PER_ASSIGNMENT_HOUR}})
+    if recent.count() >= MAX_SUBMITS_PER_HOUR:
+        raise ValidationError({'file': _(
+            "Soatiga %(n)s tadan ko'p fayl topshirib bo'lmaydi. Birozdan keyin urinib ko'ring."
+        ) % {'n': MAX_SUBMITS_PER_HOUR}})
+
     submission = Submission.objects.create(
         assignment=a,
         student=student,
@@ -529,7 +555,7 @@ def run_check(submission_id) -> None:
     submission = Submission.objects.select_related('assignment__course').get(pk=submission_id)
     a = submission.assignment
     try:
-        result = ai.grade_file(
+        result = _grade_limited(
             submission.file.path,
             subject_text=a.course.subject,
             skill_key=a.skill_key,

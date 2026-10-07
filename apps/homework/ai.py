@@ -71,6 +71,16 @@ class HomeworkAIError(Exception):
     pass
 
 
+def retry_delay(exc: Exception, attempt: int) -> float:
+    """Qayta urinishdan oldin kutish (soniya). Kvota/tezlik chegarasi (429,
+    RESOURCE_EXHAUSTED) xatosida UZOQROQ kutiladi — 1-3 soniyada qayta urinish
+    chegarani yana urib, hamma topshiriqni xatoga aylantirar edi."""
+    text = str(exc)
+    if getattr(exc, 'code', None) == 429 or 'RESOURCE_EXHAUSTED' in text or '429' in text:
+        return 15.0 * (attempt + 1)
+    return 1.5 * (attempt + 1)
+
+
 class InvalidModelResponseError(HomeworkAIError):
     pass
 
@@ -714,7 +724,7 @@ def grade_file(
             time.sleep(1)
         except Exception as exc:  # tarmoq / API xatolari
             last_error = exc
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(retry_delay(exc, attempt))
 
     raise HomeworkAIError(
         f"{max_retries + 1} urinishdan keyin ham yaroqli natija olinmadi: {last_error}"

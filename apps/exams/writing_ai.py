@@ -205,5 +205,5 @@ def _call_gemini(answered: list, feedback_language: str, max_retries: int, api_k
             time.sleep(1)
         except Exception as exc:  # tarmoq / API xatolari
             last_error = exc
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(homework_ai.retry_delay(exc, attempt))
     raise WritingAIError(f"{max_retries + 1} urinishdan keyin ham yaroqli natija olinmadi: {last_error}")
