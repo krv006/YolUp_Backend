@@ -6,7 +6,6 @@ huquqlari (o'quvchi/o'qituvchi/ota-ona/begona), qayta tekshirish, fan
 aniqlash va JSON validatsiya birliklari.
 """
 from datetime import timedelta
-from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -198,12 +197,11 @@ class HomeworkTests(TestCase):
         self.assertFalse(by_id[str(self.course.id)]['is_language_subject'])
 
     # ── topshirish ──
-    def test_submit_goes_straight_to_the_teacher_without_any_ai(self):
+    def test_submit_goes_straight_to_the_teacher(self):
         a_id = self.create_assignment().data['id']
-        with patch('google.genai.Client', side_effect=AssertionError('Gemini chaqirilmasligi kerak')):
-            r = self.api(self.student).post(
-                f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
-            )
+        r = self.api(self.student).post(
+            f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
+        )
         self.assertEqual(r.status_code, 201)
         # topshiriq darhol o'qituvchi baholashini kutadi; o'quvchiga ball ko'rsatilmaydi
         self.assertEqual(r.data['status'], 'pending_review')

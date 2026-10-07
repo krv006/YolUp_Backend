@@ -18,7 +18,6 @@ loyihada rivojlantiriladi va shu API'ni chaqiradi.
 | Backend | Django 6 + DRF + SimpleJWT (ASGI) |
 | Real-time (chat + doska) | Django Channels 4 + Redis channel layer (WebSocket) |
 | Video darslar | LiveKit (self-hosted, WebRTC) + Egress (dars yozuvi MP4) |
-| AI (IELTS Writing) | Google Gemini (`google-genai`) |
 | DB / Cache | PostgreSQL 17 / Redis 7 (dev'da sqlite/in-memory fallback) |
 | Admin panel | Django admin + **Jazzmin** (Fokus brendi, ikonkalar) |
 | Loglar | Fayl rotatsiya: `logs/app.log`, `logs/errors.log` (`make applog/errlog`) |
@@ -105,18 +104,12 @@ Tarix va o'qilgan belgisi REST'da: `GET .../messages/`, `POST .../read/`.
 Texnik: Channels 4, JWT query-param auth (`apps/chat/ws_auth.py`), xona guruhi
 `chat_<room_id>`, broadcast `transaction.on_commit`dan keyin (`realtime.py`).
 
-## 6. AI uy vazifasi oqimi
+## 6. Uy vazifasi oqimi
 
 1. O'qituvchi vazifa beradi (rich matn `nh3` bilan sanitize, ixtiyoriy fayl, muddat, til fanlari uchun skill: writing/reading/listening/speaking)
-2. O'quvchi fayl topshiradi → `Submission(status=checking)` → tekshiruv fon thread'ida
-3. `apps/homework/ai.py` fan profilini kurs `subject`idan avtomatik aniqlaydi
-   (Matematika→math, Fizika→physics, Ingliz tili→language rejimi...), Gemini'ga
-   multimodal yuboradi (PDF/rasm to'g'ridan-to'g'ri, DOCX matni lokal ajratiladi)
-4. Natija JSON: `{overall_score, grade, questions[{score, mistakes, suggestions...}], summary}` —
-   barcha matnlar o'zbekcha; baholar: A'lo / Juda yaxshi / Yaxshi / Qoniqarli / ...
-5. Frontend polling: `GET /api/v1/homework/submissions/<id>/` (`checking→done|error`)
-
-**Talab:** serverda `GEMINI_API_KEY` env (aistudio.google.com/apikey).
+2. O'quvchi fayl topshiradi → `Submission(status=pending_review)` → o'qituvchiga bildirishnoma
+3. O'qituvchi ballni (0-100) o'zi qo'yib tasdiqlaydi → `status=done`, natija o'quvchi/ota-onaga ochiladi
+4. AI (Gemini) tekshiruv loyihadan olib tashlangan (2026-10) — AI kerak bo'lsa alohida tayyor repolar ishlatiladi
 
 ## 7. Muhit o'zgaruvchilari (asosiylari)
 
@@ -127,7 +120,6 @@ Texnik: Channels 4, JWT query-param auth (`apps/chat/ws_auth.py`), xona guruhi
 | `POSTGRES_*` | DB (bo'lmasa sqlite) |
 | `REDIS_URL` | Cache + WebSocket channel layer (prod'da shart) |
 | `LIVEKIT_API_KEY/SECRET/URL` | Video darslar |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | IELTS Writing AI baholash (apps/exams) |
 
 To'liq namuna: `.env.prod.example` (prod), `.env.example` (dev).
 

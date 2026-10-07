@@ -12,10 +12,9 @@ from rest_framework.views import APIView
 
 from apps.core.permissions import RequirePerm
 
-from . import selectors, services, writing
+from . import selectors, services
 from .models import Exam
 from .serializers import (
-    AIApproveSerializer,
     AnswersSerializer,
     ExamCreateSerializer,
     ExamUpdateSerializer,
@@ -175,31 +174,3 @@ class ExamManualScoreView(APIView):
             scores=serializer.validated_data['scores'],
         )
         return Response(result)
-
-
-class ExamAIGradeView(APIView):
-    """IELTS Writing'ni AI bilan baholashni boshlaydi (yoki xatodan keyin qayta uradi).
-    Odatda cron o'zi boshlaydi; bu — qo'lda ishga tushirish. Fon oqimida ishlaydi:
-    `202` va keyin natijani `results/{student_id}/` dan `ai.writing.status` bilan kuzating."""
-
-    permission_classes = [RequirePerm('exam.manage')]
-
-    def post(self, request, pk, student_id):
-        exam = _get_exam(request.user, pk)
-        data = writing.request_check(teacher=request.user, exam=exam, student_id=student_id)
-        return Response(data, status=status.HTTP_202_ACCEPTED)
-
-
-class ExamAIApproveView(APIView):
-    """O'qituvchi AI taklifini tasdiqlaydi (ixtiyoriy `band` bilan o'zgartirib)."""
-
-    permission_classes = [RequirePerm('exam.manage')]
-
-    def post(self, request, pk, student_id):
-        exam = _get_exam(request.user, pk)
-        serializer = AIApproveSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        writing.approve(
-            teacher=request.user, exam=exam, student_id=student_id, band=serializer.validated_data.get('band'),
-        )
-        return Response(services.student_detail(user=request.user, exam=exam, student_id=student_id))

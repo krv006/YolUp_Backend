@@ -434,15 +434,13 @@ def _student_info(student: User) -> dict:
 
 
 def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
-    from . import writing
-
     inputs = _section_inputs(exam, [a.id for a in attempts])
     results = []
     for attempt in attempts:
         data = scoring_engines.compute(exam.scoring, inputs[attempt.id])
         data.update({
             'student': _student_info(attempt.student), 'participated': True,
-            'finished_at': attempt.finished_at, 'ai': writing.ai_payload(attempt, staff),
+            'finished_at': attempt.finished_at,
         })
         results.append(data)
     return results

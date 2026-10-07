@@ -49,11 +49,6 @@ class AnswersSerializer(serializers.Serializer):
         return answers
 
 
-class AIApproveSerializer(serializers.Serializer):
-    # Berilmasa — AI taklif qilgan band tasdiqlanadi
-    band = serializers.FloatField(required=False)
-
-
 class ManualScoresSerializer(serializers.Serializer):
     scores = serializers.DictField(child=serializers.FloatField(), allow_empty=False)
 
@@ -106,6 +101,6 @@ def current_response(payload: dict, request=None) -> dict:
 
 
 __all__ = [
-    'AIApproveSerializer', 'AnswersSerializer', 'ExamCreateSerializer', 'ExamSection', 'ExamUpdateSerializer',
+    'AnswersSerializer', 'ExamCreateSerializer', 'ExamSection', 'ExamUpdateSerializer',
     'ManualScoresSerializer', 'TemplateWriteSerializer', 'current_response', 'exam_detail', 'exam_summary',
 ]

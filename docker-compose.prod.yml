@@ -116,7 +116,6 @@ services:
                python manage.py auto_finish_expired_lessons;
                python manage.py send_deadline_reminders;
                python manage.py close_stale_voice_rooms;
-               python manage.py grade_exam_writing;
                sleep 300;
              done) &
              while true; do

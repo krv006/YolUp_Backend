@@ -122,14 +122,20 @@ class CaddyConfigTests(SimpleTestCase):
         self.assertIsNotNone(re.search(r'handle /media/homework/\*\s*\{\s*respond 404', text))
 
 
-class NoGeminiInHomeworkTests(HomeworkBase):
-    def test_the_ai_module_is_gone(self):
-        with self.assertRaises(ModuleNotFoundError):
-            importlib.import_module('apps.homework.ai')
+class NoAiTests(HomeworkBase):
+    def test_the_ai_modules_are_gone(self):
+        for module in ('apps.homework.ai', 'apps.exams.writing', 'apps.exams.writing_ai'):
+            with self.assertRaises(ModuleNotFoundError, msg=module):
+                importlib.import_module(module)
 
-    def test_submitting_never_calls_gemini(self):
-        with patch('google.genai.Client', side_effect=AssertionError('Gemini chaqirilmasligi kerak')):
-            resp = self.submit(self.assignment())
+    def test_no_gemini_settings_remain(self):
+        from django.conf import settings
+
+        self.assertFalse(hasattr(settings, 'GEMINI_API_KEY'))
+        self.assertFalse(hasattr(settings, 'GEMINI_MODEL'))
+
+    def test_submission_waits_for_the_teacher(self):
+        resp = self.submit(self.assignment())
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.data['status'], 'pending_review')
 
