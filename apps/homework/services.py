@@ -1,19 +1,15 @@
-"""Uy vazifasi service layer — vazifa berish, topshirish, AI tekshiruv.
+"""Uy vazifasi service layer — vazifa berish, topshirish, o'qituvchi baholashi.
 
-Tekshiruv fonda (thread) yuradi: o'quvchi faylni yuklagach darhol javob oladi
-(status=checking), frontend polling bilan natijani kutadi. Testlarda
-settings.HOMEWORK_CHECK_ASYNC=False qilib sinxron ishlatiladi.
+O'quvchi fayl yuklaydi -> topshiriq darhol `pending_review` holatida o'qituvchiga
+tushadi -> o'qituvchi ballni o'zi qo'yib tasdiqlaydi (`review_submission`) -> shundan
+keyin natija o'quvchiga ochiladi. (AI/Gemini tekshiruv olib tashlangan.)
 """
 import logging
 import math
 import re
-import threading
 from datetime import timedelta
 from pathlib import Path
 
-from django.conf import settings
-from django.db import close_old_connections
-from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
@@ -22,27 +18,17 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import ai
+from . import rules
 from .models import Assignment, AssignmentFocusEvent, Submission
 
 logger = logging.getLogger('apps')
 
-# Bir vaqtda Gemini'ga ketadigan so'rovlar soni (har gunicorn jarayoni uchun).
-# Dars oxirida 30 o'quvchi birdan yuklasa, hammasi birdan ketib kvotani
-# urmasligi uchun navbatga tizadi.
-AI_CONCURRENCY = 4
-_ai_slots = threading.BoundedSemaphore(AI_CONCURRENCY)
-
-# Suiiste'moldan himoya: har topshirish pulli AI so'rovi
+# Suiiste'moldan himoya (fayl yuklash/xotira): soatiga topshirish chegarasi
 MAX_SUBMITS_PER_ASSIGNMENT_HOUR = 5
 MAX_SUBMITS_PER_HOUR = 20
 
 
-def _grade_limited(*args, **kwargs):
-    with _ai_slots:
-        return ai.grade_file(*args, **kwargs)
-
-# Vazifa fayli (o'qituvchi biriktiradi) — AI'ga bormaydi, faqat yuklab olinadi
+# Vazifa fayli (o'qituvchi biriktiradi) — faqat yuklab olinadi
 ATTACHMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp'}
 
 # Rich editor HTML'iga ruxsat etilgan teglar — XSS'dan himoya
@@ -210,9 +196,9 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
     if not (title or '').strip():
         raise ValidationError({'title': _('Vazifa nomi majburiy.')})
     skill_key = (skill_key or '').strip().lower()
-    if skill_key and skill_key not in ai.SKILLS:
+    if skill_key and skill_key not in rules.SKILL_KEYS:
         raise ValidationError({
-                'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(ai.SKILLS)},
+                'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(rules.SKILL_KEYS)},
             })
     lesson = _resolve_lesson(course=course, lesson_id=lesson_id)
 
@@ -223,9 +209,9 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
             raise ValidationError({'attachment': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
                 'ext': ext, 'allowed': ', '.join(sorted(ATTACHMENT_EXTENSIONS)),
             }})
-        if attachment.size > ai.MAX_FILE_SIZE_MB * 1024 * 1024:
+        if attachment.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
             raise ValidationError({
-                'attachment': _('Fayl %(max_mb)s MB dan katta.') % {'max_mb': ai.MAX_FILE_SIZE_MB},
+                'attachment': _('Fayl %(max_mb)s MB dan katta.') % {'max_mb': rules.MAX_FILE_SIZE_MB},
             })
         attachment_name = (attachment.name or 'vazifa')[:255]
 
@@ -365,9 +351,9 @@ def update_assignment(
         fields.append('due_at')
     if skill_key is not _UNSET:
         skill_key = (skill_key or '').strip().lower()
-        if skill_key and skill_key not in ai.SKILLS:
+        if skill_key and skill_key not in rules.SKILL_KEYS:
             raise ValidationError({
-                'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(ai.SKILLS)},
+                'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(rules.SKILL_KEYS)},
             })
         a.skill_key = skill_key
         fields.append('skill_key')
@@ -383,9 +369,9 @@ def update_assignment(
             raise ValidationError({'attachment': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
                 'ext': ext, 'allowed': ', '.join(sorted(ATTACHMENT_EXTENSIONS)),
             }})
-        if attachment.size > ai.MAX_FILE_SIZE_MB * 1024 * 1024:
+        if attachment.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
             raise ValidationError({
-                'attachment': _('Fayl %(max_mb)s MB dan katta.') % {'max_mb': ai.MAX_FILE_SIZE_MB},
+                'attachment': _('Fayl %(max_mb)s MB dan katta.') % {'max_mb': rules.MAX_FILE_SIZE_MB},
             })
         a.attachment = attachment
         a.attachment_name = (attachment.name or 'vazifa')[:255]
@@ -459,8 +445,8 @@ def get_assignment(*, user: User, assignment_id) -> dict:
     return data
 
 
-# ── topshirish va AI tekshiruv ──────────────────────────────────────────────
-def submit(*, student: User, assignment_id, upload, feedback_language: str = 'uz') -> dict:
+# ── topshirish va o'qituvchi baholashi ──────────────────────────────────────────────
+def submit(*, student: User, assignment_id, upload) -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz — vazifa topshira olmaysiz."))
@@ -468,15 +454,15 @@ def submit(*, student: User, assignment_id, upload, feedback_language: str = 'uz
         raise ValidationError({'file': _('Fayl majburiy.')})
 
     ext = Path(upload.name or '').suffix.lower()
-    if ext not in ai.ALLOWED_EXTENSIONS:
+    if ext not in rules.ALLOWED_EXTENSIONS:
         raise ValidationError({'file': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
-            'ext': ext, 'allowed': ', '.join(sorted(ai.ALLOWED_EXTENSIONS)),
+            'ext': ext, 'allowed': ', '.join(sorted(rules.ALLOWED_EXTENSIONS)),
         }})
-    if ext in ai.AUDIO_EXTENSIONS and a.skill_key != 'speaking':
+    if ext in rules.AUDIO_EXTENSIONS and a.skill_key != 'speaking':
         raise ValidationError({'file': _("Audio faqat Speaking vazifalari uchun.")})
-    if upload.size > ai.MAX_FILE_SIZE_MB * 1024 * 1024:
+    if upload.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
         raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
-            'size': upload.size / 1024 / 1024, 'max_mb': ai.MAX_FILE_SIZE_MB,
+            'size': upload.size / 1024 / 1024, 'max_mb': rules.MAX_FILE_SIZE_MB,
         }})
 
     hour_ago = timezone.now() - timedelta(hours=1)
@@ -495,11 +481,9 @@ def submit(*, student: User, assignment_id, upload, feedback_language: str = 'uz
         student=student,
         file=upload,
         original_name=(upload.name or 'homework')[:255],
-        status=Submission.Status.CHECKING,
-        feedback_language=feedback_language,
+        status=Submission.Status.PENDING_REVIEW,
     )
-    _dispatch_check(submission)
-    submission.refresh_from_db()
+    _notify_new_submission(submission)
     return _submission_dict(submission)
 
 
@@ -507,9 +491,9 @@ def _student_label(student: User) -> str:
     return f'{student.first_name} {student.last_name}'.strip() or student.username
 
 
-def _notify_ready_for_review(submission: Submission) -> None:
-    """AI tekshirib bo'ldi — o'qituvchiga "tasdiqlash uchun tayyor" deb xabar beradi.
-    Bildirishnoma xatosi tekshiruv natijasiga ta'sir qilmasligi kerak."""
+def _notify_new_submission(submission: Submission) -> None:
+    """O'qituvchiga "yangi topshiriq — baholash kerak" deb xabar beradi.
+    Bildirishnoma xatosi topshirishga ta'sir qilmasligi kerak."""
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 
@@ -518,8 +502,8 @@ def _notify_ready_for_review(submission: Submission) -> None:
         send_notification(
             sender=submission.student,
             description=(
-                f'«{assignment.course.title}»: {_student_label(submission.student)} vazifasi '
-                f'tekshirishga tayyor — «{assignment.title}».'
+                f'«{assignment.course.title}»: {_student_label(submission.student)} vazifani topshirdi '
+                f'— «{assignment.title}». Baholashingiz kerak.'
             ),
             target_type=Notification.Target.USER, user_id=assignment.course.teacher_id,
             link_type='submission', link_id=str(submission.id), kind='homework_pending_review',
@@ -546,100 +530,6 @@ def _notify_reviewed(submission: Submission, teacher: User, updated: bool) -> No
         logger.warning('homework_reviewed bildirishnomasi yuborilmadi', exc_info=True)
 
 
-def run_check(submission_id) -> None:
-    """AI tekshiruvni bajaradi va natijani saqlaydi (thread ichida chaqiriladi).
-
-    Natija PENDING_REVIEW holatida to'xtaydi — AI'nikini "yakuniy" deb hisoblab
-    o'quvchiga ko'rsatmaymiz, o'qituvchi ko'rib chiqib tasdiqlashi kerak
-    (`review_submission`). AI'ning asl natijasi `ai_*` maydonlarda saqlanadi.
-    """
-    submission = Submission.objects.select_related('assignment__course').get(pk=submission_id)
-    a = submission.assignment
-    try:
-        result = _grade_limited(
-            submission.file.path,
-            subject_text=a.course.subject,
-            skill_key=a.skill_key,
-            extra_instructions=a.extra_instructions,
-            feedback_language=submission.feedback_language,
-        )
-        score = result.get('overall_score')
-        overall_score = float(score) if score is not None else None
-        # grade yorlig'ini har doim ball shkalasidan olamiz — model gohida
-        # boshqacha yozishi mumkin
-        grade = ai.grade_label(score) or str(result.get('grade') or '')
-
-        submission.ai_result = result
-        submission.ai_overall_score = overall_score
-        submission.ai_grade = grade
-        # Yakuniy maydonlar dastlab AI'nikidan nusxa — o'qituvchi tasdiqlaguncha
-        # shu turadi, tasdiqlashda ustidan yozilishi mumkin.
-        submission.result = result
-        submission.overall_score = overall_score
-        submission.grade = grade
-        submission.status = Submission.Status.PENDING_REVIEW
-        submission.error = ''
-    except Exception as exc:  # AI/tarmoq xatosi — foydalanuvchiga ko'rsatiladi
-        submission.status = Submission.Status.ERROR
-        submission.error = str(exc)[:2000]
-    submission.checked_at = timezone.now()
-    submission.save()
-    if submission.status == Submission.Status.PENDING_REVIEW:
-        _notify_ready_for_review(submission)
-
-
-def _dispatch_check(submission: Submission) -> None:
-    Submission.objects.filter(pk=submission.pk).update(check_attempts=F('check_attempts') + 1)
-    if not getattr(settings, 'HOMEWORK_CHECK_ASYNC', True):
-        run_check(submission.id)
-        return
-
-    def _target(sub_id):
-        try:
-            run_check(sub_id)
-        finally:
-            close_old_connections()
-
-    threading.Thread(target=_target, args=(submission.id,), daemon=True).start()
-
-
-# Fon oqimi deploy/qayta ishga tushishda yo'qolsa, topshiriq "tekshirilmoqda"da
-# qotib qoladi. Cron shunday topshiriqlarni qayta tekshiradi (`recover_stuck_checks`).
-STUCK_AFTER = timedelta(minutes=10)
-MAX_CHECK_ATTEMPTS = 3
-RECOVER_BATCH = 10
-
-
-def recover_stuck_checks(*, now=None) -> dict:
-    """10 daqiqadan beri `checking`da turgan topshiriqlarni qayta tekshiradi.
-    3 urinishdan keyin ham tugamasa — `error` (o'qituvchi qo'lda "qayta tekshirish"
-    ni bosadi). Parallel ishga tushishdan himoya: topshiriqni compare-and-set
-    bilan "egallaydi"."""
-    now = now or timezone.now()
-    stuck = list(
-        Submission.objects.filter(status=Submission.Status.CHECKING, updated_at__lt=now - STUCK_AFTER)
-        .order_by('updated_at')[:RECOVER_BATCH]
-    )
-    retried = failed = 0
-    for submission in stuck:
-        if submission.check_attempts >= MAX_CHECK_ATTEMPTS:
-            updated = Submission.objects.filter(
-                pk=submission.pk, status=Submission.Status.CHECKING, updated_at=submission.updated_at,
-            ).update(
-                status=Submission.Status.ERROR, updated_at=now, checked_at=now,
-                error=str(_("Tekshiruv bir necha urinishda ham yakunlanmadi. O'qituvchi \"qayta tekshirish\"ni bosishi mumkin.")),
-            )
-            failed += updated
-            continue
-        claimed = Submission.objects.filter(
-            pk=submission.pk, status=Submission.Status.CHECKING, updated_at=submission.updated_at,
-        ).update(updated_at=now, check_attempts=F('check_attempts') + 1)
-        if claimed:
-            run_check(submission.pk)
-            retried += 1
-    return {'retried': retried, 'failed': failed}
-
-
 def get_submission(*, user: User, submission_id) -> dict:
     s = _get_submission(submission_id)
     is_teacher = s.assignment.course.teacher_id == user.id
@@ -662,32 +552,30 @@ def submission_file(*, user: User, submission_id) -> tuple:
 
 
 def recheck(*, user: User, submission_id) -> dict:
+    """AI tekshiruv olib tashlangan — "qayta tekshirish" endi yo'q. Endpoint eski
+    frontend/mobil versiyalar buzilmasligi uchun qoldirilgan: tushunarli xato qaytaradi."""
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != user.id:
         raise PermissionDenied(_("Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."))
-    s.status = Submission.Status.CHECKING
-    s.error = ''
-    s.check_attempts = 0  # o'qituvchi qo'lda boshlayapti — avtomatik urinishlar hisobi qayta boshlanadi
-    s.save(update_fields=['status', 'error', 'check_attempts', 'updated_at'])
-    _dispatch_check(s)
-    s.refresh_from_db()
-    return _submission_dict(s, is_teacher=True)
+    raise ValidationError({'detail': _(
+        "AI tekshiruv o'chirilgan. Topshiriqni o'zingiz baholang (ball qo'yib tasdiqlang)."
+    )})
 
 
-# ── o'qituvchi ko'rib chiqishi/tasdiqlashi ──────────────────────────────────
+# ── o'qituvchi baholashi/tasdiqlashi ────────────────────────────────────────
 def review_submission(*, teacher: User, submission_id, overall_score=None,
                       grade: str = '', result=None) -> dict:
-    """O'qituvchi AI natijasini ko'rib chiqadi — xohlasa ball/baho/feedbackni
-    o'zgartiradi, so'ng tasdiqlaydi. Shundan keyingina o'quvchi natijani ko'radi.
-    AI tekshirib bo'lgan (PENDING_REVIEW) topshiriqqa tegishli; tasdiqlangan (DONE)
-    natijani ham tuzatish mumkin (o'qituvchi xatosini to'g'rilash uchun) — o'quvchiga
-    "natija yangilandi" deb xabar boradi."""
+    """O'qituvchi topshiriqni baholaydi: ball (0-100), ixtiyoriy baho yorlig'i va
+    izoh (`result`) — shundan keyingina o'quvchi natijani ko'radi. Tasdiqlangan
+    (DONE) natijani ham tuzatish mumkin (o'qituvchi xatosini to'g'rilash uchun) —
+    o'quvchiga "natija yangilandi" deb xabar boradi. Baho yorlig'i berilmasa
+    ballga qarab qo'yiladi (A'lo, Yaxshi, ...)."""
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != teacher.id:
-        raise PermissionDenied(_("Faqat kurs o'qituvchisi tasdiqlaydi."))
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi baholaydi."))
     if s.status not in (Submission.Status.PENDING_REVIEW, Submission.Status.DONE):
         raise ValidationError(
-            _("Faqat AI tekshirib bo'lgan (ko'rib chiqish kutilayotgan yoki tasdiqlangan) topshiriqni tasdiqlash mumkin.")
+            _("Faqat baholashni kutayotgan yoki baholangan topshiriqni baholash mumkin.")
         )
     if overall_score is not None:
         try:
@@ -697,11 +585,15 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
         if not math.isfinite(value) or not 0 <= value <= 100:
             raise ValidationError({'overall_score': _("Ball 0 dan 100 gacha bo'lishi kerak.")})
         s.overall_score = value
+    if s.overall_score is None:
+        raise ValidationError({'overall_score': _("Ball kiritilishi shart (0 dan 100 gacha).")})
     if result is not None and not isinstance(result, dict):
         raise ValidationError({'result': _("Natija obyekt (JSON) shaklida bo'lishi kerak.")})
     was_done = s.status == Submission.Status.DONE
     if grade:
         s.grade = grade.strip()[:40]
+    elif overall_score is not None or not s.grade:
+        s.grade = rules.grade_label(s.overall_score)
     if result is not None:
         s.result = result
     s.status = Submission.Status.DONE

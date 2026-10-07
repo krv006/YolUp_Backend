@@ -19,11 +19,29 @@ CRITERIA = ('task_response', 'coherence_cohesion', 'lexical_resource', 'grammati
 MIN_WORDS = {1: 150, 2: 250}
 MAX_ANSWER_CHARS = 8000
 
+# Gemini so'rovi shuncha vaqtdan oshsa uziladi
+REQUEST_TIMEOUT_MS = 180_000
+GENERATION_CONFIG = {
+    'temperature': 0.1,  # past temperatura — barqaror, qat'iy baholash
+    'top_p': 0.9,
+    'max_output_tokens': 8192,
+    'response_mime_type': 'application/json',
+}
+
 _LANGUAGE_NAMES = {'uz': 'UZBEK (latin script)', 'ru': 'RUSSIAN (Cyrillic script)', 'en': 'ENGLISH'}
 
 
 class WritingAIError(Exception):
     pass
+
+
+def retry_delay(exc: Exception, attempt: int) -> float:
+    """Qayta urinishdan oldin kutish (soniya). Kvota/tezlik chegarasi (429,
+    RESOURCE_EXHAUSTED) xatosida UZOQROQ kutiladi."""
+    text = str(exc)
+    if getattr(exc, 'code', None) == 429 or 'RESOURCE_EXHAUSTED' in text or '429' in text:
+        return 15.0 * (attempt + 1)
+    return 1.5 * (attempt + 1)
 
 
 class InvalidWritingResponse(WritingAIError):
@@ -180,13 +198,11 @@ def _call_gemini(answered: list, feedback_language: str, max_retries: int, api_k
     from google import genai  # lazy — paket faqat shu yerda kerak
     from google.genai import types
 
-    from apps.homework import ai as homework_ai
-
     client = genai.Client(
-        api_key=api_key, http_options=types.HttpOptions(timeout=homework_ai.REQUEST_TIMEOUT_MS),
+        api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
     )
     config = types.GenerateContentConfig(
-        system_instruction=build_system_prompt(feedback_language), **homework_ai.GENERATION_CONFIG,
+        system_instruction=build_system_prompt(feedback_language), **GENERATION_CONFIG,
     )
     model_name = getattr(settings, 'GEMINI_MODEL', 'gemini-3.5-flash')
     contents = [build_user_prompt(answered)]
@@ -205,5 +221,5 @@ def _call_gemini(answered: list, feedback_language: str, max_retries: int, api_k
             time.sleep(1)
         except Exception as exc:  # tarmoq / API xatolari
             last_error = exc
-            time.sleep(homework_ai.retry_delay(exc, attempt))
+            time.sleep(retry_delay(exc, attempt))
     raise WritingAIError(f"{max_retries + 1} urinishdan keyin ham yaroqli natija olinmadi: {last_error}")

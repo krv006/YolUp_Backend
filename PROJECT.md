@@ -18,7 +18,7 @@ loyihada rivojlantiriladi va shu API'ni chaqiradi.
 | Backend | Django 6 + DRF + SimpleJWT (ASGI) |
 | Real-time (chat + doska) | Django Channels 4 + Redis channel layer (WebSocket) |
 | Video darslar | LiveKit (self-hosted, WebRTC) + Egress (dars yozuvi MP4) |
-| AI tekshiruv | Google Gemini (`google-genai`) |
+| AI (IELTS Writing) | Google Gemini (`google-genai`) |
 | DB / Cache | PostgreSQL 17 / Redis 7 (dev'da sqlite/in-memory fallback) |
 | Admin panel | Django admin + **Jazzmin** (Fokus brendi, ikonkalar) |
 | Loglar | Fayl rotatsiya: `logs/app.log`, `logs/errors.log` (`make applog/errlog`) |
@@ -51,7 +51,7 @@ Kod qatlamlari (ARCHITECTURE.md qoidasi): `views.py` yupqa → biznes-logika
 | `apps/live` | LiveKit token, avtomatik davomat (kirdi/chiqdi), "Siz shu yerdamisiz?" diqqat tekshiruvi (random, 15s), fokus jurnali (oynadan chiqib-kirish) | `/api/v1/live/*` |
 | `apps/chat` | Telegram uslubi: har kurs = guruh chat; direct faqat o'qituvchi↔o'quvchi (1 martalik so'rov → qabul/block); real-time WebSocket | `/api/v1/chat/*`, `ws /ws/chat/<room_id>/` |
 | `apps/board` | Jonli dars doskasi, **real-time WebSocket** (polling yo'q): qalam, marker (shaffof), chiziq/strelka, to'rtburchak, ellips, matn — bari saqlanadi va PDF'ga tushadi; bir nechta sheet; o'chirish SABABI majburiy (jurnal); dars tugagach PDF → kurs chatiga. **Matematik rejim FAQAT matematika kurslarida** (`math_enabled`): MathLive LaTeX bloklari + SymPy yechuvchi | `/api/v1/board/<lesson_id>/*`, `ws /ws/board/<lesson_id>/` |
-| `apps/homework` | AI uy vazifasi: o'qituvchi vazifani rich-matn (sanitized HTML) yoki fayl (Word/PDF/rasm) bilan beradi, muddat qo'yadi; o'quvchi PDF/rasm/DOCX (Speaking'da audio) topshiradi; Gemini savolma-savol O'ZBEKCHA baholaydi; statistika, kech topshirish belgisi | `/api/v1/homework/*` |
+| `apps/homework` | Uy vazifasi: o'qituvchi vazifani rich-matn (sanitized HTML) yoki fayl (Word/PDF/rasm) bilan beradi, muddat qo'yadi; o'quvchi PDF/rasm/DOCX (Speaking'da audio) topshiradi; o'qituvchi ballni o'zi qo'yib tasdiqlaydi (AI tekshiruv olib tashlangan); statistika, kech topshirish belgisi | `/api/v1/homework/*` |
 | `apps/core` | UUID+timestamp baza modellari, soft-delete, RBAC, audit log, yagona xato formati | — |
 
 ## 4. Rollar (RBAC qisqacha)
@@ -127,7 +127,7 @@ Texnik: Channels 4, JWT query-param auth (`apps/chat/ws_auth.py`), xona guruhi
 | `POSTGRES_*` | DB (bo'lmasa sqlite) |
 | `REDIS_URL` | Cache + WebSocket channel layer (prod'da shart) |
 | `LIVEKIT_API_KEY/SECRET/URL` | Video darslar |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | AI uy vazifasi |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | IELTS Writing AI baholash (apps/exams) |
 
 To'liq namuna: `.env.prod.example` (prod), `.env.example` (dev).
 

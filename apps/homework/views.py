@@ -83,7 +83,7 @@ class AssignmentFileView(APIView):
 
 
 class SubmitView(APIView):
-    """O'quvchi faylini yuklaydi — AI tekshiruv fonda boshlanadi."""
+    """O'quvchi faylini yuklaydi — topshiriq o'qituvchiga baholash uchun tushadi."""
 
     permission_classes = [RequirePerm('homework.submit')]
     parser_classes = [MultiPartParser, FormParser]
@@ -93,13 +93,12 @@ class SubmitView(APIView):
             student=request.user,
             assignment_id=assignment_id,
             upload=request.FILES.get('file'),
-            feedback_language=request.LANGUAGE_CODE,
         )
         return Response(data, status=201)
 
 
 class SubmissionDetailView(APIView):
-    """GET — natija (polling: status checking -> done/error)."""
+    """GET — topshiriq va (o'qituvchi tasdiqlagach) natija."""
 
     permission_classes = [RequirePerm('homework.view')]
 
@@ -118,6 +117,8 @@ class SubmissionFileView(APIView):
 
 
 class RecheckView(APIView):
+    """AI tekshiruv olib tashlangan — eski mijozlar uchun faqat tushunarli xato qaytaradi."""
+
     permission_classes = [RequirePerm('homework.assign')]
 
     def post(self, request, submission_id):
@@ -125,8 +126,8 @@ class RecheckView(APIView):
 
 
 class SubmissionReviewView(APIView):
-    """O'qituvchi AI natijasini ko'rib chiqadi — ball/baho/feedbackni xohlasa
-    tahrirlab, tasdiqlaydi. Shundan keyingina o'quvchi natijani ko'radi."""
+    """O'qituvchi topshiriqni baholaydi: `overall_score` (0-100, shart), ixtiyoriy
+    `grade` va `result` (izoh). Shundan keyingina o'quvchi natijani ko'radi."""
 
     permission_classes = [RequirePerm('homework.assign')]
 

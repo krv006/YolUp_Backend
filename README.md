@@ -25,7 +25,7 @@ rozilikka asoslangan ota-ona paneli. O'zbekiston bozori uchun.
 | `apps/live` | LiveKit xona tokeni + avtomatik davomat, diqqat tekshiruvi, fokus jurnali |
 | `apps/chat` | Telegram uslubidagi chat: kurs guruhlari + o'qituvchi↔o'quvchi direct (so'rov/block) |
 | `apps/board` | Jonli dars doskasi: chizish, matn/formula, o'chirish sababi, PDF → chat |
-| `apps/homework` | AI uy vazifasi (Gemini): vazifa berish, fayl topshirish, savolma-savol o'zbekcha baholash |
+| `apps/homework` | Uy vazifasi: vazifa berish, fayl topshirish, o'qituvchi baholashi |
 | `apps/core` | UUID/timestamp baza modellari, RBAC (`permissions.py`), audit log |
 
 ## Frontend integratsiyasi (alohida loyiha uchun shartnoma)

@@ -1,10 +1,15 @@
-"""Uy vazifasi modellari (AI-home-checker integratsiyasi).
+"""Uy vazifasi modellari.
 
 Oqim:
   - O'qituvchi kursga vazifa (Assignment) beradi.
   - O'quvchi faylini yuklaydi (PDF/rasm/DOCX yoki Speaking uchun audio).
-  - Gemini savolma-savol tekshiradi (apps/homework/ai.py) va JSON natija
-    Submission.result ga yoziladi — bola, o'qituvchi va ota-ona ko'radi.
+  - Topshiriq `pending_review` holatida o'qituvchiga tushadi; o'qituvchi ball
+    (va ixtiyoriy izoh) qo'yib tasdiqlaydi — shundan keyin natija o'quvchi va
+    ota-onaga ko'rinadi.
+
+AI (Gemini) tekshiruv olib tashlangan (2026-10): `Submission.ai_*`, `check_attempts`,
+`feedback_language`, `Assignment.extra_instructions` maydonlari eski ma'lumotlarni
+saqlash uchun qoldirilgan, yangi topshiriqlarda ishlatilmaydi.
 """
 from django.conf import settings
 from django.db.models import (

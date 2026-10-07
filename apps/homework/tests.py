@@ -16,7 +16,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import ai
+from . import rules
 from .models import Submission
 
 FAKE_RESULT = {
@@ -55,7 +55,6 @@ def pdf_upload(name='vazifa.pdf'):
     return SimpleUploadedFile(name, b'%PDF-1.4 fake homework', content_type='application/pdf')
 
 
-@override_settings(HOMEWORK_CHECK_ASYNC=False)
 class HomeworkTests(TestCase):
     def setUp(self):
         self.teacher = make('t1', User.Role.TEACHER)
@@ -198,37 +197,22 @@ class HomeworkTests(TestCase):
         self.assertTrue(by_id[str(eng.id)]['is_language_subject'])
         self.assertFalse(by_id[str(self.course.id)]['is_language_subject'])
 
-    # ── topshirish + AI ──
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_submit_runs_check_and_saves_result(self, mock_grade):
+    # ── topshirish ──
+    def test_submit_goes_straight_to_the_teacher_without_any_ai(self):
         a_id = self.create_assignment().data['id']
-        r = self.api(self.student).post(
-            f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
-        )
+        with patch('google.genai.Client', side_effect=AssertionError('Gemini chaqirilmasligi kerak')):
+            r = self.api(self.student).post(
+                f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
+            )
         self.assertEqual(r.status_code, 201)
-        # AI tekshirdi, lekin o'qituvchi hali tasdiqlamagan — o'quvchiga
-        # ball/baho hali ko'rsatilmaydi
+        # topshiriq darhol o'qituvchi baholashini kutadi; o'quvchiga ball ko'rsatilmaydi
         self.assertEqual(r.data['status'], 'pending_review')
         self.assertIsNone(r.data['overall_score'])
         self.assertEqual(r.data['grade'], '')
-        # AI'ga fan konteksti to'g'ri uzatilgan
-        _, kwargs = mock_grade.call_args
-        self.assertEqual(kwargs['subject_text'], 'math')
-        # natija bazada (AI taklifi sifatida) to'liq saqlangan
         sub = Submission.objects.get(pk=r.data['id'])
-        self.assertEqual(sub.ai_overall_score, 78)
-        self.assertEqual(sub.overall_score, 78)  # dastlab AI'nikidan nusxa
-        self.assertEqual(sub.result['questions'][0]['score'], 100)
-
-    @patch('apps.homework.services.ai.grade_file', side_effect=ai.HomeworkAIError('kvota tugadi'))
-    def test_ai_error_sets_error_status(self, _):
-        a_id = self.create_assignment().data['id']
-        r = self.api(self.student).post(
-            f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
-        )
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.data['status'], 'error')
-        self.assertIn('kvota', r.data['error'])
+        self.assertIsNone(sub.overall_score)
+        self.assertIsNone(sub.ai_result)
+        self.assertIsNone(sub.result)
 
     def test_stranger_cannot_submit(self):
         a_id = self.create_assignment().data['id']
@@ -254,8 +238,7 @@ class HomeworkTests(TestCase):
         self.assertEqual(r.status_code, 400)
 
     # ── ko'rish huquqlari ──
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_view_permissions(self, _):
+    def test_view_permissions(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -271,8 +254,7 @@ class HomeworkTests(TestCase):
             r = self.api(user).get(f'/api/v1/homework/submissions/{sub_id}/')
             self.assertEqual(r.status_code, 403, user.username)
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_pending_review_hidden_from_student_visible_to_teacher(self, _):
+    def test_pending_review_hidden_from_student_visible_to_teacher(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -285,23 +267,24 @@ class HomeworkTests(TestCase):
             self.assertIsNone(r.data['overall_score'])
             self.assertIsNone(r.data['result'])
 
-        # O'qituvchi AI'ning taklifini darhol ko'radi
+        # O'qituvchi topshiriqni (hali ballsiz) ko'radi
         r = self.api(self.teacher).get(f'/api/v1/homework/submissions/{sub_id}/')
-        self.assertEqual(r.data['overall_score'], 78)
-        self.assertEqual(r.data['ai_overall_score'], 78)
+        self.assertEqual(r.data['status'], 'pending_review')
+        self.assertIsNone(r.data['overall_score'])
         self.assertIn('focus', r.data)
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_teacher_approves_ai_result_as_is(self, _):
+    def test_teacher_scores_and_approves(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
         ).data['id']
 
-        r = self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/')
+        r = self.api(self.teacher).post(
+            f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 78}, format='json')
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['status'], 'done')
         self.assertEqual(r.data['overall_score'], 78)
+        self.assertEqual(r.data['grade'], 'Yaxshi')  # baho yorlig'i ballga qarab qo'yiladi
         self.assertEqual(r.data['reviewed_by'], self.teacher.username)
         self.assertIsNotNone(r.data['reviewed_at'])
 
@@ -309,10 +292,19 @@ class HomeworkTests(TestCase):
         r = self.api(self.student).get(f'/api/v1/homework/submissions/{sub_id}/')
         self.assertEqual(r.data['status'], 'done')
         self.assertEqual(r.data['overall_score'], 78)
-        self.assertEqual(r.data['result']['overall_score'], 78)
+        self.assertEqual(r.data['grade'], 'Yaxshi')
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_teacher_overrides_score_and_feedback(self, _):
+    def test_review_without_a_score_is_rejected(self):
+        a_id = self.create_assignment().data['id']
+        sub_id = self.api(self.student).post(
+            f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
+        ).data['id']
+        r = self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/', {}, format='json')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('overall_score', r.json()['error']['details'])
+        self.assertEqual(Submission.objects.get().status, Submission.Status.PENDING_REVIEW)
+
+    def test_teacher_adds_feedback_with_the_score(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -329,16 +321,12 @@ class HomeworkTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data['overall_score'], 90)
         self.assertEqual(r.data['grade'], "A'lo")
-        # AI'ning asl (o'zgarmas) natijasi audit sifatida saqlanib qoladi
-        self.assertEqual(r.data['ai_overall_score'], 78)
 
         sub = Submission.objects.get(pk=sub_id)
         self.assertEqual(sub.overall_score, 90)
         self.assertEqual(sub.result['summary']['strengths'], ["O'qituvchining o'z izohi"])
-        self.assertEqual(sub.ai_result['summary']['strengths'], FAKE_RESULT['summary']['strengths'])
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_review_requires_own_teacher(self, _):
+    def test_review_requires_own_teacher(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -349,14 +337,14 @@ class HomeworkTests(TestCase):
         r = self.api(self.other_teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/')
         self.assertEqual(r.status_code, 403)
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_approved_result_can_be_corrected_by_the_teacher(self, _):
+    def test_approved_result_can_be_corrected_by_the_teacher(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
         ).data['id']
 
-        self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/')
+        self.api(self.teacher).post(
+            f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 70}, format='json')
         r = self.api(self.teacher).post(
             f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 91}, format='json')
         self.assertEqual(r.status_code, 200)
@@ -396,8 +384,7 @@ class HomeworkTests(TestCase):
         )
         self.assertEqual(r.status_code, 403)
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_assignment_detail_scopes_submissions(self, _):
+    def test_assignment_detail_scopes_submissions(self):
         a_id = self.create_assignment().data['id']
         self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -410,8 +397,7 @@ class HomeworkTests(TestCase):
         self.assertEqual(len(r.data['submissions']), 1)
         self.assertEqual(r.data['submissions'][0]['student_id'], str(self.student.id))
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_recheck_teacher_only(self, mock_grade):
+    def test_recheck_no_longer_exists_but_answers_clearly(self):
         a_id = self.create_assignment().data['id']
         sub_id = self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -419,8 +405,8 @@ class HomeworkTests(TestCase):
         r = self.api(self.student).post(f'/api/v1/homework/submissions/{sub_id}/recheck/')
         self.assertEqual(r.status_code, 403)
         r = self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/recheck/')
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(mock_grade.call_count, 2)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("AI tekshiruv o'chirilgan", r.json()['error']['details']['detail'])
 
     # ── v2: rich matn, biriktirilgan fayl, muddat, statistika, o'chirish ──
     def test_body_html_is_sanitized(self):
@@ -454,8 +440,7 @@ class HomeworkTests(TestCase):
         }, format='multipart')
         self.assertEqual(r.status_code, 400)
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_late_submission_flagged(self, _):
+    def test_late_submission_flagged(self):
         r = self.create_assignment(due_at='2020-01-01T10:00')
         a_id = r.data['id']
         sub = self.api(self.student).post(
@@ -463,8 +448,7 @@ class HomeworkTests(TestCase):
         )
         self.assertTrue(sub.data['is_late'])
 
-    @patch('apps.homework.services.ai.grade_file', return_value=FAKE_RESULT)
-    def test_teacher_stats(self, _):
+    def test_teacher_stats(self):
         a_id = self.create_assignment().data['id']
         self.api(self.student).post(
             f'/api/v1/homework/assignments/{a_id}/submit/', {'file': pdf_upload()},
@@ -472,6 +456,11 @@ class HomeworkTests(TestCase):
         r = self.api(self.teacher).get(f'/api/v1/homework/assignments/{a_id}/')
         self.assertEqual(r.data['stats']['students_count'], 1)
         self.assertEqual(r.data['stats']['submitted_count'], 1)
+        self.assertIsNone(r.data['stats']['avg_score'])  # hali baholanmagan
+        sub_id = r.data['submissions'][0]['id']
+        self.api(self.teacher).post(
+            f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 78}, format='json')
+        r = self.api(self.teacher).get(f'/api/v1/homework/assignments/{a_id}/')
         self.assertEqual(r.data['stats']['avg_score'], 78)
 
     def test_delete_assignment_teacher_only(self):
@@ -495,7 +484,6 @@ class HomeworkTests(TestCase):
         self.assertIsNone(r.data[0]['my_submission'])
 
 
-@override_settings(HOMEWORK_CHECK_ASYNC=False)
 class DeadlineReminderTests(TestCase):
     """Vazifa berilganda va deadline yaqinlashganda (yarim vaqt / 1 soat)
     bildirishnoma yuborilishi — faqat hali topshirmagan o'quvchilarga,
@@ -585,7 +573,6 @@ class DeadlineReminderTests(TestCase):
         self.assertEqual(sent, {'halfway': 0, '1h': 0})
 
 
-@override_settings(HOMEWORK_CHECK_ASYNC=False)
 class ProgressReportTests(TestCase):
     """Uspevaemost: fan bo'yicha bajarilish foizi + o'rtacha ball,
     faqat DONE topshiriqlar hisoblanadi, qayta yuklansa — eng so'nggisi."""
@@ -675,35 +662,14 @@ class ProgressReportTests(TestCase):
         self.assertEqual(r.status_code, 400)
 
 
-class AiUnitTests(TestCase):
-    def test_detect_profile(self):
-        self.assertEqual(ai.detect_profile('math'), ('math', '', ''))
-        self.assertEqual(ai.detect_profile('physics'), ('physics', '', ''))
-        self.assertEqual(ai.detect_profile('english'), ('general', '', 'english'))
-        self.assertEqual(ai.detect_profile('geography'), ('general', 'Geography', ''))
-        self.assertEqual(ai.detect_profile('other'), ('general', '', ''))
-
+class RulesTests(TestCase):
     def test_grade_label(self):
-        self.assertEqual(ai.grade_label(95), "A'lo")
-        self.assertEqual(ai.grade_label(78), 'Yaxshi')
-        self.assertEqual(ai.grade_label(10), 'Jiddiy yaxshilash kerak')
+        self.assertEqual(rules.grade_label(95), "A'lo")
+        self.assertEqual(rules.grade_label(78), 'Yaxshi')
+        self.assertEqual(rules.grade_label(10), 'Jiddiy yaxshilash kerak')
+        self.assertEqual(rules.grade_label(None), '')
 
-    def test_parse_valid_json_with_fences(self):
-        import json
-        raw = '```json\n' + json.dumps(FAKE_RESULT) + '\n```'
-        self.assertEqual(ai.parse_and_validate_json(raw)['overall_score'], 78)
-
-    def test_parse_rejects_missing_keys(self):
-        with self.assertRaises(ai.InvalidModelResponseError):
-            ai.parse_and_validate_json('{"overall_score": 5}')
-        with self.assertRaises(ai.InvalidModelResponseError):
-            ai.parse_and_validate_json('bu json emas')
-
-    def test_system_prompt_modes(self):
-        p = ai.build_system_prompt('math')
-        self.assertIn('Mathematics teacher', p)
-        self.assertIn('UZBEK', p)
-        p = ai.build_system_prompt('general', language_key='english', skill_key='speaking')
-        self.assertIn('AUDIO RECORDING', p)
-        p = ai.build_system_prompt('general', custom_name='Geografiya')
-        self.assertIn('Geografiya', p)
+    def test_file_rules(self):
+        self.assertIn('.pdf', rules.ALLOWED_EXTENSIONS)
+        self.assertTrue(rules.AUDIO_EXTENSIONS <= rules.ALLOWED_EXTENSIONS)
+        self.assertEqual(rules.SKILL_KEYS, ('writing', 'reading', 'listening', 'speaking'))
