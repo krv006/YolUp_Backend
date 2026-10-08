@@ -254,6 +254,17 @@ HOMEWORK_AI_INTERNAL_KEY = os.getenv('HOMEWORK_AI_INTERNAL_KEY', '')
 HOMEWORK_AI_TIMEOUT = 30                                          # soniya (bitta HTTP so'rov)
 HOMEWORK_AI_GIVE_UP_MINUTES = 15                                  # shundan keyin qo'lda baholashga o'tadi
 
+# Tashqi Test-creator xizmati (RJalol/Test-creator): o'qituvchi materialidan AI bilan test yaratadi.
+# Alohida Docker xizmati (`deploy/test-creator/`), tashqariga ochilmaydi. TEST_CREATOR_URL bo'sh bo'lsa
+# "AI bilan test yaratish" o'chiq (endpoint 400 qaytaradi), platformaning qolgan qismiga ta'sir qilmaydi.
+TEST_CREATOR_URL = os.getenv('TEST_CREATOR_URL', '')                      # masalan http://tc-api:8000/api/v1
+TEST_CREATOR_EMAIL = os.getenv('TEST_CREATOR_EMAIL', '')                  # xizmat hisobi (platforma nomidan kiradi)
+TEST_CREATOR_PASSWORD = os.getenv('TEST_CREATOR_PASSWORD', '')
+TEST_CREATOR_ORG_NAME = os.getenv('TEST_CREATOR_ORG_NAME', 'Edu Platform')
+TEST_CREATOR_TIMEOUT = 30                                                  # soniya (oddiy HTTP so'rov)
+TEST_CREATOR_GENERATE_TIMEOUT = 600                                        # soniya (savollarni yaratish — uzoq)
+TEST_CREATOR_GIVE_UP_MINUTES = 45                                          # shundan keyin ish "xato" bo'ladi
+
 # Web Push (ilova/tab yopiq bo'lganda ham bildirishnoma) — apps/notifications.
 # DIQQAT: pastdagi kalitlar faqat DEV/TEST uchun (bir marta generatsiya
 # qilingan, haqiqiy foydalanuvchiga hech qachon push yuborilmagan juftlik).

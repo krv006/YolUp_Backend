@@ -30,3 +30,7 @@ def homework_task_path(instance, filename: str) -> str:
 
 def certificate_path(instance, filename: str) -> str:
     return _dated('certificates', filename)
+
+
+def ai_quiz_source_path(instance, filename: str) -> str:
+    return _dated('ai_quiz_sources', filename)

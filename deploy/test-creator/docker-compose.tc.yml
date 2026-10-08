@@ -1,13 +1,15 @@
 # Test-creator (RJalol/Test-creator) — standartga asoslangan savollar banki va test generatori.
-# ALOHIDA xizmat: asosiy docker-compose.prod.yml'dan mustaqil (u ishlamasa platforma ishlayveradi).
+# ALOHIDA, ICHKI xizmat: asosiy docker-compose.prod.yml'dan mustaqil (u ishlamasa platforma ishlayveradi).
+# Foydalanuvchi unga hech qachon to'g'ridan-to'g'ri kirmaydi — o'qituvchi platformaning o'zidagi
+# "AI bilan test yaratish" tugmasini bosadi, bizning backend (`apps/quizzes/tc_client.py`) uni
+# ichki tarmoq orqali chaqiradi:  http://tc-api:8000/api/v1
 #
 # Ishga tushirish (serverda, /var/www/edu_platform ichida):
-#   docker compose -f deploy/test-creator/docker-compose.tc.yml \
-#       --env-file /var/www/test-creator/.env up -d --build
-# To'liq qadamlar (DNS, patch, .env): deploy/test-creator/README.md
+#   docker compose -f deploy/test-creator/docker-compose.tc.yml #       --env-file /var/www/test-creator/.env up -d --build
+# To'liq qadamlar (patch, .env, platformaga ulash): deploy/test-creator/README.md
 #
-# Tashqariga PORT OCHILMAYDI (baza, Redis, API, frontend) — hammasiga faqat bizning Caddy
-# `edu_platform_default` tarmog'i orqali kiradi: https://${TC_DOMAIN}  (/api/* -> tc-api, qolgani -> tc-frontend).
+# Tashqariga PORT OCHILMAYDI va Caddy'da marshrut YO'Q; faqat `edu_platform_default` tarmog'idagi
+# bizning backend/cron konteynerlari `tc-api` nomi bilan ko'radi. Frontend ham yig'ilmaydi (kerak emas).
 name: test_creator
 
 x-tc-backend: &tc-backend
@@ -21,7 +23,7 @@ x-tc-backend: &tc-backend
     ENVIRONMENT: production
     DEBUG: "false"
     AI_DEFAULT_PROVIDER: gemini
-    CORS_ORIGINS: '["https://${TC_DOMAIN:-tests.thesofmebel.uz}"]'
+    CORS_ORIGINS: '[]'
   volumes:
     - tc_storage:/app/storage
   depends_on:
@@ -78,33 +80,6 @@ services:
   tc-worker:
     <<: *tc-backend
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
-
-  tc-frontend:
-    build:
-      context: ${TC_SRC:-/var/www/test-creator}/frontend
-      dockerfile_inline: |
-        FROM node:20-slim
-        WORKDIR /app
-        COPY . .
-        # Kompyuterdan nusxalangan node_modules/.next bo'lsa, ular Linux uchun yaroqsiz
-        RUN rm -rf node_modules .next && npm install
-        # NEXT_PUBLIC_* qiymat yig'ish paytida kodga "pishiriladi" (brauzer shu manzilga murojaat qiladi)
-        ARG NEXT_PUBLIC_API_URL
-        ENV NEXT_PUBLIC_API_URL=$$NEXT_PUBLIC_API_URL
-        RUN npm run build
-        ENV NODE_ENV=production
-        EXPOSE 3000
-        CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]
-      args:
-        NEXT_PUBLIC_API_URL: https://${TC_DOMAIN:-tests.thesofmebel.uz}/api/v1
-    restart: unless-stopped
-    depends_on:
-      - tc-api
-    networks:
-      default: {}
-      edu:
-        aliases:
-          - tc-frontend
 
 volumes:
   tc_pgdata:

@@ -345,13 +345,23 @@ class DeployFilesTests(SimpleTestCase):
     def read(self, rel):
         return (self.root / rel).read_text(encoding='utf-8')
 
-    def test_caddy_routes_the_test_creator_domain_and_hides_api_docs(self):
+    def test_test_creator_is_internal_only(self):
         caddy = self.read('deploy/Caddyfile')
-        block = caddy[caddy.index('{$TC_DOMAIN:tests.thesofmebel.uz} {'):]
-        self.assertLess(block.index('@apidocs'), block.index('handle /api/*'))
-        self.assertIn('respond 404', block[:block.index('handle /api/*')])
-        self.assertIn('reverse_proxy tc-api:8000', block)
-        self.assertLess(block.index('reverse_proxy tc-api:8000'), block.index('reverse_proxy tc-frontend:3000'))
+        self.assertNotIn('tc-api', caddy)
+        self.assertNotIn('tc-frontend', caddy)
+        self.assertNotIn('TC_DOMAIN', caddy)
+        compose = self.read('deploy/test-creator/docker-compose.tc.yml')
+        self.assertNotIn('tc-frontend:', compose)
+        self.assertIn('- tc-api', compose)  # bizning backend shu nom bilan ko'radi
+
+    def test_ai_quiz_sources_are_not_publicly_served(self):
+        caddy = self.read('deploy/Caddyfile')
+        self.assertLess(caddy.index('handle /media/ai_quiz_sources/*'), caddy.index('handle /media/* {'))
+
+    def test_cron_runs_the_ai_quiz_sync_in_its_own_loop(self):
+        compose = self.read('docker-compose.prod.yml')
+        self.assertIn('python manage.py sync_ai_quizzes', compose)
+        self.assertLess(compose.index('sync_ai_quizzes'), compose.index('sync_homework_ai'))
 
     def test_caddy_mounts_the_whole_deploy_folder(self):
         compose = self.read('docker-compose.prod.yml')

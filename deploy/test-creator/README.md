@@ -1,18 +1,20 @@
-# Test-creator ni serverga ulash (savollar banki va test generatori)
+# Test-creator — platformaga ulangan "AI bilan test yaratish"
 
-`Test-creator` (RJalol) — **alohida ilova** (o'z sayti, bazasi va navbati). O'qituvchi o'quv material yuklaydi,
-tizim bilimlar xaritasini tuzadi va **UZBMB, IELTS Academic, Digital SAT** standartlari bo'yicha savollar bankidan
-test yig'adi. Tayyor testni Word/Excel/JSON/PDF ga eksport qiladi, **JSON** ni bizning "Testlar → Import"ga yuklash mumkin.
+`Test-creator` (RJalol) — material (PDF/Word/PowerPoint/Excel/matn) dan **UZBMB, IELTS Academic, Digital SAT**
+standartlari bo'yicha savollar yaratadigan xizmat. U **ichki xizmat**: alohida sayti, domeni, DNS yozuvi YO'Q.
+O'qituvchi platformaning o'zida (login bitta) materialni yuklaydi, bizning backend Test-creator'ni ichkaridan chaqiradi
+va natija **qoralama test** bo'lib saqlanadi (`POST /api/v1/quizzes/ai-generate/`, `BACKEND_AI_QUIZ.md`).
 
-> Bu qadamlar hali **serverda sinalmagan**; birinchi ishga tushirishda kichik tuzatish kerak bo'lsa, xato matnini yuboring.
-> Bizning moslashtirishlarimiz (`apply_patch.py`) uning kodiga tegadi: **Gemini provayderi** (Test-creator'da faqat
-> mock va Claude bor) va **yopiq ro'yxatdan o'tish** (aks holda ochiq saytda hamma Gemini kalitingizni sarflay oladi).
+```
+o'qituvchi ──► edu backend ──(ichki tarmoq)──► tc-api ──► tc-worker (Celery) ──► Gemini
+                  │                              └── tc-db (pgvector), tc-redis
+                  └── cron: sync_ai_quizzes (har 30 s ishni bir qadam suradi)
+```
 
-## 0. DNS (birinchi!)
-
-Domen boshqaruv panelida A yozuv: **`tests.thesofmebel.uz` → `75.119.154.71`**. U ishlamaguncha sayt ochilmaydi
-(sertifikat olinmaydi). Tekshirish: `nslookup tests.thesofmebel.uz` serverning IP'sini ko'rsatishi kerak.
-Boshqa domen xohlasangiz, `deploy/Caddyfile` va `.env` dagi `TC_DOMAIN` ni o'zgartiring.
+> Docker qismi hali **serverda sinalmagan** (lokal Docker yo'q); backend qismi testlar bilan qoplangan. Birinchi
+> ishga tushirishda xato chiqsa, matnini yuboring.
+> Moslashtirishlar (`apply_patch.py`): **Gemini provayderi** (Test-creator'da faqat mock va Claude bor) va **yopiq
+> ro'yxatdan o'tish** (faqat xizmat hisobi emaili).
 
 ## 1. Kodni serverga olish (yopiq repo, token serverga yozilmaydi)
 
@@ -31,73 +33,77 @@ cd /var/www/edu_platform && git pull && python3 deploy/test-creator/apply_patch.
 ```
 
 Chiqishi: `gemini_provider.py: nusxalandi`, `ai_router.py: qo'llandi`, `requirements.txt: google-genai qo'shildi`,
-`auth.py: qo'llandi`. Qayta ishga tushirsa takrorlamaydi (`allaqachon qo'llangan`). `XATO: ... topilmadi` chiqsa,
-repo versiyasi o'zgargan — shu xabarni yuboring.
+`auth.py: qo'llandi`. Qayta ishga tushirsa takrorlamaydi. `XATO: ... topilmadi` chiqsa, repo versiyasi o'zgargan —
+shu xabarni yuboring.
 
-## 3. Sozlama fayli — `/var/www/test-creator/.env`
+## 3. Test-creator sozlamasi — `/var/www/test-creator/.env`
+
+Xizmat hisobi (platforma nomidan kiradigan) emaili va parolini o'zingiz o'ylab toping — ular **ikkala `.env`** ga
+yoziladi (3 va 5-qadam). Email haqiqiy bo'lishi shart emas.
 
 ```bash
+SVC_PASS=$(openssl rand -hex 16)
 cat > /var/www/test-creator/.env <<EOF
 SECRET_KEY=$(openssl rand -hex 32)
 TC_DB_PASSWORD=$(openssl rand -hex 24)
 GEMINI_API_KEY=KALITNI_SHU_YERGA_QOYING
-REGISTRATION_ALLOWED_EMAILS=o_qituvchi@example.com
+REGISTRATION_ALLOWED_EMAILS=platforma@edu.thesofmebel.uz
 EOF
 chmod 600 /var/www/test-creator/.env
+echo "TEST_CREATOR_PASSWORD (5-qadamda kerak): $SVC_PASS"
 ```
 
-- `REGISTRATION_ALLOWED_EMAILS` — **ro'yxatdan o'ta oladigan** emaillar (vergul bilan). Boshqa hech kim hisob ocholmaydi.
-  Haqiqiy o'qituvchi emaillarini yozing.
-- Gemini kalitini (ekranda ko'rinmasdan) qo'yish:
+Gemini kalitini (ekranda ko'rinmasdan) qo'yish:
 
 ```bash
 read -rsp "Gemini kaliti: " K && echo && sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=$K|" /var/www/test-creator/.env && unset K && echo "kalit yangilandi"
 ```
 
-## 4. Ishga tushirish
+## 4. Test-creator'ni ishga tushirish
 
 ```bash
 cd /var/www/edu_platform && docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env up -d --build
 ```
 
-Birinchi yig'ish 5-10 daqiqa (frontend `npm install` va `next build`). Holat:
+Birinchi yig'ish 3-5 daqiqa. Holat: `docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env ps` —
+`tc-api` `healthy` (birinchi marta 1-2 daqiqa: migratsiya va standartlarni yuklaydi), `tc-worker`, `tc-db`, `tc-redis` `Up`.
+
+## 5. Platformaga ulash — `/var/www/edu_platform/.env`
+
+Shu fayl oxiriga qo'shing (parol — 3-qadamdagi `SVC_PASS`):
 
 ```bash
-cd /var/www/edu_platform && docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env ps
+TEST_CREATOR_URL=http://tc-api:8000/api/v1
+TEST_CREATOR_EMAIL=platforma@edu.thesofmebel.uz
+TEST_CREATOR_PASSWORD=3-QADAMDA_KOʻRSATILGAN_PAROL
 ```
 
-`tc-api` `healthy` (birinchi marta 1-2 daqiqa: migratsiya va standartlarni yuklaydi), `tc-worker`, `tc-frontend`, `tc-db`, `tc-redis` `Up`.
-
-## 5. Caddy'ni qayta yaratish (yangi sayt va papka ulanishi)
+Keyin platformani yangilang (Caddy qayta yaratilmaydi, saytlar uzilmaydi — faqat backend/cron qayta ishga tushadi):
 
 ```bash
-cd /var/www/edu_platform && docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
+cd /var/www/edu_platform && git pull && docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Barcha saytlar 5-10 soniya uziladi (sertifikatlar saqlanadi). Keyin shu buyruq bilan holatni tekshiring:
+Xizmat hisobi **birinchi so'rovda o'zi yaratiladi** (qo'lda ro'yxatdan o'tish shart emas). Caddy'ga o'zgartirish
+kerak emas — ichki xizmatga tashqaridan kirib bo'lmaydi.
 
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://tests.thesofmebel.uz/
-```
+## 6. Tekshirish
 
-`200` chiqishi kerak. **Bu qadamdan keyin** Caddy sozlamasi `git pull` + `caddy reload` bilan ham yangilanadi (endi qayta yaratish shart emas).
-
-## 6. Ishlatish
-
-1. https://tests.thesofmebel.uz → "Ro'yxatdan o'tish" (faqat 3-qadamdagi emaillar) → kirish.
-2. Material yuklash (PDF/DOCX/PPTX/TXT) → standartni tanlash (UZBMB, IELTS Academic, Digital SAT) → test yig'ish.
-3. Tayyor testni **JSON, o'qituvchi rejimida** (`mode=teacher`, javoblar bilan) eksport qiling.
-4. Bizning saytda **Testlar → Import** ga shu `.json` ni yuklang. Test javoblari bilan, **qoralama** sifatida saqlanadi; tekshirib e'lon qilasiz.
-   (Word/Excel eksporti ham ishlaydi, lekin JSON eng aniq.)
-
-Yangi o'qituvchi qo'shish: `.env` dagi `REGISTRATION_ALLOWED_EMAILS` ga emailini qo'shing va
-`docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env up -d --force-recreate tc-api tc-worker`.
+1. Tizimga o'qituvchi sifatida kiring, Swagger'da (`/api/docs/`) `POST /quizzes/ai-generate/`: `file` (kichik PDF yoki Word),
+   `topic`, `standard=uzbmb`, `question_count=5`, `course=<guruh id>`.
+2. `GET /quizzes/ai-generate/<id>/` — `status`: `queued` → `processing` → `generating` → `done` (odatda 1-5 daqiqa).
+3. `done` bo'lganda `quiz` — qoralama testning id'si; unda savollar, `GET /quizzes/<id>/`.
+4. Bo'lmasa: `docker compose -f docker-compose.prod.yml logs --tail 50 cron` va `... logs --tail 50 tc-api tc-worker`.
 
 ## Bilib qo'ying
 
-- **Sifat:** savollarni Gemini yozadi (mock emas), lekin Test-creator o'z "sifat bali" tizimiga ega: 90+ avtomatik tasdiqlanadi,
-  70-89 qo'lda ko'rib chiqishga tushadi. Baribir har bir testni o'qituvchi ko'zdan kechirsin.
-- **Maxfiylik:** yuklangan material va savollar Test-creator bazasida (`tc_pgdata`) saqlanadi va Gemini'ga (Google) yuboriladi.
-  Bolalarning shaxsiy ma'lumotini yuklamang (faqat o'quv material).
+- **Material kerak:** Test-creator mavzu nomidan emas, yuklangan materialdan savol yaratadi (matn asosida). Skanerlangan
+  (rasm) PDF o'qilmaydi — ish `failed` bo'ladi va sababi ko'rsatiladi.
+- **Sifat:** savollarni Gemini yozadi, Test-creator o'z sifat tekshiruvidan o'tkazadi; baribir test **qoralama** bo'lib
+  tushadi — o'qituvchi ko'rib chiqib e'lon qiladi.
+- **Maxfiylik:** material va savollar Test-creator bazasida (`tc_pgdata`) saqlanadi va Gemini'ga (Google) yuboriladi.
+  Bolalarning shaxsiy ma'lumotini yuklamang (faqat o'quv material). Platformadagi nusxa ish tugagach o'chiriladi.
+- **Cheklov:** o'qituvchiga bir vaqtda 3 ta faol ish, kuniga 10 ta; fayl ≤ 20 MB; 5–60 ta savol.
 - **Zaxira nusxa:** `tc_pgdata` va `tc_storage` volume'larini zaxiraga qo'shing.
-- **Xavfsizlik:** tashqariga faqat sayt ochiq (API hujjatlari `/docs` yopilgan); baza va Redis portlari ochilmagan.
+- **O'chirish:** `.env` dagi `TEST_CREATOR_URL` ni bo'sh qoldirsangiz AI test yaratish o'chadi (endpoint `400` qaytaradi),
+  qolgan platformaga ta'sir qilmaydi.

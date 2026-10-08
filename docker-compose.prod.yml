@@ -118,6 +118,10 @@ services:
                python manage.py close_stale_voice_rooms;
                sleep 300;
              done) &
+             (while true; do
+               python manage.py sync_ai_quizzes;
+               sleep 30;
+             done) &
              while true; do
                python manage.py send_lesson_reminders;
                python manage.py sync_homework_ai;

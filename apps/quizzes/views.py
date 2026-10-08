@@ -14,9 +14,11 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
-from . import selectors, services
-from .models import Quiz
+from . import ai_jobs, selectors, services
+from .models import AiQuizJob, Quiz
 from .serializers import (
+    AiQuizCreateSerializer,
+    AiQuizJobSerializer,
     GroupReadSerializer,
     ImportSaveSerializer,
     AttemptListSerializer,
@@ -106,6 +108,44 @@ class QuizImportView(APIView):
     def post(self, request):
         result = services.import_quiz_file(upload=request.FILES.get('file'))
         return _import_response(request, result)
+
+
+class QuizAiGenerateView(APIView):
+    """O'qituvchi material (PDF/Word/PowerPoint/Excel/matn) yuklaydi — tashqi Test-creator xizmati
+    uni tahlil qilib standart (IELTS/SAT/Milliy) bo'yicha savollar yaratadi. Ish fonda bajariladi:
+    javob darhol `202` (+ ish id'si), tayyor bo'lgach `GET .../{id}/` da `quiz` (qoralama test) paydo bo'ladi."""
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def get(self, request):
+        jobs = AiQuizJob.objects.filter(teacher=request.user)[:50]
+        return Response(AiQuizJobSerializer(jobs, many=True).data)
+
+    def post(self, request):
+        serializer = AiQuizCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        job = ai_jobs.create_job(
+            teacher=request.user, upload=request.FILES.get('file'), course=data.get('course'),
+            subject=data.get('subject', ''), topic=data['topic'], title=data.get('title', ''),
+            standard=data['standard'], question_count=data['question_count'],
+        )
+        return Response(AiQuizJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+
+class QuizAiJobDetailView(APIView):
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def get(self, request, pk):
+        try:
+            job = AiQuizJob.objects.get(pk=pk, teacher=request.user)
+        except (AiQuizJob.DoesNotExist, ValueError, TypeError):
+            raise NotFound(_('Ish topilmadi.'))
+        return Response(AiQuizJobSerializer(job).data)
 
 
 class QuizGoogleDocImportView(APIView):

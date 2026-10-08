@@ -31,6 +31,7 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
 from apps.core.models import TimeStampedUUIDModel
+from apps.core.uploads import ai_quiz_source_path
 from apps.lessons.models import Course
 
 
@@ -180,3 +181,46 @@ class AnswerResponse(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.question_id} · {"to\'g\'ri" if self.is_correct else "xato"}'
+
+
+class AiQuizJob(TimeStampedUUIDModel):
+    """Materialdan AI bilan test yaratish ishi (tashqi Test-creator xizmati).
+
+    O'qituvchi fayl yuklaydi — ish `queued` bo'ladi; cron (`sync_ai_quizzes`) uni bosqichma-bosqich
+    olib boradi va oxirida natija `draft` test bo'lib saqlanadi. O'qituvchi tahrirlab e'lon qiladi.
+    """
+
+    class Status(TextChoices):
+        QUEUED = 'queued', 'Navbatda'
+        PROCESSING = 'processing', 'Material tahlil qilinmoqda'
+        GENERATING = 'generating', 'Savollar yaratilmoqda'
+        DONE = 'done', 'Tayyor'
+        FAILED = 'failed', 'Xato'
+
+    class Standard(TextChoices):
+        UZBMB = 'uzbmb', 'Milliy sertifikat (UZBMB)'
+        IELTS = 'ielts', 'IELTS Academic'
+        SAT = 'sat', 'Digital SAT'
+
+    ACTIVE_STATUSES = ('queued', 'processing', 'generating')
+
+    teacher = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='ai_quiz_jobs')
+    course = ForeignKey('lessons.Course', SET_NULL, null=True, blank=True, related_name='+')
+    subject = CharField(max_length=100, choices=Course.Subject.choices, blank=True)
+    topic = CharField(max_length=200)
+    title = CharField(max_length=200, blank=True)
+    standard = CharField(max_length=10, choices=Standard.choices)
+    question_count = PositiveIntegerField(default=20)
+    source_file = FileField(upload_to=ai_quiz_source_path, null=True, blank=True)
+    source_name = CharField(max_length=255, blank=True)
+    status = CharField(max_length=12, choices=Status.choices, default=Status.QUEUED, db_index=True)
+    error = TextField(blank=True)
+    warnings = JSONField(default=list, blank=True)
+    tc_document_id = CharField(max_length=64, blank=True)
+    quiz = ForeignKey('quizzes.Quiz', SET_NULL, null=True, blank=True, related_name='+')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.topic} [{self.status}]'

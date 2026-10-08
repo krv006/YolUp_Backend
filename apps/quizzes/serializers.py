@@ -8,7 +8,7 @@ from rest_framework import serializers
 from apps.lessons.models import Course
 
 from . import grading
-from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
+from .models import AiQuizJob, AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
 
 T = Question.Type
 _BLANK_RE = re.compile(r'\{\{(\d+)\}\}')
@@ -434,3 +434,29 @@ class AttemptListSerializer(serializers.ModelSerializer):
     class Meta:
         model = QuizAttempt
         fields = ['id', 'quiz', 'student', 'student_name', 'score', 'max_score', 'created_at']
+
+
+# ─── AI bilan test yaratish (tashqi Test-creator) ──────────────────────────
+
+
+class AiQuizCreateSerializer(serializers.Serializer):
+    """Multipart: material fayli (`file`) + sozlamalar. Guruh (`course`) yoki fan (`subject`) shart."""
+
+    topic = serializers.CharField(max_length=200)
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
+    standard = serializers.ChoiceField(choices=AiQuizJob.Standard.choices)
+    question_count = serializers.IntegerField(min_value=1, max_value=200, default=20)
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
+    subject = serializers.ChoiceField(choices=Course.Subject.choices, required=False, allow_blank=True, default='')
+
+
+class AiQuizJobSerializer(serializers.ModelSerializer):
+    """`quiz` — tayyor bo'lganda qoralama testning id'si (`GET /quizzes/{id}/`)."""
+
+    class Meta:
+        model = AiQuizJob
+        fields = [
+            'id', 'status', 'topic', 'title', 'standard', 'question_count', 'course', 'subject',
+            'source_name', 'quiz', 'error', 'warnings', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
