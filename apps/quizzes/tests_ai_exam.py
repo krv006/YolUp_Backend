@@ -8,6 +8,7 @@ import zipfile
 from unittest.mock import MagicMock, patch
 
 import requests
+from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
@@ -467,22 +468,39 @@ class AiExamJobTests(QuizTestBase):
         data = {'topic': 'Bees', 'question_count': 10, 'course': self.course_id, **fields}
         return self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
 
-    def test_scanned_material_is_rejected_immediately_with_a_helpful_message(self):
+    def test_scanned_material_fails_in_the_background_with_a_helpful_message(self):
         scanned = SimpleUploadedFile('scan.pdf', make_pdf('tiny'), content_type='application/pdf')
         resp = self.post_raw(file=scanned)
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("matn deyarli yo'q", json.dumps(resp.json(), ensure_ascii=False))
-        self.assertEqual(AiQuizJob.objects.count(), 0)
+        self.assertEqual(resp.status_code, 202)  # so'rov faylni o'qimaydi — darhol qaytadi
+        job_id = resp.json()['id']
+        stored = AiQuizJob.objects.get(pk=job_id).source_paths
+        self.assertEqual(len(stored), 1)
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn("matn deyarli yo'q", job.error)
+        self.assertFalse(default_storage.exists(stored[0]['path']))  # fayl tozalangan
+        self.assertEqual(job.source_paths, [])
+
+    def test_request_returns_without_reading_the_files(self):
+        with patch('apps.quizzes.material_text.extract_text') as extract:
+            resp = self.post_raw(file=self.upload())
+        self.assertEqual(resp.status_code, 202)
+        extract.assert_not_called()
 
     def test_several_files_are_combined_into_one_material(self):
         files = [self.upload(f'part{i}.txt', f'Section {i} about bees. ' * 20) for i in (1, 2, 3)]
         job_id = self.post_raw(file=files, rules_text=IELTS_RULES).json()['id']
         job = AiQuizJob.objects.get(pk=job_id)
         self.assertEqual(job.source_name, 'part1.txt, part2.txt, part3.txt')
-        for i in (1, 2, 3):
-            self.assertIn(f'=== part{i}.txt ===', job.source_text)
+        stored = list(job.source_paths)
+        self.assertEqual([e['name'] for e in stored], ['part1.txt', 'part2.txt', 'part3.txt'])
         self.sync()
-        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'done')
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'done')
+        for i in (1, 2, 3):
+            self.assertIn(f'=== part{i}.txt ===', job.plan['material'])
+        self.assertTrue(all(not default_storage.exists(e['path']) for e in stored))
 
     def test_pasted_text_works_without_any_file(self):
         job_id = self.post_raw(material_text='Bees are fascinating insects. ' * 20).json()['id']

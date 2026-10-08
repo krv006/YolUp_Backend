@@ -216,7 +216,9 @@ class AiQuizJob(TimeStampedUUIDModel):
     source_name = CharField(max_length=255, blank=True)
     # AI generator materiali: yuklangan fayllar/qo'yilgan matndan olingan toza matn (bo'sh bo'lishi mumkin —
     # u holda AI mavzu va qoidalar bo'yicha matnni o'zi yozadi). Fayllarning o'zi saqlanmaydi.
-    source_text = TextField(blank=True)
+    source_text = TextField(blank=True)  # faqat qo'yilgan (paste) matn; fayllar fonda o'qiladi
+    # Yuklangan material fayllari: [{'path': saqlash yo'li, 'name': asl nomi}] — fonda matnga aylantirilib o'chiriladi
+    source_paths = JSONField(default=list, blank=True)
     # Imtihon nomi ("IELTS Academic Reading", "SAT"...) — qoidalar berilmasa AI uning rasmiy tuzilmasini o'zi eslaydi
     exam_name = CharField(max_length=120, blank=True)
     # Imtihon qoidalari (format) — fayl yoki matn; bo'sh bo'lsa oddiy variantli test

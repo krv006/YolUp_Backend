@@ -19,10 +19,12 @@ Xato bo'lsa (xizmat o'chiq, material o'qilmadi, vaqt tugadi) ish `failed` bo'lad
 """
 import io
 import logging
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -67,26 +69,29 @@ def _check_file(upload, field: str, max_mb: int) -> None:
         }})
 
 
-def _material_from(uploads: list, pasted: str) -> tuple:
-    """Yuklangan fayllar va qo'yilgan matndan bitta toza matn. Qaytaradi: (matn, fayl nomlari).
-    Fayl o'qilmasa (skanerlangan, buzuq) — darhol 400, o'qituvchi sababini ko'radi."""
+def _stash_material(uploads: list) -> list:
+    """Fayllarni tez tekshiradi (tur, hajm, soni) va vaqtincha saqlaydi. Matnni O'QIMAYDI: katta PDF'ni
+    o'qish uzoq davom etadi va so'rovni qotirib qo'yardi — u fonda (`_run_engine`) bajariladi."""
     if len(uploads) > MAX_SOURCE_FILES:
         raise ValidationError({'file': _("Bir vaqtda ko'pi bilan %(n)s ta fayl yuklash mumkin.") % {'n': MAX_SOURCE_FILES}})
     if sum(u.size for u in uploads) > MAX_SOURCE_TOTAL_MB * 1024 * 1024:
         raise ValidationError({'file': _("Fayllar umumiy hajmi %(max)s MB dan oshmasligi kerak.") % {'max': MAX_SOURCE_TOTAL_MB}})
-    named = []
     for upload in uploads:
         _check_file(upload, 'file', MAX_SOURCE_MB)
-        try:
-            named.append((upload.name, material_text.extract_text(upload.read(), upload.name)))
-        except material_text.MaterialError as exc:
-            raise ValidationError({'file': str(exc)}) from exc
-    pasted = (pasted or '').strip()
-    if len(pasted) > MAX_PASTED_MATERIAL:
-        raise ValidationError({'material_text': _("Matn juda uzun (%(max)s belgigacha).") % {'max': MAX_PASTED_MATERIAL}})
-    if pasted:
-        named.append((str(_("Qo'yilgan matn")), pasted))
-    return material_text.combine_texts(named, settings.AI_EXAM_MATERIAL_CHARS), [u.name for u in uploads]
+    stored = []
+    for upload in uploads:
+        path = default_storage.save(
+            f'ai_quiz_sources/{timezone.now():%Y/%m}/{uuid.uuid4().hex}{Path(upload.name).suffix.lower()}', upload)
+        stored.append({'path': path, 'name': upload.name})
+    return stored
+
+
+def _read_stored(entry: dict) -> str:
+    try:
+        with default_storage.open(entry['path'], 'rb') as handle:
+            return material_text.extract_text(handle.read(), entry['name'])
+    except FileNotFoundError as exc:
+        raise material_text.MaterialError(f"«{entry['name']}» fayli topilmadi. Qayta yuklang.") from exc
 
 
 def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic: str, title: str, standard: str = '',
@@ -105,7 +110,10 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
         raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan (AI kaliti sozlanmagan). Testni qo'lda yarating yoki import qiling.")})
     else:
         # Material ixtiyoriy: bo'sh bo'lsa AI mavzu va qoidalar bo'yicha matnni o'zi yozadi
-        source_text, source_names = _material_from(uploads, material_text_value)
+        pasted = (material_text_value or '').strip()
+        if len(pasted) > MAX_PASTED_MATERIAL:
+            raise ValidationError({'material_text': _("Matn juda uzun (%(max)s belgigacha).") % {'max': MAX_PASTED_MATERIAL}})
+        source_text, source_names = pasted, [u.name for u in uploads]
     if rules_upload is not None:
         _check_file(rules_upload, 'rules_file', MAX_RULES_MB)
     rules_text = (rules_text or '').strip()
@@ -133,11 +141,12 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
     if mine.filter(created_at__gte=timezone.now() - timedelta(days=1)).count() >= MAX_PER_DAY:
         raise ValidationError({'detail': _("Bir kunda %(n)s tadan ko'p AI test yaratib bo'lmaydi.") % {'n': MAX_PER_DAY}})
 
+    source_paths = [] if standard else _stash_material(uploads)
     return AiQuizJob.objects.create(
         teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
         standard=standard, question_count=question_count,
         source_file=uploads[0] if standard else None, source_name=', '.join(source_names)[:255],
-        source_text=source_text, exam_name=(exam_name or '').strip()[:120],
+        source_text=source_text, source_paths=source_paths, exam_name=(exam_name or '').strip()[:120],
         rules_file=rules_upload, rules_name=(rules_upload.name or '') if rules_upload is not None else '',
         rules_text=rules_text,
     )
@@ -166,6 +175,14 @@ def _release_source(job: AiQuizJob) -> None:
                 logger.warning("AI test: yuklangan fayl o'chirilmadi", exc_info=True)
             setattr(job, field, None)
             changed.append(field)
+    for entry in job.source_paths or []:
+        try:
+            default_storage.delete(entry['path'])
+        except Exception:  # noqa: BLE001
+            logger.warning("AI test: yuklangan fayl o'chirilmadi", exc_info=True)
+    if job.source_paths:
+        job.source_paths = []
+        changed.append('source_paths')
     if changed:
         job.save(update_fields=changed + ['updated_at'])
 
@@ -255,17 +272,25 @@ def _run_engine(job: AiQuizJob) -> None:
     job.status = AiQuizJob.Status.GENERATING
     job.save(update_fields=['status', 'updated_at'])
 
-    material = job.source_text
     rules = job.rules_text
     if job.rules_file:
         rules = _read(job.rules_file, job.rules_name, settings.AI_EXAM_RULES_CHARS) + '\n\n' + rules
 
     state = job.plan if isinstance(job.plan, dict) else {}
+    if 'material' not in state:
+        # Fayllarni FONDA o'qiymiz (bir marta); natija saqlanadi, qayta urinishda qayta o'qilmaydi
+        named = [(entry['name'], _read_stored(entry)) for entry in job.source_paths or []]
+        if job.source_text.strip():
+            named.append((str(_("Qo'yilgan matn")), job.source_text.strip()))
+        state['material'] = material_text.combine_texts(named, settings.AI_EXAM_MATERIAL_CHARS)
+        job.plan = state
+        job.save(update_fields=['plan', 'updated_at'])
+    material = state['material']
     plan = state.get('plan')
     if not plan:
         plan = ai_exam.plan_exam(
             rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name)
-        state = {'plan': plan, 'sections': {}}
+        state = {'material': material, 'plan': plan, 'sections': {}}
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])
     sections = state.setdefault('sections', {})
