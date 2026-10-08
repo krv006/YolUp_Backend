@@ -48,11 +48,17 @@ _PLANNER_SYSTEM = (
     'Put the student-facing instruction of each block exactly as the real exam prints it '
     '(for example "Choose NO MORE THAN TWO WORDS from the passage for each answer") in "instruction". '
     'If a section needs a reading passage, set "passage" with the word range; otherwise null. '
-    'If the rules fix the counts, follow them. If they do not, spread target_total sensibly. If the rules are '
+    'If the rules fix the counts, follow them. If they do not, use the official question counts and points of '
+    'the exam; when a numeric target_total is given and the exam has no fixed count, spread it sensibly. If the rules are '
     'unclear, use the most standard interpretation. Never plan more than {max_total} questions in total and '
     f'never more than {MAX_SECTIONS} sections. "rules" lists short generation rules that the question writer must '
     'obey (answer location, word limits, difficulty, language, etc.). "language" is the language the test must be '
     'written in (for example "en", "uz", "ru"), or "auto" to follow the source material.\n\n'
+    'If SOURCE MATERIAL is given, look at it and decide which part of the exam each section can be written from: '
+    'set "focus" of every section to a short note on WHICH topic/chapter/part of the material that section must '
+    'use (different sections use different parts when the material is long). Plan only sections that can be '
+    'written from text; never plan audio/Listening/image-based sections. If the material is short, reduce counts '
+    'proportionally but keep the exam section order and question types.\n'
     'Allowed block "type" values: ' + ', '.join(KINDS) + '. Meanings: mcq = one correct option; mcq_multiple = '
     'choose several; true_false_not_given / yes_no_not_given / true_false = statements judged against the text; '
     'matching = match items to a list (headings, people, features, sentence endings); fill_blank = '
@@ -61,7 +67,7 @@ _PLANNER_SYSTEM = (
     'Return ONLY valid JSON of this exact shape (no markdown):\n'
     '{"exam_name": "...", "language": "auto", "rules": ["..."], "sections": [{"title": "Passage 1", '
     '"passage": {"min_words": 700, "max_words": 900, "description": "..."} , '
-    '"blocks": [{"type": "true_false_not_given", "count": 6, "instruction": "...", "options": 4, "points": 1}]}]}'
+    '"focus": "...", "blocks": [{"type": "true_false_not_given", "count": 6, "instruction": "...", "options": 4, "points": 1}]}]}'
 )
 
 _WRITER_SYSTEM = (
@@ -71,7 +77,7 @@ _WRITER_SYSTEM = (
     'answer (or the stated number of answers), plausible distractors, and no hints in the wording. '
     'Follow the question blocks in order and give EXACTLY the requested count per block, using the block type as '
     '"kind". Do not number the questions and do not repeat the block instruction inside each question '
-    '(it is shown separately). If "passage" is requested, write the passage yourself from the source material '
+    '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
     'that differ from "avoid_topics". If "source_material" is empty, there is no source: write original, accurate, '
@@ -150,7 +156,7 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
         else:
             passage = None
         sections.append({'title': str(section.get('title') or f'Section {index}')[:200], 'passage': passage,
-                         'blocks': blocks})
+                         'focus': str(section.get('focus') or '')[:300], 'blocks': blocks})
     if not sections:
         return default_plan(fallback_count)
     return {
@@ -161,15 +167,25 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
     }
 
 
-def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '') -> dict:
+def _material_outline(material: str, limit: int = 12000) -> str:
+    """Rejaga ko'rsatiladigan material: qisqa bo'lsa to'liq, uzun bo'lsa boshi/o'rtasi/oxiridan bo'laklar."""
+    if len(material) <= limit:
+        return material
+    third = limit // 3
+    mid = len(material) // 2
+    return '\n[...]\n'.join([material[:third], material[mid - third // 2: mid + third // 2], material[-third:]])
+
+
+def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '', material: str = '') -> dict:
     """Reja tuzadi. Manba: (1) o'qituvchining qoidalar matni, (2) imtihon nomi — AI uning rasmiy tuzilmasini
     o'zi eslaydi (IELTS, SAT...), (3) ikkalasi ham bo'sh — oddiy variantli reja (AI chaqirilmaydi).
     Qoidalar va nom birga berilsa, qoidalar ustun."""
     rules_text = (rules_text or '').strip()
     exam_name = (exam_name or '').strip()
     if not rules_text and not exam_name:
-        return default_plan(target_total)
-    parts = [f'target_total: {target_total}', f'topic: {topic}']
+        return default_plan(target_total or 20)
+    total = f'target_total: {target_total}' if target_total else 'target_total: auto (use the official counts of the exam)'
+    parts = [total, f'topic: {topic}']
     if exam_name:
         parts.append(f'exam: {exam_name}')
     if rules_text:
@@ -180,9 +196,11 @@ def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name:
             'EXAM FORMAT RULES: none provided. Use your own knowledge of the official/standard format of the exam '
             f'named above ("{exam_name}") as accurately as you can: its sections, question types, counts and order. '
             'If you do not recognise the exam, return a simple plan of one section with multiple-choice questions.')
+    if material.strip():
+        parts.append('SOURCE MATERIAL (excerpt):\n' + _material_outline(material))
     raw = llm.chat_json(_PLANNER_SYSTEM.replace('{max_total}', str(settings.AI_EXAM_MAX_QUESTIONS)),
                         '\n'.join(parts))
-    return normalize_plan(raw, fallback_count=target_total)
+    return normalize_plan(raw, fallback_count=target_total or 20)
 
 
 # ─── Savollarni bizning turlarga o'tkazish ────────────────────────────────
@@ -289,7 +307,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     section = plan['sections'][index]
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
-        'passage': section['passage'], 'blocks': section['blocks'],
+        'passage': section['passage'], 'focus': section.get('focus', ''), 'blocks': section['blocks'],
     }
     user = json.dumps({
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],

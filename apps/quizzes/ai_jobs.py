@@ -121,7 +121,10 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
         raise ValidationError({'rules_text': _('Qoidalar matni juda uzun (%(max)s belgigacha).') % {'max': MAX_RULES_TEXT}})
     if not topic.strip():
         raise ValidationError({'topic': _("Mavzu bo'sh bo'lishi mumkin emas.")})
-    if not MIN_QUESTIONS <= question_count <= MAX_QUESTIONS:
+    has_format = bool(exam_name.strip() or rules_text or rules_upload is not None)
+    if question_count == 0 and not has_format:
+        question_count = 20  # imtihon ko'rsatilmasa 'avto' ma'nosiz: oddiy testning standart soni
+    if question_count != 0 and not MIN_QUESTIONS <= question_count <= MAX_QUESTIONS:
         raise ValidationError({'question_count': _('Savollar soni %(min)s dan %(max)s gacha bo\'lishi kerak.') % {
             'min': MIN_QUESTIONS, 'max': MAX_QUESTIONS,
         }})
@@ -289,7 +292,7 @@ def _run_engine(job: AiQuizJob) -> None:
     plan = state.get('plan')
     if not plan:
         plan = ai_exam.plan_exam(
-            rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name)
+            rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name, material=material)
         state = {'material': material, 'plan': plan, 'sections': {}}
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])

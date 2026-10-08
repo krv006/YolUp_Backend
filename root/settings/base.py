@@ -220,6 +220,13 @@ CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://[\w.-]+\.vercel\.app$"]
 
 CORS_ALLOW_CREDENTIALS = True
 
+# Frontend har so'rovga X-Request-ID qo'shadi; ruxsat etilmasa brauzer to'g'ridan-to'g'ri (proxy'siz) so'rovlarni
+# preflight bosqichida to'xtatadi (katta fayl yuklash shu domenga to'g'ridan-to'g'ri ketadi).
+from corsheaders.defaults import default_headers  # noqa: E402
+
+CORS_ALLOW_HEADERS = (*default_headers, 'x-request-id')
+CORS_EXPOSE_HEADERS = ['x-request-id']
+
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

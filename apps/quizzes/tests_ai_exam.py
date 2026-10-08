@@ -601,6 +601,40 @@ class AiExamJobTests(QuizTestBase):
         self.assertIn('override your own knowledge', seen['user'][0])
         self.assertIn(IELTS_RULES[:40], seen['user'][0])
 
+    def test_planner_sees_the_material_and_hands_each_section_its_focus(self):
+        seen = []
+
+        def capture(url, json=None, **kwargs):
+            seen.append(json['messages'][1]['content'])
+            if json['messages'][0]['content'].startswith('You are an exam designer'):
+                plan = planner_reply()
+                plan['sections'][0]['focus'] = 'Chapter on bee colonies'
+                return completion(plan)
+            return self.fake(url, json=json, **kwargs)
+
+        self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'course': self.course_id, 'exam_name': 'IELTS Academic Reading',
+                'file': self.upload(text='BEE-MARKER ' + LONG * 5)}
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            response = self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+            self.assertEqual(response.status_code, 202)
+            self.sync()
+        job = AiQuizJob.objects.get(pk=response.json()['id'])
+        self.assertEqual((job.status, job.question_count), ('done', 0))  # son berilmadi -> avto
+        self.assertIn('target_total: auto', seen[0])
+        self.assertIn('SOURCE MATERIAL', seen[0])
+        self.assertIn('BEE-MARKER', seen[0])
+        self.assertIn('Chapter on bee colonies', seen[1])  # birinchi bo'lim yozuvchisi focus'ni oladi
+
+    def test_auto_count_without_an_exam_falls_back_to_a_standard_simple_test(self):
+        response = self.post_raw(topic='Bees')
+        del response
+        self.assertEqual(AiQuizJob.objects.latest('id').question_count, 10)
+        self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'course': self.course_id}
+        self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+        self.assertEqual(AiQuizJob.objects.latest('id').question_count, 20)
+
     def test_neither_name_nor_rules_means_no_planning_call(self):
         self.post_raw(topic='Bees')
         with patch('apps.quizzes.llm.chat_json') as chat:

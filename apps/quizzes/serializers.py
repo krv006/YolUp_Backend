@@ -449,7 +449,8 @@ class AiQuizCreateSerializer(serializers.Serializer):
     rules_text = serializers.CharField(max_length=30000, required=False, allow_blank=True, default='')
     material_text = serializers.CharField(max_length=130000, required=False, allow_blank=True, default='')
     exam_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default='')
-    question_count = serializers.IntegerField(min_value=1, max_value=200, default=20)
+    # 0 = avto: imtihonning o'z savol soni (imtihon nomi/qoidalari berilganda)
+    question_count = serializers.IntegerField(min_value=0, max_value=200, default=0)
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
     subject = serializers.ChoiceField(choices=Course.Subject.choices, required=False, allow_blank=True, default='')
 
