@@ -5,6 +5,7 @@ Faqat JSON rejimida ishlaydi: `chat_json` doim `dict` qaytaradi yoki `LLMError`.
   - doimiy (`permanent=True`): kalit noto'g'ri, hisobda mablag'/limit yo'q, so'rov rad etilgan — qayta urinish foydasiz;
   - vaqtincha: tarmoq, 5xx, band xizmat (429 "rate limit"), noto'g'ri JSON — keyinroq qayta uriniladi.
 """
+import base64
 import json
 import logging
 import re
@@ -70,10 +71,17 @@ def _post(messages: list, max_tokens: int) -> dict:
     raise LLMError(f'AI xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
 
 
-def chat_json(system: str, user: str, *, max_tokens: int = 0) -> dict:
-    """Tizim va foydalanuvchi xabari bo'yicha JSON obyekt qaytaradi."""
+def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = ()) -> dict:
+    """Tizim va foydalanuvchi xabari bo'yicha JSON obyekt qaytaradi. `images` — [(mime, bytes), ...]:
+    rasmlar matn bilan birga yuboriladi (modelning ko'rish imkoniyati kerak, masalan gpt-4o-mini)."""
     max_tokens = max_tokens or settings.OPENAI_MAX_OUTPUT_TOKENS
-    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
+    content = user
+    if images:
+        content = [{'type': 'text', 'text': user}] + [
+            {'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{base64.b64encode(data).decode()}'}}
+            for mime, data in images
+        ]
+    messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': content}]
     last = ''
     for attempt in range(_JSON_RETRIES + 1):
         started = time.monotonic()

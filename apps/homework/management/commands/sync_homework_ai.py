@@ -1,9 +1,9 @@
-"""Tashqi AI xizmatidan uy vazifasi natijalarini olib keladi.
+"""Uy vazifasining AI natijalarini tayyorlaydi.
 
     python manage.py sync_homework_ai
 
-`checking` holatidagi topshiriqlar uchun AI-home-checker xizmatidan natijani so'raydi
-(`HOMEWORK_AI_URL` sozlangan bo'lsa). Tayyor bo'lsa topshiriq o'qituvchi baholashiga
+`checking` holatidagi topshiriqlar uchun: ichki OpenAI baholash (`OPENAI_API_KEY` bor bo'lsa, bir sikl ~8 ta
+yoki 75 soniya) yoki tashqi AI-home-checker (`HOMEWORK_AI_URL` sozlangan bo'lsa) natijasini oladi. Tayyor bo'lsa topshiriq o'qituvchi baholashiga
 o'tadi (ball AI taklifi bilan to'ldirilgan); xato yoki uzoq kutilsa — o'qituvchi qo'lda
 baholaydi. Xizmat sozlanmagan bo'lsa hech narsa qilmaydi. Cron'da 60 soniyalik siklda ishlaydi.
 """

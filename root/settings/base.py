@@ -258,6 +258,9 @@ FOCUS_PARENT_ALERT_THRESHOLD = int(os.getenv('FOCUS_PARENT_ALERT_THRESHOLD', '3'
 HOMEWORK_AI_URL = os.getenv('HOMEWORK_AI_URL', '')              # masalan http://checker-api:8000
 HOMEWORK_AI_ORG_KEY = os.getenv('HOMEWORK_AI_ORG_KEY', '')      # xizmatdagi tashkilot kaliti (hwck_...)
 HOMEWORK_AI_INTERNAL_KEY = os.getenv('HOMEWORK_AI_INTERNAL_KEY', '')
+# Ichki baholash (OpenAI): OPENAI_API_KEY bo'lsa va tashqi xizmat (HOMEWORK_AI_URL) sozlanmagan bo'lsa ishlaydi;
+# o'chirish uchun HOMEWORK_AI_ENGINE=off. Yakuniy ballni doim o'qituvchi tasdiqlaydi.
+HOMEWORK_AI_ENGINE = os.getenv('HOMEWORK_AI_ENGINE', 'on').lower() not in ('off', '0', 'false', 'no')
 HOMEWORK_AI_TIMEOUT = 30                                          # soniya (bitta HTTP so'rov)
 HOMEWORK_AI_GIVE_UP_MINUTES = 15                                  # shundan keyin qo'lda baholashga o'tadi
 

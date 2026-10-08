@@ -7,6 +7,7 @@ keyin natija o'quvchiga ochiladi. (AI/Gemini tekshiruv olib tashlangan.)
 import logging
 import math
 import re
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -20,7 +21,9 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Course, Enrollment, Lesson
 
-from . import ai_client, rules
+from apps.quizzes import llm
+
+from . import ai_client, ai_grader, rules
 from .models import Assignment, AssignmentFocusEvent, Submission
 
 logger = logging.getLogger('apps')
@@ -28,6 +31,12 @@ logger = logging.getLogger('apps')
 # Suiiste'moldan himoya (fayl yuklash/xotira): soatiga topshirish chegarasi
 MAX_SUBMITS_PER_ASSIGNMENT_HOUR = 5
 MAX_SUBMITS_PER_HOUR = 20
+
+# Ichki AI baholash (OpenAI): bitta cron siklida ko'pi bilan shuncha topshiriq / shuncha soniya
+ENGINE_PER_RUN = 8
+ENGINE_TIME_BUDGET = 75
+ENGINE_MAX_ATTEMPTS = 3
+AI_FAILED_NOTE = "AI baholay olmadi — o'zingiz baholang."
 
 
 # Vazifa fayli (o'qituvchi biriktiradi) — faqat yuklab olinadi
@@ -496,12 +505,28 @@ def submit(*, student: User, assignment_id, upload) -> dict:
     return _submission_dict(submission)
 
 
+def _ai_mode() -> str:
+    """`external` — tashqi AI-home-checker (HOMEWORK_AI_URL sozlangan bo'lsa), `engine` — ichki OpenAI
+    baholash (OPENAI_API_KEY bor bo'lsa), bo'sh — AI yo'q: o'qituvchi qo'lda baholaydi."""
+    if ai_client.enabled():
+        return 'external'
+    return 'engine' if ai_grader.enabled() else ''
+
+
 def _start_ai_check(submission: Submission) -> bool:
-    """Tashqi AI xizmatiga yuboradi (sozlangan bo'lsa). Muvaffaqiyatli bo'lsa topshiriq
+    """AI tekshiruvni boshlaydi (tashqi xizmat yoki ichki OpenAI). Muvaffaqiyatli bo'lsa topshiriq
     `checking` holatiga o'tadi va natijani `sync_ai_results` (cron) olib keladi.
-    Xizmat ishlamasa — False qaytaradi, topshiriq o'qituvchiga qo'lda baholashga tushadi."""
-    if not ai_client.enabled():
+    AI yo'q yoki xizmat ishlamasa — False qaytaradi, topshiriq o'qituvchiga qo'lda baholashga tushadi."""
+    mode = _ai_mode()
+    if not mode:
         return False
+    if mode == 'engine':  # so'rov ichida AI chaqirilmaydi: cron fonda baholaydi
+        Submission.objects.filter(pk=submission.pk).update(
+            status=Submission.Status.CHECKING, ai_external_id=ai_grader.ENGINE_ID, error='',
+            check_attempts=F('check_attempts') + 1, updated_at=timezone.now(),
+        )
+        submission.refresh_from_db()
+        return True
     attempt = submission.check_attempts
     try:
         external_id = ai_client.submit(submission, attempt=attempt)
@@ -586,7 +611,7 @@ def recheck(*, user: User, submission_id) -> dict:
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != user.id:
         raise PermissionDenied(_("Qayta tekshirishni faqat kurs o'qituvchisi boshlaydi."))
-    if not ai_client.enabled():
+    if not _ai_mode():
         raise ValidationError({'detail': _(
             "AI tekshiruv o'chirilgan. Topshiriqni o'zingiz baholang (ball qo'yib tasdiqlang)."
         )})
@@ -624,16 +649,55 @@ def _release_for_manual(s: Submission, reason: str = '') -> None:
     _notify_new_submission(s)
 
 
+def _grade_in_app(s: Submission, now) -> str:
+    """Ichki OpenAI baholash: 'done' | 'failed' (o'qituvchiga qo'lda) | 'waiting' (keyingi siklda qayta uriniladi)."""
+    try:
+        result = ai_grader.grade(s)
+    except ai_grader.GraderError as exc:
+        _release_for_manual(s, str(exc))
+        return 'failed'
+    except llm.LLMError as exc:
+        logger.warning('Uy vazifasi AI bilan baholanmadi (%s): %s', s.id, exc)
+        if exc.permanent or s.check_attempts >= ENGINE_MAX_ATTEMPTS:
+            _release_for_manual(s, AI_FAILED_NOTE)
+            return 'failed'
+        # vaqtincha xato: keyingi siklda qayta; navbat adolatli aylansin deb vaqtni yangilaymiz
+        Submission.objects.filter(pk=s.pk).update(check_attempts=F('check_attempts') + 1, updated_at=now)
+        return 'waiting'
+    except Exception:  # noqa: BLE001 — kutilmagan xato topshiriqni abadiy kutdirmasin
+        logger.exception('Uy vazifasi AI baholashida kutilmagan xato (%s)', s.id)
+        _release_for_manual(s, AI_FAILED_NOTE)
+        return 'failed'
+    _apply_ai_result(s, {'ai_result': result})
+    s.status = Submission.Status.PENDING_REVIEW
+    s.checked_at = now
+    s.save()
+    _notify_new_submission(s)
+    return 'done'
+
+
 def sync_ai_results(*, now=None, batch: int = 50) -> dict:
     """`checking` topshiriqlar uchun AI xizmatidan natijani oladi. Tayyor bo'lsa — o'qituvchi
     baholashiga (ball AI taklifi bilan to'ldirilgan), xato yoki uzoq kutilsa — qo'lda baholashga."""
     now = now or timezone.now()
     give_up = timedelta(minutes=getattr(settings, 'HOMEWORK_AI_GIVE_UP_MINUTES', 15))
     done = failed = waiting = 0
+    engine_started, engine_runs = time.monotonic(), 0
     pending = Submission.objects.filter(status=Submission.Status.CHECKING).select_related(
         'assignment__course__teacher', 'student').order_by('updated_at')[:batch]
     for s in pending:
         too_old = now - s.updated_at > give_up
+        if s.ai_external_id == ai_grader.ENGINE_ID:
+            if not ai_grader.enabled() or too_old:
+                _release_for_manual(s, AI_FAILED_NOTE)
+                failed += 1
+            elif engine_runs >= ENGINE_PER_RUN or time.monotonic() - engine_started > ENGINE_TIME_BUDGET:
+                waiting += 1  # navbat keyingi sikl uchun (cron'ni uzoq band qilmaymiz)
+            else:
+                engine_runs += 1
+                outcome = _grade_in_app(s, now)
+                done, failed, waiting = done + (outcome == 'done'), failed + (outcome == 'failed'), waiting + (outcome == 'waiting')
+            continue
         if not s.ai_external_id or not ai_client.enabled():
             _release_for_manual(s, "AI xizmati sozlanmagan — o'zingiz baholang.")
             failed += 1
