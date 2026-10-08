@@ -102,3 +102,15 @@ def extract_text(data: bytes, filename: str, *, max_chars: int = 0) -> str:
             "Matnli PDF yoki Word fayl yuklang."
         )
     return text[:max_chars] if max_chars else text
+
+
+def combine_texts(named_texts: list, limit: int) -> str:
+    """[(nom, matn), ...] -> bitta matn. Sig'masa har faylga teng ulush beriladi (so'nggi fayl butunlay
+    kesilib ketmasin). Bitta matn bo'lsa sarlavhasiz qaytariladi."""
+    named_texts = [(name, text) for name, text in named_texts if text.strip()]
+    if not named_texts:
+        return ''
+    if len(named_texts) == 1:
+        return named_texts[0][1][:limit]
+    share = limit // len(named_texts)
+    return '\n\n'.join(f'=== {name} ===\n{text[:share]}' for name, text in named_texts)

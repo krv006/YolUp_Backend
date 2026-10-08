@@ -462,16 +462,61 @@ class AiExamJobTests(QuizTestBase):
         self.assertIn('OPENAI_API_KEY', job.error)
         self.assertTrue(Notification.objects.filter(kind='ai_quiz_failed').exists())
 
-    def test_scanned_material_fails_with_a_helpful_message(self):
+    def post_raw(self, **fields):
         self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'question_count': 10, 'course': self.course_id, **fields}
+        return self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+
+    def test_scanned_material_is_rejected_immediately_with_a_helpful_message(self):
         scanned = SimpleUploadedFile('scan.pdf', make_pdf('tiny'), content_type='application/pdf')
-        resp = self.client.post('/api/v1/quizzes/ai-generate/', {
-            'file': scanned, 'topic': 'Bees', 'question_count': 10, 'course': self.course_id}, format='multipart')
-        self.assertEqual(resp.status_code, 202)
+        resp = self.post_raw(file=scanned)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("matn deyarli yo'q", json.dumps(resp.json(), ensure_ascii=False))
+        self.assertEqual(AiQuizJob.objects.count(), 0)
+
+    def test_several_files_are_combined_into_one_material(self):
+        files = [self.upload(f'part{i}.txt', f'Section {i} about bees. ' * 20) for i in (1, 2, 3)]
+        job_id = self.post_raw(file=files, rules_text=IELTS_RULES).json()['id']
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.source_name, 'part1.txt, part2.txt, part3.txt')
+        for i in (1, 2, 3):
+            self.assertIn(f'=== part{i}.txt ===', job.source_text)
         self.sync()
-        job = AiQuizJob.objects.get(pk=resp.json()['id'])
-        self.assertEqual(job.status, 'failed')
-        self.assertIn('matn deyarli yo\'q', job.error)
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'done')
+
+    def test_pasted_text_works_without_any_file(self):
+        job_id = self.post_raw(material_text='Bees are fascinating insects. ' * 20).json()['id']
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertIn('Bees are fascinating', job.source_text)
+        self.assertEqual(job.source_name, '')
+
+    def test_material_is_optional_ai_writes_from_the_topic_and_rules(self):
+        seen = {}
+
+        def capture(url, json=None, **kwargs):
+            seen.setdefault('calls', []).append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            job_id = self.post_raw(rules_text=IELTS_RULES, topic='Climate change').json()['id']
+            self.sync()
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'done')
+        section_prompts = [json.loads(c) for c in seen['calls'] if 'section_spec' in c]
+        self.assertTrue(section_prompts)
+        for payload in section_prompts:
+            self.assertEqual((payload['source_material'], payload['topic']), ('', 'Climate change'))
+
+    def test_too_many_files_and_one_bad_file(self):
+        many = [self.upload(f'f{i}.txt') for i in range(6)]
+        self.assertEqual(self.post_raw(file=many).status_code, 400)
+        bad = SimpleUploadedFile('virus.exe', b'MZ')
+        self.assertEqual(self.post_raw(file=[self.upload(), bad]).status_code, 400)
+
+    def test_old_test_creator_path_still_needs_exactly_one_file(self):
+        with override_settings(TEST_CREATOR_URL='http://tc-api:8000/api/v1', TEST_CREATOR_EMAIL='a@b.uz',
+                               TEST_CREATOR_PASSWORD='x' * 12):
+            self.assertEqual(self.post_raw(standard='uzbmb').status_code, 400)
+            self.assertEqual(self.post_raw(standard='uzbmb', file=[self.upload(), self.upload('b.txt')]).status_code, 400)
 
     def test_all_questions_invalid_fails(self):
         with patch('apps.quizzes.llm.requests.post', return_value=completion({'passage': '', 'questions': [

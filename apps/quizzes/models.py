@@ -214,6 +214,9 @@ class AiQuizJob(TimeStampedUUIDModel):
     question_count = PositiveIntegerField(default=20)
     source_file = FileField(upload_to=ai_quiz_source_path, null=True, blank=True)
     source_name = CharField(max_length=255, blank=True)
+    # AI generator materiali: yuklangan fayllar/qo'yilgan matndan olingan toza matn (bo'sh bo'lishi mumkin —
+    # u holda AI mavzu va qoidalar bo'yicha matnni o'zi yozadi). Fayllarning o'zi saqlanmaydi.
+    source_text = TextField(blank=True)
     # Imtihon qoidalari (format) — fayl yoki matn; bo'sh bo'lsa oddiy variantli test
     rules_file = FileField(upload_to=ai_quiz_source_path, null=True, blank=True)
     rules_name = CharField(max_length=255, blank=True)

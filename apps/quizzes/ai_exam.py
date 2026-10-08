@@ -74,7 +74,9 @@ _WRITER_SYSTEM = (
     '(it is shown separately). If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
-    'that differ from "avoid_topics".\n\n'
+    'that differ from "avoid_topics". If "source_material" is empty, there is no source: write original, accurate, '
+    'exam-appropriate content yourself about the given "topic" (passages must be factual and well structured), '
+    'and make every answer verifiable from the text you wrote.\n\n'
     + KIND_HELP + '\n\n'
     'Return ONLY valid JSON (no markdown): {"passage": "...", "questions": [ ...question objects in order... ]}'
 )
@@ -267,7 +269,7 @@ def _validated(question: dict):
 # ─── Bo'lim yozish ─────────────────────────────────────────────────────────
 
 
-def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list) -> dict:
+def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '') -> dict:
     """`plan['sections'][index]` uchun matn parchasi va savollar. Qaytaradi:
     {'title', 'passage', 'questions': [{...create_quiz formati, 'block': i}], 'dropped': n, 'missing': n}."""
     section = plan['sections'][index]
@@ -277,7 +279,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     }
     user = json.dumps({
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],
-        'avoid_topics': avoid_topics,
+        'avoid_topics': avoid_topics, 'topic': topic,
         'source_material': material[:settings.AI_EXAM_MATERIAL_CHARS],
     }, ensure_ascii=False)
     data = llm.chat_json(_WRITER_SYSTEM, user)

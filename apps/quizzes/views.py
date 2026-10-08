@@ -130,10 +130,11 @@ class QuizAiGenerateView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         job = ai_jobs.create_job(
-            teacher=request.user, upload=request.FILES.get('file'), course=data.get('course'),
+            teacher=request.user, uploads=request.FILES.getlist('file'), course=data.get('course'),
             subject=data.get('subject', ''), topic=data['topic'], title=data.get('title', ''),
             standard=data.get('standard', ''), question_count=data['question_count'],
             rules_upload=request.FILES.get('rules_file'), rules_text=data.get('rules_text', ''),
+            material_text_value=data.get('material_text', ''),
         )
         return Response(AiQuizJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 

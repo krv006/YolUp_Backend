@@ -36,6 +36,9 @@ from .models import AiQuizJob, Quiz
 logger = logging.getLogger('apps')
 
 MAX_SOURCE_MB = 20
+MAX_SOURCE_FILES = 5
+MAX_SOURCE_TOTAL_MB = 40
+MAX_PASTED_MATERIAL = 120000
 MAX_RULES_MB = 5
 MAX_RULES_TEXT = 30000
 MIN_QUESTIONS, MAX_QUESTIONS = 5, 60
@@ -64,17 +67,44 @@ def _check_file(upload, field: str, max_mb: int) -> None:
         }})
 
 
-def create_job(*, teacher: User, upload, course, subject: str, topic: str, title: str, standard: str = '',
-               question_count: int, rules_upload=None, rules_text: str = '') -> AiQuizJob:
+def _material_from(uploads: list, pasted: str) -> tuple:
+    """Yuklangan fayllar va qo'yilgan matndan bitta toza matn. Qaytaradi: (matn, fayl nomlari).
+    Fayl o'qilmasa (skanerlangan, buzuq) — darhol 400, o'qituvchi sababini ko'radi."""
+    if len(uploads) > MAX_SOURCE_FILES:
+        raise ValidationError({'file': _("Bir vaqtda ko'pi bilan %(n)s ta fayl yuklash mumkin.") % {'n': MAX_SOURCE_FILES}})
+    if sum(u.size for u in uploads) > MAX_SOURCE_TOTAL_MB * 1024 * 1024:
+        raise ValidationError({'file': _("Fayllar umumiy hajmi %(max)s MB dan oshmasligi kerak.") % {'max': MAX_SOURCE_TOTAL_MB}})
+    named = []
+    for upload in uploads:
+        _check_file(upload, 'file', MAX_SOURCE_MB)
+        try:
+            named.append((upload.name, material_text.extract_text(upload.read(), upload.name)))
+        except material_text.MaterialError as exc:
+            raise ValidationError({'file': str(exc)}) from exc
+    pasted = (pasted or '').strip()
+    if len(pasted) > MAX_PASTED_MATERIAL:
+        raise ValidationError({'material_text': _("Matn juda uzun (%(max)s belgigacha).") % {'max': MAX_PASTED_MATERIAL}})
+    if pasted:
+        named.append((str(_("Qo'yilgan matn")), pasted))
+    return material_text.combine_texts(named, settings.AI_EXAM_MATERIAL_CHARS), [u.name for u in uploads]
+
+
+def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic: str, title: str, standard: str = '',
+               question_count: int, rules_upload=None, rules_text: str = '', material_text_value: str = '') -> AiQuizJob:
     standard = standard or ''
+    uploads = [u for u in (uploads or []) if u is not None]
     if standard:
         if not tc_client.enabled():
             raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan. Testni qo'lda yarating yoki import qiling.")})
+        if len(uploads) != 1:
+            raise ValidationError({'file': _('Material fayli majburiy (bitta fayl).')})
+        _check_file(uploads[0], 'file', MAX_SOURCE_MB)
+        source_text, source_names = '', [uploads[0].name]
     elif not llm.enabled():
         raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan (AI kaliti sozlanmagan). Testni qo'lda yarating yoki import qiling.")})
-    if upload is None:
-        raise ValidationError({'file': _('Material fayli majburiy.')})
-    _check_file(upload, 'file', MAX_SOURCE_MB)
+    else:
+        # Material ixtiyoriy: bo'sh bo'lsa AI mavzu va qoidalar bo'yicha matnni o'zi yozadi
+        source_text, source_names = _material_from(uploads, material_text_value)
     if rules_upload is not None:
         _check_file(rules_upload, 'rules_file', MAX_RULES_MB)
     rules_text = (rules_text or '').strip()
@@ -104,7 +134,9 @@ def create_job(*, teacher: User, upload, course, subject: str, topic: str, title
 
     return AiQuizJob.objects.create(
         teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
-        standard=standard, question_count=question_count, source_file=upload, source_name=upload.name or '',
+        standard=standard, question_count=question_count,
+        source_file=uploads[0] if standard else None, source_name=', '.join(source_names)[:255],
+        source_text=source_text,
         rules_file=rules_upload, rules_name=(rules_upload.name or '') if rules_upload is not None else '',
         rules_text=rules_text,
     )
@@ -222,7 +254,7 @@ def _run_engine(job: AiQuizJob) -> None:
     job.status = AiQuizJob.Status.GENERATING
     job.save(update_fields=['status', 'updated_at'])
 
-    material = _read(job.source_file, job.source_name, settings.AI_EXAM_MATERIAL_CHARS)
+    material = job.source_text
     rules = job.rules_text
     if job.rules_file:
         rules = _read(job.rules_file, job.rules_name, settings.AI_EXAM_RULES_CHARS) + '\n\n' + rules
@@ -240,7 +272,7 @@ def _run_engine(job: AiQuizJob) -> None:
     for index in range(len(plan['sections'])):
         key = str(index)
         if key not in sections:
-            sections[key] = ai_exam.generate_section(plan, index, material, avoid_topics=avoid)
+            sections[key] = ai_exam.generate_section(plan, index, material, avoid_topics=avoid, topic=job.topic)
             job.plan = state
             job.save(update_fields=['plan', 'updated_at'])
         done = sections[key]
