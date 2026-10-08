@@ -217,6 +217,8 @@ class AiQuizJob(TimeStampedUUIDModel):
     error = TextField(blank=True)
     warnings = JSONField(default=list, blank=True)
     tc_document_id = CharField(max_length=64, blank=True)
+    # Savollar yaratish bosqichidagi muvaffaqiyatsiz urinishlar soni (Gemini limiti va h.k.)
+    attempts = PositiveIntegerField(default=0)
     quiz = ForeignKey('quizzes.Quiz', SET_NULL, null=True, blank=True, related_name='+')
 
     class Meta:

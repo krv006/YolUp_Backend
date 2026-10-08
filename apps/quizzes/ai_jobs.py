@@ -34,6 +34,13 @@ MIN_QUESTIONS, MAX_QUESTIONS = 5, 60
 MAX_ACTIVE_PER_TEACHER = 3
 MAX_PER_DAY = 10
 _BATCH = 5  # bir siklda ko'pi bilan nechta ish
+# Savollar yaratish (Gemini) muvaffaqiyatsiz bo'lsa: ko'pi bilan shuncha urinish, urinishlar orasida pauza.
+# (Tashqi xizmat sababni aytmaydi, odatda Gemini'ning kunlik limiti tugagan bo'ladi — cheksiz urinish limitni yeydi.)
+MAX_GENERATE_ATTEMPTS = 3
+GENERATE_RETRY_PAUSE = timedelta(minutes=2)
+GENERATE_FAILED_MESSAGE = (
+    "AI savollarni yarata olmadi (ehtimol AI xizmatining kunlik limiti tugagan). Birozdan keyin qayta urinib ko'ring."
+)
 
 
 def create_job(*, teacher: User, upload, course, subject: str, topic: str, title: str, standard: str,
@@ -192,12 +199,22 @@ def sync_jobs() -> dict:
         .select_related('teacher', 'course').order_by('created_at')[:_BATCH]
     )
     for job in jobs:
+        if (job.status == AiQuizJob.Status.GENERATING and job.attempts
+                and job.updated_at > timezone.now() - GENERATE_RETRY_PAUSE):
+            result['waiting'] += 1  # oxirgi muvaffaqiyatsiz urinishdan keyin pauza
+            continue
         try:
             _advance(job)
         except tc_client.TestCreatorError as exc:
+            if job.status == AiQuizJob.Status.GENERATING and not exc.permanent:
+                job.attempts += 1
+                job.save(update_fields=['attempts', 'updated_at'])
             if exc.permanent or job.created_at < give_up:
                 logger.warning('AI test ishi xato (%s): %s', job.pk, exc)
                 _fail(job, str(exc) if exc.permanent else f"Vaqt tugadi: {exc}")
+            elif job.attempts >= MAX_GENERATE_ATTEMPTS:
+                logger.warning("AI test ishi %s urinishdan keyin to'xtatildi (%s): %s", job.attempts, job.pk, exc)
+                _fail(job, GENERATE_FAILED_MESSAGE)
             else:
                 logger.info('AI test ishi vaqtincha kutmoqda (%s): %s', job.pk, exc)
         except Exception as exc:  # noqa: BLE001 — bitta ish butun siklni to'xtatmasin

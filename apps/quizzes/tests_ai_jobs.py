@@ -228,16 +228,34 @@ class AiQuizJobTests(QuizTestBase):
         self.sync()
         self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'failed')
 
-    def test_server_error_is_retried_next_cycle(self):
+    def test_server_error_is_retried_after_a_pause(self):
         self.fake.generate_status = 503
         job_id = self.start().json()['id']
         self.sync()
-        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'generating')
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual((job.status, job.attempts), ('generating', 1))
         self.fake.generate_status = 200
+        self.sync()  # pauza tugamagan — xizmatga qayta murojaat qilinmaydi
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'generating')
+        self.assertEqual(self.fake.calls.count(('POST', '/tests/generate')), 1)
+        AiQuizJob.objects.filter(pk=job_id).update(updated_at=timezone.now() - timedelta(minutes=3))
         self.sync()
         job = AiQuizJob.objects.get(pk=job_id)
         self.assertEqual(job.status, 'done', job.error)
         self.assertEqual(Quiz.objects.filter(status='draft').count(), 1)
+
+    def test_repeated_generation_failures_stop_with_a_clear_message(self):
+        self.fake.generate_status = 500
+        job_id = self.start().json()['id']
+        for _ in range(3):
+            self.sync()
+            AiQuizJob.objects.filter(pk=job_id).update(updated_at=timezone.now() - timedelta(minutes=3))
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertEqual(job.attempts, 3)
+        self.assertIn('kunlik limit', job.error)
+        self.assertEqual(self.fake.calls.count(('POST', '/tests/generate')), 3)
+        self.assertTrue(Notification.objects.filter(kind='ai_quiz_failed').exists())
 
     def test_unreachable_service_waits_then_gives_up(self):
         job_id = self.start().json()['id']
