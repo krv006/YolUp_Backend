@@ -9,7 +9,10 @@ Nima qiladi (hammasi IDEMPOTENT — qayta ishga tushirsa takrorlamaydi):
   4. `backend/app/api/v1/auth.py` — ro'yxatdan o'tishni YOPADI: faqat `REGISTRATION_ALLOWED_EMAILS`
      (vergul bilan) ro'yxatidagi emaillar ro'yxatdan o'ta oladi (ro'yxat bo'sh bo'lsa — hech kim).
      Aks holda ochiq saytda har kim hisob ochib, Gemini kalitimizni sarflay olardi.
+  5. `backend/app/services/question_generation_service.py` — savol tili standartga qarab tanlanadi:
+     IELTS va SAT — inglizcha, qolganlari (UZBMB) — o'zbekcha (asl kodda doim o'zbekcha edi).
 """
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -36,6 +39,32 @@ AUTH_BLOCK = '''    import os as _os
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Ro'yxatdan o'tish yopiq: bu email ruxsat etilmagan")
 
 '''
+
+
+GEN_FUNC_ANCHOR = 'def generate_and_validate('
+GEN_HELPER = '''def _language_for(db, standard_version_id) -> str:
+    """Xalqaro imtihonlar (IELTS, SAT) savollari inglizcha, milliy (UZBMB) — o'zbekcha."""
+    from app.models.standard import Standard, StandardVersion
+
+    version = db.get(StandardVersion, standard_version_id)
+    standard = db.get(Standard, version.standard_id) if version else None
+    return "en" if standard is not None and standard.code in ("IELTS_ACADEMIC", "DIGITAL_SAT") else "uz"
+
+
+'''
+GEN_SIGNATURE = re.compile(r'(\n[ ]*)language: str = "uz",(\n\) -> GenerationOutcome:\n)')
+
+
+def patch_generation(text: str) -> str:
+    if GEN_FUNC_ANCHOR not in text or not GEN_SIGNATURE.search(text):
+        return text
+    text = GEN_SIGNATURE.sub(
+        r'\1language: str | None = None,\2'
+        '    if language is None:\n'
+        '        language = _language_for(db, standard_version_id)\n',
+        text, count=1,
+    )
+    return text.replace(GEN_FUNC_ANCHOR, GEN_HELPER + GEN_FUNC_ANCHOR, 1)
 
 
 def patch_text(path: Path, marker: str, edit) -> str:
@@ -76,6 +105,10 @@ def main(root: str) -> None:
     print('auth.py:', patch_text(
         base / 'app/api/v1/auth.py', 'REGISTRATION_ALLOWED_EMAILS',
         lambda text: text.replace(AUTH_ANCHOR, AUTH_BLOCK + AUTH_ANCHOR, 1),
+    ))
+
+    print('question_generation_service.py:', patch_text(
+        base / 'app/services/question_generation_service.py', '_language_for', patch_generation,
     ))
 
 

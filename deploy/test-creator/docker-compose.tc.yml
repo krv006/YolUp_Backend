@@ -23,6 +23,12 @@ x-tc-backend: &tc-backend
     ENVIRONMENT: production
     DEBUG: "false"
     AI_DEFAULT_PROVIDER: gemini
+    # Savol sifati chegaralari (0-100). Asl qiymatlar 90/70 — juda qattiq: Test-creator matnli savollarni
+    # "matematik hisoblagich" bilan tekshiradi va yaxshi savollarni ham 59-74 ball bilan rad etadi
+    # (haqiqiy sinovda 5 tadan 1 tasi o'tdi). Bizda o'qituvchi baribir qoralamani ko'rib chiqadi,
+    # shuning uchun 55 dan yuqorisi testga qo'shiladi, 40 dan pasti rad etiladi.
+    QUALITY_AUTO_APPROVE_THRESHOLD: "55"
+    QUALITY_REJECT_THRESHOLD: "40"
     CORS_ORIGINS: '[]'
   volumes:
     - tc_storage:/app/storage

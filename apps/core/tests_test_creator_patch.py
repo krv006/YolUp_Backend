@@ -64,6 +64,29 @@ def login(payload, db=Depends(get_db)):
 '''
 
 
+GEN_SRC = '''"""Question Generation Algorithm."""
+from sqlalchemy.orm import Session
+
+BATCH_BUFFER_MULTIPLIER = 1.4
+
+
+def generate_and_validate(
+    db: Session,
+    router,
+    *,
+    subject,
+    knowledge_node_id,
+    standard_version_id,
+    difficulty: str,
+    organization_id,
+    teacher_id,
+    language: str = "uz",
+) -> GenerationOutcome:
+    chunks = []
+    return language
+'''
+
+
 def load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -77,6 +100,7 @@ def fake_tree(root: Path) -> Path:
         ('backend/app/services/ai_router.py', ROUTER_SRC),
         ('backend/app/api/v1/auth.py', AUTH_SRC),
         ('backend/requirements.txt', 'fastapi>=0.110\nanthropic>=0.40\n'),
+        ('backend/app/services/question_generation_service.py', GEN_SRC),
     ):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,13 +139,45 @@ class ApplyPatchTests(SimpleTestCase):
         register_part, login_part = auth.split('def login')
         self.assertIn('REGISTRATION_ALLOWED_EMAILS', register_part)
         self.assertNotIn('REGISTRATION_ALLOWED_EMAILS', login_part)
-        for rel in ('backend/app/services/ai_router.py', 'backend/app/api/v1/auth.py'):
+        for rel in ('backend/app/services/ai_router.py', 'backend/app/api/v1/auth.py',
+                    'backend/app/services/question_generation_service.py'):
             compile(self.read(rel), rel, 'exec')  # sintaksis to'g'ri
+
+    def test_question_language_follows_the_standard(self):
+        self.patcher.main(str(self.root))
+        text = self.read('backend/app/services/question_generation_service.py')
+        self.assertIn('language: str | None = None,', text)
+        self.assertIn('language = _language_for(db, standard_version_id)', text)
+        # Haqiqiy funksiyani ishga tushirib tekshiramiz (Session/GenerationOutcome nomlari uchun stub)
+        namespace = {'GenerationOutcome': object, 'Session': object}
+        exec(compile(text.replace('from sqlalchemy.orm import Session', ''), 'gen', 'exec'), namespace)
+
+        def db_for(code):
+            version = SimpleNamespace(standard_id='std')
+            standard = SimpleNamespace(code=code)
+            fake = MagicMock()
+            fake.get.side_effect = lambda model, key: version if model.__name__ == 'StandardVersion' else standard
+            return fake
+
+        models = types.ModuleType('app.models.standard')
+        models.Standard = type('Standard', (), {})
+        models.StandardVersion = type('StandardVersion', (), {})
+        modules = {'app': types.ModuleType('app'), 'app.models': types.ModuleType('app.models'),
+                   'app.models.standard': models}
+        with patch.dict(sys.modules, modules):
+            generate = namespace['generate_and_validate']
+            kwargs = dict(router=None, subject=None, knowledge_node_id=None, standard_version_id='v',
+                          difficulty='easy', organization_id=None, teacher_id=None)
+            self.assertEqual(generate(db_for('IELTS_ACADEMIC'), **kwargs), 'en')
+            self.assertEqual(generate(db_for('DIGITAL_SAT'), **kwargs), 'en')
+            self.assertEqual(generate(db_for('UZBMB'), **kwargs), 'uz')
+            self.assertEqual(generate(db_for('IELTS_ACADEMIC'), language='ru', **kwargs), 'ru')  # aniq til ustun
 
     def test_is_idempotent(self):
         self.patcher.main(str(self.root))
         before = {rel: self.read(rel) for rel in (
-            'backend/app/services/ai_router.py', 'backend/app/api/v1/auth.py', 'backend/requirements.txt')}
+            'backend/app/services/ai_router.py', 'backend/app/api/v1/auth.py', 'backend/requirements.txt',
+            'backend/app/services/question_generation_service.py')}
         self.patcher.main(str(self.root))
         for rel, text in before.items():
             self.assertEqual(self.read(rel), text, rel)
@@ -377,6 +433,8 @@ class DeployFilesTests(SimpleTestCase):
         compose = self.read('deploy/test-creator/docker-compose.tc.yml')
         self.assertIn('AI_DEFAULT_PROVIDER: gemini', compose)
         self.assertIn('DEBUG: "false"', compose)
+        self.assertIn('QUALITY_AUTO_APPROVE_THRESHOLD: "55"', compose)
+        self.assertIn('QUALITY_REJECT_THRESHOLD: "40"', compose)
         readme = self.read('deploy/test-creator/README.md')
         self.assertIn('REGISTRATION_ALLOWED_EMAILS', readme)
         self.assertIn('apply_patch.py', readme)
