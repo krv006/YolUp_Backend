@@ -134,7 +134,7 @@ class QuizAiGenerateView(APIView):
             subject=data.get('subject', ''), topic=data['topic'], title=data.get('title', ''),
             standard=data.get('standard', ''), question_count=data['question_count'],
             rules_upload=request.FILES.get('rules_file'), rules_text=data.get('rules_text', ''),
-            material_text_value=data.get('material_text', ''),
+            material_text_value=data.get('material_text', ''), exam_name=data.get('exam_name', ''),
         )
         return Response(AiQuizJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 

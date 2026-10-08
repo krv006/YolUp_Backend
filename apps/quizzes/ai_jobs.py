@@ -90,7 +90,8 @@ def _material_from(uploads: list, pasted: str) -> tuple:
 
 
 def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic: str, title: str, standard: str = '',
-               question_count: int, rules_upload=None, rules_text: str = '', material_text_value: str = '') -> AiQuizJob:
+               question_count: int, rules_upload=None, rules_text: str = '', material_text_value: str = '',
+               exam_name: str = '') -> AiQuizJob:
     standard = standard or ''
     uploads = [u for u in (uploads or []) if u is not None]
     if standard:
@@ -136,7 +137,7 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
         teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
         standard=standard, question_count=question_count,
         source_file=uploads[0] if standard else None, source_name=', '.join(source_names)[:255],
-        source_text=source_text,
+        source_text=source_text, exam_name=(exam_name or '').strip()[:120],
         rules_file=rules_upload, rules_name=(rules_upload.name or '') if rules_upload is not None else '',
         rules_text=rules_text,
     )
@@ -262,7 +263,8 @@ def _run_engine(job: AiQuizJob) -> None:
     state = job.plan if isinstance(job.plan, dict) else {}
     plan = state.get('plan')
     if not plan:
-        plan = ai_exam.plan_exam(rules, target_total=job.question_count, topic=job.topic)
+        plan = ai_exam.plan_exam(
+            rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name)
         state = {'plan': plan, 'sections': {}}
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])

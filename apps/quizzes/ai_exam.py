@@ -161,13 +161,27 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
     }
 
 
-def plan_exam(rules_text: str, *, target_total: int, topic: str = '') -> dict:
-    """Qoidalar matnidan reja tuzadi. Qoidalar bo'sh bo'lsa — oddiy variantli reja (AI chaqirilmaydi)."""
+def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '') -> dict:
+    """Reja tuzadi. Manba: (1) o'qituvchining qoidalar matni, (2) imtihon nomi — AI uning rasmiy tuzilmasini
+    o'zi eslaydi (IELTS, SAT...), (3) ikkalasi ham bo'sh — oddiy variantli reja (AI chaqirilmaydi).
+    Qoidalar va nom birga berilsa, qoidalar ustun."""
     rules_text = (rules_text or '').strip()
-    if not rules_text:
+    exam_name = (exam_name or '').strip()
+    if not rules_text and not exam_name:
         return default_plan(target_total)
-    user = f'target_total: {target_total}\ntopic: {topic}\n\nEXAM FORMAT RULES:\n{rules_text[:settings.AI_EXAM_RULES_CHARS]}'
-    raw = llm.chat_json(_PLANNER_SYSTEM.replace('{max_total}', str(settings.AI_EXAM_MAX_QUESTIONS)), user)
+    parts = [f'target_total: {target_total}', f'topic: {topic}']
+    if exam_name:
+        parts.append(f'exam: {exam_name}')
+    if rules_text:
+        parts.append('EXAM FORMAT RULES (they override your own knowledge of the exam):\n'
+                     + rules_text[:settings.AI_EXAM_RULES_CHARS])
+    else:
+        parts.append(
+            'EXAM FORMAT RULES: none provided. Use your own knowledge of the official/standard format of the exam '
+            f'named above ("{exam_name}") as accurately as you can: its sections, question types, counts and order. '
+            'If you do not recognise the exam, return a simple plan of one section with multiple-choice questions.')
+    raw = llm.chat_json(_PLANNER_SYSTEM.replace('{max_total}', str(settings.AI_EXAM_MAX_QUESTIONS)),
+                        '\n'.join(parts))
     return normalize_plan(raw, fallback_count=target_total)
 
 

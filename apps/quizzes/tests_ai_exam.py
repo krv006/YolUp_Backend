@@ -548,3 +548,45 @@ class AiExamJobTests(QuizTestBase):
         with override_settings(OPENAI_API_KEY=''):
             self.sync()
         self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'queued')
+
+    # ── imtihon nomi bo'yicha (qoidalarsiz) ───────────────────────────
+
+    def test_exam_name_alone_lets_the_ai_recall_the_official_format(self):
+        seen = {}
+
+        def capture(url, json=None, **kwargs):
+            seen.setdefault('user', []).append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            response = self.post_raw(exam_name='IELTS Academic Reading')
+            self.assertEqual(response.json()['mode'], 'rules')
+            self.sync()
+        job = AiQuizJob.objects.get(pk=response.json()['id'])
+        self.assertEqual((job.status, job.exam_name), ('done', 'IELTS Academic Reading'))
+        planner_prompt = seen['user'][0]
+        self.assertIn('exam: IELTS Academic Reading', planner_prompt)
+        self.assertIn('none provided', planner_prompt)
+        self.assertEqual([c[0] for c in self.fake.calls], ['plan', 'section', 'section'])
+        self.assertEqual(Quiz.objects.get(pk=job.quiz_id).groups.count(), 2)
+
+    def test_rules_override_the_exam_name(self):
+        seen = {}
+
+        def capture(url, json=None, **kwargs):
+            seen.setdefault('user', []).append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            self.post_raw(exam_name='IELTS', rules_text=IELTS_RULES)
+            self.sync()
+        self.assertIn('override your own knowledge', seen['user'][0])
+        self.assertIn(IELTS_RULES[:40], seen['user'][0])
+
+    def test_neither_name_nor_rules_means_no_planning_call(self):
+        self.post_raw(topic='Bees')
+        with patch('apps.quizzes.llm.chat_json') as chat:
+            chat.return_value = {'passage': '', 'questions': []}
+            self.sync()
+        planner_calls = [c for c in chat.call_args_list if c.args and 'exam designer' in c.args[0]]
+        self.assertEqual(planner_calls, [])

@@ -448,6 +448,7 @@ class AiQuizCreateSerializer(serializers.Serializer):
     standard = serializers.ChoiceField(choices=AiQuizJob.Standard.choices, required=False, allow_blank=True, default='')
     rules_text = serializers.CharField(max_length=30000, required=False, allow_blank=True, default='')
     material_text = serializers.CharField(max_length=130000, required=False, allow_blank=True, default='')
+    exam_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default='')
     question_count = serializers.IntegerField(min_value=1, max_value=200, default=20)
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
     subject = serializers.ChoiceField(choices=Course.Subject.choices, required=False, allow_blank=True, default='')
@@ -460,7 +461,7 @@ class AiQuizJobSerializer(serializers.ModelSerializer):
         model = AiQuizJob
         fields = [
             'id', 'status', 'topic', 'title', 'standard', 'mode', 'question_count', 'course', 'subject',
-            'source_name', 'rules_name', 'summary', 'quiz', 'error', 'warnings', 'created_at', 'updated_at',
+            'source_name', 'rules_name', 'exam_name', 'summary', 'quiz', 'error', 'warnings', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -470,4 +471,4 @@ class AiQuizJobSerializer(serializers.ModelSerializer):
         """`rules` — imtihon qoidalari bo'yicha, `simple` — oddiy variantli, `test_creator` — eski yo'l."""
         if obj.standard:
             return 'test_creator'
-        return 'rules' if (obj.rules_name or obj.rules_text) else 'simple'
+        return 'rules' if (obj.rules_name or obj.rules_text or obj.exam_name) else 'simple'
