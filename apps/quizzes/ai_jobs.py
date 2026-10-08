@@ -46,6 +46,7 @@ _BATCH = 5  # bir siklda ko'pi bilan nechta ish
 # (Tashqi xizmat sababni aytmaydi, odatda Gemini'ning kunlik limiti tugagan bo'ladi — cheksiz urinish limitni yeydi.)
 MAX_GENERATE_ATTEMPTS = 3
 GENERATE_RETRY_PAUSE = timedelta(minutes=2)
+PROCESSING_MAX = timedelta(minutes=15)  # materialni tahlil qilish odatda 1 daqiqadan kam davom etadi
 GENERATE_FAILED_MESSAGE = (
     "AI savollarni yarata olmadi (ehtimol AI xizmatining kunlik limiti tugagan). Birozdan keyin qayta urinib ko'ring."
 )
@@ -278,18 +279,34 @@ def _advance(job: AiQuizJob) -> None:
         _generate(job)  # cron yarim yo'lda to'xtagan bo'lsa — qaytadan
 
 
+def _expired_reason(job: AiQuizJob, now, give_up) -> str:
+    """Ish juda uzoq tursa (xizmat so'rovga javob bermasa ham) — sababli xato bilan yopiladi.
+    Aks holda qotib qolgan ish ro'yxatda abadiy "aylanib" turardi."""
+    if job.status == AiQuizJob.Status.PROCESSING and job.updated_at < now - PROCESSING_MAX:
+        return ("Material tahlili tugamadi (xizmat javob bermadi yoki qayta ishga tushgan). "
+                "Qayta urinib ko'ring.")
+    if job.created_at < give_up:
+        return f"Vaqt tugadi: ish {settings.TEST_CREATOR_GIVE_UP_MINUTES} daqiqada tugamadi. Qayta urinib ko'ring."
+    return ''
+
+
 def sync_jobs() -> dict:
     """Faol ishlarni bir qadam oldinga suradi. Qaytaradi: {'done': n, 'failed': n, 'waiting': n}."""
     result = {'done': 0, 'failed': 0, 'waiting': 0}
     engine_ok, bank_ok = llm.enabled(), tc_client.enabled()
-    if not (engine_ok or bank_ok):
-        return result
-    give_up = timezone.now() - timedelta(minutes=settings.TEST_CREATOR_GIVE_UP_MINUTES)
+    now = timezone.now()
+    give_up = now - timedelta(minutes=settings.TEST_CREATOR_GIVE_UP_MINUTES)
     jobs = list(
         AiQuizJob.objects.filter(status__in=AiQuizJob.ACTIVE_STATUSES)
         .select_related('teacher', 'course').order_by('created_at')[:_BATCH]
     )
     for job in jobs:
+        reason = _expired_reason(job, now, give_up)
+        if reason:
+            logger.warning('AI test ishi muddati tugadi (%s): %s', job.pk, reason)
+            _fail(job, reason)
+            result['failed'] += 1
+            continue
         if (job.standard and not bank_ok) or (not job.standard and not engine_ok):
             result['waiting'] += 1  # tegishli xizmat sozlanmagan
             continue

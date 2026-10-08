@@ -336,3 +336,28 @@ class AiQuizJobTests(QuizTestBase):
         self.assertEqual(body['status'], 'done')
         quiz = self.client.get(f"/api/v1/quizzes/{body['quiz']}/").json()
         self.assertEqual(quiz['status'], 'draft')
+
+    # ── qotib qolgan ishlar ───────────────────────────────────────────
+
+    def test_a_job_stuck_in_processing_is_closed_with_a_reason(self):
+        self.fake.extraction = 'embedding'  # xizmat hech qachon "done" demaydi
+        job_id = self.start().json()['id']
+        self.sync()
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'processing')
+        self.sync()  # yangi ish — hali kutiladi
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'processing')
+        AiQuizJob.objects.filter(pk=job_id).update(updated_at=timezone.now() - timedelta(minutes=16))
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn('Material tahlili tugamadi', job.error)
+        self.assertTrue(Notification.objects.filter(kind='ai_quiz_failed').exists())
+
+    def test_old_jobs_expire_even_when_the_service_is_switched_off(self):
+        job_id = self.start().json()['id']
+        AiQuizJob.objects.filter(pk=job_id).update(created_at=timezone.now() - timedelta(minutes=50))
+        with override_settings(TEST_CREATOR_URL=''):
+            self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn('Vaqt tugadi', job.error)
