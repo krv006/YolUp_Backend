@@ -111,9 +111,10 @@ class QuizImportView(APIView):
 
 
 class QuizAiGenerateView(APIView):
-    """O'qituvchi material (PDF/Word/PowerPoint/Excel/matn) yuklaydi — tashqi Test-creator xizmati
-    uni tahlil qilib standart (IELTS/SAT/Milliy) bo'yicha savollar yaratadi. Ish fonda bajariladi:
-    javob darhol `202` (+ ish id'si), tayyor bo'lgach `GET .../{id}/` da `quiz` (qoralama test) paydo bo'ladi."""
+    """O'qituvchi material (PDF/Word/PowerPoint/Excel/matn) yuklaydi, ixtiyoriy ravishda imtihon qoidalari
+    (`rules_file` yoki `rules_text`) ham: AI qoidalarga qarab to'liq test tuzadi (bo'limlar, matn parchalari,
+    turli savol turlari, tartib); qoidalar berilmasa — oddiy variantli test. Ish fonda bajariladi: javob darhol
+    `202` (+ ish id'si), tayyor bo'lgach `GET .../{id}/` da `quiz` (qoralama test) paydo bo'ladi."""
 
     parser_classes = [MultiPartParser, FormParser]
 
@@ -131,7 +132,8 @@ class QuizAiGenerateView(APIView):
         job = ai_jobs.create_job(
             teacher=request.user, upload=request.FILES.get('file'), course=data.get('course'),
             subject=data.get('subject', ''), topic=data['topic'], title=data.get('title', ''),
-            standard=data['standard'], question_count=data['question_count'],
+            standard=data.get('standard', ''), question_count=data['question_count'],
+            rules_upload=request.FILES.get('rules_file'), rules_text=data.get('rules_text', ''),
         )
         return Response(AiQuizJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 

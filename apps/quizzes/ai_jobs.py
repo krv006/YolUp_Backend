@@ -1,6 +1,12 @@
-"""Materialdan AI bilan test yaratish (tashqi Test-creator xizmati) — ishlar va ularni yurgizish.
+"""Materialdan AI bilan test yaratish — ishlar va ularni yurgizish.
 
-Oqim:
+Ikki yo'l:
+  * IMTIHON QOIDALARI bo'yicha (asosiy, `standard` bo'sh): o'qituvchi material bilan birga imtihon qoidalari
+    hujjatini/matnini yuklaydi (yoki yuklamaydi — u holda oddiy variantli test). Generator `ai_exam` + `llm`
+    (OpenAI-mos API) — butun ish bitta cron qadamida bajariladi (`_run_engine`).
+  * Test-creator (eski, `standard` berilgan): quyidagi bosqichli oqim.
+
+Test-creator oqimi:
   1. `create_job` — o'qituvchi fayl yuklaydi, ish `queued` bo'ladi (HTTP so'rov darhol qaytadi).
   2. `sync_jobs` (cron, `sync_ai_quizzes` buyrug'i) ishni bosqichma-bosqich olib boradi:
        queued -> materialni xizmatga yuboradi, tahlil boshlanadi        -> processing
@@ -24,12 +30,14 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import User
 
-from . import services, tc_client, test_creator_import
-from .models import AiQuizJob
+from . import ai_exam, llm, material_text, services, tc_client, test_creator_import
+from .models import AiQuizJob, Quiz
 
 logger = logging.getLogger('apps')
 
 MAX_SOURCE_MB = 20
+MAX_RULES_MB = 5
+MAX_RULES_TEXT = 30000
 MIN_QUESTIONS, MAX_QUESTIONS = 5, 60
 MAX_ACTIVE_PER_TEACHER = 3
 MAX_PER_DAY = 10
@@ -43,21 +51,34 @@ GENERATE_FAILED_MESSAGE = (
 )
 
 
-def create_job(*, teacher: User, upload, course, subject: str, topic: str, title: str, standard: str,
-               question_count: int) -> AiQuizJob:
-    if not tc_client.enabled():
-        raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan. Testni qo'lda yarating yoki import qiling.")})
-    if upload is None:
-        raise ValidationError({'file': _('Material fayli majburiy.')})
+def _check_file(upload, field: str, max_mb: int) -> None:
     ext = Path(upload.name or '').suffix.lower()
     if ext not in tc_client.ALLOWED_EXTENSIONS:
-        raise ValidationError({'file': _("Fayl turi qo'llab-quvvatlanmaydi. Ruxsat: %(types)s.") % {
+        raise ValidationError({field: _("Fayl turi qo'llab-quvvatlanmaydi. Ruxsat: %(types)s.") % {
             'types': ', '.join(sorted(tc_client.ALLOWED_EXTENSIONS)),
         }})
-    if upload.size > MAX_SOURCE_MB * 1024 * 1024:
-        raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
-            'size': upload.size / 1024 / 1024, 'max_mb': MAX_SOURCE_MB,
+    if upload.size > max_mb * 1024 * 1024:
+        raise ValidationError({field: _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
+            'size': upload.size / 1024 / 1024, 'max_mb': max_mb,
         }})
+
+
+def create_job(*, teacher: User, upload, course, subject: str, topic: str, title: str, standard: str = '',
+               question_count: int, rules_upload=None, rules_text: str = '') -> AiQuizJob:
+    standard = standard or ''
+    if standard:
+        if not tc_client.enabled():
+            raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan. Testni qo'lda yarating yoki import qiling.")})
+    elif not llm.enabled():
+        raise ValidationError({'detail': _("AI bilan test yaratish hozir o'chirilgan (AI kaliti sozlanmagan). Testni qo'lda yarating yoki import qiling.")})
+    if upload is None:
+        raise ValidationError({'file': _('Material fayli majburiy.')})
+    _check_file(upload, 'file', MAX_SOURCE_MB)
+    if rules_upload is not None:
+        _check_file(rules_upload, 'rules_file', MAX_RULES_MB)
+    rules_text = (rules_text or '').strip()
+    if len(rules_text) > MAX_RULES_TEXT:
+        raise ValidationError({'rules_text': _('Qoidalar matni juda uzun (%(max)s belgigacha).') % {'max': MAX_RULES_TEXT}})
     if not topic.strip():
         raise ValidationError({'topic': _("Mavzu bo'sh bo'lishi mumkin emas.")})
     if not MIN_QUESTIONS <= question_count <= MAX_QUESTIONS:
@@ -83,6 +104,8 @@ def create_job(*, teacher: User, upload, course, subject: str, topic: str, title
     return AiQuizJob.objects.create(
         teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
         standard=standard, question_count=question_count, source_file=upload, source_name=upload.name or '',
+        rules_file=rules_upload, rules_name=(rules_upload.name or '') if rules_upload is not None else '',
+        rules_text=rules_text,
     )
 
 
@@ -98,14 +121,19 @@ def _fail(job: AiQuizJob, message: str) -> None:
 
 
 def _release_source(job: AiQuizJob) -> None:
-    """Yuklangan material kerak bo'lmagach diskdan o'chiriladi."""
-    if job.source_file:
-        try:
-            job.source_file.delete(save=False)
-        except Exception:  # noqa: BLE001
-            logger.warning('AI test: manba fayl o\'chirilmadi', exc_info=True)
-        job.source_file = None
-        job.save(update_fields=['source_file', 'updated_at'])
+    """Yuklangan material va qoidalar fayli kerak bo'lmagach diskdan o'chiriladi."""
+    changed = []
+    for field in ('source_file', 'rules_file'):
+        stored = getattr(job, field)
+        if stored:
+            try:
+                stored.delete(save=False)
+            except Exception:  # noqa: BLE001
+                logger.warning("AI test: yuklangan fayl o'chirilmadi", exc_info=True)
+            setattr(job, field, None)
+            changed.append(field)
+    if changed:
+        job.save(update_fields=changed + ['updated_at'])
 
 
 def _notify(job: AiQuizJob, *, ok: bool) -> None:
@@ -179,7 +207,69 @@ def _generate(job: AiQuizJob) -> None:
     _notify(job, ok=True)
 
 
+def _read(stored, name: str, limit: int) -> str:
+    stored.open('rb')
+    try:
+        return material_text.extract_text(stored.read(), name, max_chars=limit)
+    finally:
+        stored.close()
+
+
+def _run_engine(job: AiQuizJob) -> None:
+    """Imtihon qoidalari bo'yicha butun testni tuzadi (reja -> bo'limlar -> qoralama test).
+    Tayyor bo'limlar `job.plan` da saqlanadi: xato bo'lsa keyingi urinish qolgan joyidan davom etadi."""
+    job.status = AiQuizJob.Status.GENERATING
+    job.save(update_fields=['status', 'updated_at'])
+
+    material = _read(job.source_file, job.source_name, settings.AI_EXAM_MATERIAL_CHARS)
+    rules = job.rules_text
+    if job.rules_file:
+        rules = _read(job.rules_file, job.rules_name, settings.AI_EXAM_RULES_CHARS) + '\n\n' + rules
+
+    state = job.plan if isinstance(job.plan, dict) else {}
+    plan = state.get('plan')
+    if not plan:
+        plan = ai_exam.plan_exam(rules, target_total=job.question_count, topic=job.topic)
+        state = {'plan': plan, 'sections': {}}
+        job.plan = state
+        job.save(update_fields=['plan', 'updated_at'])
+    sections = state.setdefault('sections', {})
+
+    avoid = []
+    for index in range(len(plan['sections'])):
+        key = str(index)
+        if key not in sections:
+            sections[key] = ai_exam.generate_section(plan, index, material, avoid_topics=avoid)
+            job.plan = state
+            job.save(update_fields=['plan', 'updated_at'])
+        done = sections[key]
+        avoid.append(done['title'] or done['passage'][:80])
+
+    groups, questions, summary = ai_exam.assemble(plan, [sections[str(i)] for i in range(len(plan['sections']))])
+    if not questions:
+        raise tc_client.TestCreatorError(
+            "Material va qoidalar asosida birorta ham yaroqli savol chiqmadi. Boshqa (to'liqroq) material bilan "
+            "urinib ko'ring.", permanent=True,
+        )
+    with transaction.atomic():
+        quiz = services.create_quiz(
+            teacher=job.teacher, topic=job.topic, course=job.course, subject=job.subject,
+            title=job.title or plan.get('exam_name', ''), questions=questions, groups=groups,
+            status=Quiz.Status.DRAFT,
+        )
+        job.quiz = quiz
+        job.summary = summary[:300]
+        job.status = AiQuizJob.Status.DONE
+        job.error = ''
+        job.save(update_fields=['quiz', 'summary', 'status', 'error', 'updated_at'])
+    _release_source(job)
+    _notify(job, ok=True)
+
+
 def _advance(job: AiQuizJob) -> None:
+    if not job.standard:
+        _run_engine(job)
+        return
     if job.status == AiQuizJob.Status.QUEUED:
         _start(job)
     if job.status == AiQuizJob.Status.PROCESSING and _check_processing(job):
@@ -191,7 +281,8 @@ def _advance(job: AiQuizJob) -> None:
 def sync_jobs() -> dict:
     """Faol ishlarni bir qadam oldinga suradi. Qaytaradi: {'done': n, 'failed': n, 'waiting': n}."""
     result = {'done': 0, 'failed': 0, 'waiting': 0}
-    if not tc_client.enabled():
+    engine_ok, bank_ok = llm.enabled(), tc_client.enabled()
+    if not (engine_ok or bank_ok):
         return result
     give_up = timezone.now() - timedelta(minutes=settings.TEST_CREATOR_GIVE_UP_MINUTES)
     jobs = list(
@@ -199,6 +290,9 @@ def sync_jobs() -> dict:
         .select_related('teacher', 'course').order_by('created_at')[:_BATCH]
     )
     for job in jobs:
+        if (job.standard and not bank_ok) or (not job.standard and not engine_ok):
+            result['waiting'] += 1  # tegishli xizmat sozlanmagan
+            continue
         if (job.status == AiQuizJob.Status.GENERATING and job.attempts
                 and job.updated_at > timezone.now() - GENERATE_RETRY_PAUSE):
             result['waiting'] += 1  # oxirgi muvaffaqiyatsiz urinishdan keyin pauza
@@ -214,7 +308,7 @@ def sync_jobs() -> dict:
                 _fail(job, str(exc) if exc.permanent else f"Vaqt tugadi: {exc}")
             elif job.attempts >= MAX_GENERATE_ATTEMPTS:
                 logger.warning("AI test ishi %s urinishdan keyin to'xtatildi (%s): %s", job.attempts, job.pk, exc)
-                _fail(job, GENERATE_FAILED_MESSAGE)
+                _fail(job, f'{GENERATE_FAILED_MESSAGE} ({str(exc)[:200]})')
             else:
                 logger.info('AI test ishi vaqtincha kutmoqda (%s): %s', job.pk, exc)
         except Exception as exc:  # noqa: BLE001 — bitta ish butun siklni to'xtatmasin

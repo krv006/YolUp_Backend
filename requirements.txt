@@ -35,3 +35,4 @@ psutil>=6.0
 requests>=2.33
 # Mobil push (FCM) — apps.notifications, PUSH-BACKEND.md
 firebase-admin>=6.5
+pypdf>=5.0

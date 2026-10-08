@@ -265,6 +265,17 @@ TEST_CREATOR_TIMEOUT = 30                                                  # son
 TEST_CREATOR_GENERATE_TIMEOUT = 600                                        # soniya (savollarni yaratish — uzoq)
 TEST_CREATOR_GIVE_UP_MINUTES = 45                                          # shundan keyin ish "xato" bo'ladi
 
+# Imtihon qoidalari bo'yicha AI test generatori (apps/quizzes/ai_exam.py): OpenAI-mos Chat Completions API.
+# OPENAI_API_KEY bo'sh bo'lsa generator o'chiq (endpoint 400 qaytaradi), qolgan platforma ishlayveradi.
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+OPENAI_TIMEOUT = 180                                                       # soniya (bitta so'rov)
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv('OPENAI_MAX_OUTPUT_TOKENS', '8192'))
+AI_EXAM_MAX_QUESTIONS = 80                                                  # bitta testdagi savollar yuqori chegarasi
+AI_EXAM_MATERIAL_CHARS = 40000                                              # materialdan AI'ga beriladigan matn uzunligi
+AI_EXAM_RULES_CHARS = 15000                                                 # qoidalar hujjatidan olinadigan matn uzunligi
+
 # Web Push (ilova/tab yopiq bo'lganda ham bildirishnoma) — apps/notifications.
 # DIQQAT: pastdagi kalitlar faqat DEV/TEST uchun (bir marta generatsiya
 # qilingan, haqiqiy foydalanuvchiga hech qachon push yuborilmagan juftlik).
