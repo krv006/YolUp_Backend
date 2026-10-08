@@ -9,6 +9,8 @@ Nima qiladi (hammasi IDEMPOTENT — qayta ishga tushirsa takrorlamaydi):
   4. `backend/app/api/v1/auth.py` — ro'yxatdan o'tishni YOPADI: faqat `REGISTRATION_ALLOWED_EMAILS`
      (vergul bilan) ro'yxatidagi emaillar ro'yxatdan o'ta oladi (ro'yxat bo'sh bo'lsa — hech kim).
      Aks holda ochiq saytda har kim hisob ochib, Gemini kalitimizni sarflay olardi.
+  6. OpenAI (GPT) provayderi: `openai_provider.py` nusxalanadi, "openai" ro'yxatga olinadi, `openai` paketi qo'shiladi
+     (faollashtirish: `.env` da `TC_AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_MODEL`).
   5. `backend/app/services/question_generation_service.py` — savol tili standartga qarab tanlanadi:
      IELTS va SAT — inglizcha, qolganlari (UZBMB) — o'zbekcha (asl kodda doim o'zbekcha edi).
 """
@@ -28,6 +30,15 @@ except ImportError:  # pragma: no cover
     pass
 
 '''
+OPENAI_ROUTER_BLOCK = '''try:
+    from app.services.providers.openai_provider import OpenAIProvider
+
+    _PROVIDER_REGISTRY["openai"] = OpenAIProvider
+except ImportError:  # pragma: no cover
+    pass
+
+'''
+OPENAI_MODEL_LINE = '"openai": __import__("os").environ.get("OPENAI_MODEL", "gpt-4o-mini"),'
 MODEL_ANCHOR = '"anthropic": settings.ANTHROPIC_MODEL,'
 MODEL_LINE = '"gemini": __import__("os").environ.get("GEMINI_MODEL", "gemini-3.5-flash"),'
 
@@ -94,6 +105,17 @@ def main(root: str) -> None:
 
     print('ai_router.py:', patch_text(base / 'app/services/ai_router.py', 'gemini_provider', router))
 
+    shutil.copyfile(HERE / 'openai_provider.py', base / 'app/services/providers/openai_provider.py')
+    print('openai_provider.py: nusxalandi')
+
+    def openai_router(text):
+        if ROUTER_ANCHOR not in text or MODEL_ANCHOR not in text:
+            raise SystemExit("XATO: ai_router.py ichida kerakli joylar topilmadi (repo versiyasi o'zgargan bo'lishi mumkin).")
+        text = text.replace(ROUTER_ANCHOR, OPENAI_ROUTER_BLOCK + ROUTER_ANCHOR, 1)
+        return text.replace(MODEL_ANCHOR, MODEL_ANCHOR + '\n        ' + OPENAI_MODEL_LINE, 1)
+
+    print('ai_router.py (openai):', patch_text(base / 'app/services/ai_router.py', 'openai_provider', openai_router))
+
     requirements = base / 'requirements.txt'
     text = requirements.read_text(encoding='utf-8')
     if 'google-genai' in text:
@@ -101,6 +123,12 @@ def main(root: str) -> None:
     else:
         requirements.write_text(text.rstrip('\n') + '\ngoogle-genai>=1.0\n', encoding='utf-8', newline='')
         print('requirements.txt: google-genai qo\'shildi')
+    text = requirements.read_text(encoding='utf-8')
+    if re.search(r'(?m)^openai[<>=~! ]', text):
+        print('requirements.txt: openai allaqachon bor')
+    else:
+        requirements.write_text(text.rstrip('\n') + '\nopenai>=1.40\n', encoding='utf-8', newline='')
+        print('requirements.txt: openai qo\'shildi')
 
     print('auth.py:', patch_text(
         base / 'app/api/v1/auth.py', 'REGISTRATION_ALLOWED_EMAILS',

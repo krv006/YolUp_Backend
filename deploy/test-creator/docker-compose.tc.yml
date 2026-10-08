@@ -22,7 +22,8 @@ x-tc-backend: &tc-backend
     REDIS_URL: redis://tc-redis:6379/0
     ENVIRONMENT: production
     DEBUG: "false"
-    AI_DEFAULT_PROVIDER: gemini
+    # Faol provayder: `.env` dagi TC_AI_PROVIDER (gemini | openai | anthropic | mock), standart gemini
+    AI_DEFAULT_PROVIDER: ${TC_AI_PROVIDER:-gemini}
     # Savol sifati chegaralari (0-100). Asl qiymatlar 90/70 — juda qattiq: Test-creator matnli savollarni
     # "matematik hisoblagich" bilan tekshiradi va yaxshi savollarni ham 59-74 ball bilan rad etadi
     # (haqiqiy sinovda 5 tadan 1 tasi o'tdi). Bizda o'qituvchi baribir qoralamani ko'rib chiqadi,

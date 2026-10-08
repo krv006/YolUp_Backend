@@ -95,6 +95,38 @@ kerak emas — ichki xizmatga tashqaridan kirib bo'lmaydi.
 3. `done` bo'lganda `quiz` — qoralama testning id'si; unda savollar, `GET /quizzes/<id>/`.
 4. Bo'lmasa: `docker compose -f docker-compose.prod.yml logs --tail 50 cron` va `... logs --tail 50 tc-api tc-worker`.
 
+## GPT (OpenAI) bilan ishlatish — Gemini o'rniga
+
+Test-creator Gemini, **OpenAI (GPT)**, Claude va mock provayderlarini biladi; faol provayderni `.env` dagi `TC_AI_PROVIDER` tanlaydi
+(standart `gemini`). GPT'ni yoqish:
+
+1. Yangi kodni oling va moslashtirishni qayta qo'llang (OpenAI provayderini qo'shadi, takrorlansa zarar yo'q):
+
+```bash
+cd /var/www/edu_platform && git pull && python3 deploy/test-creator/apply_patch.py /var/www/test-creator
+```
+
+2. OpenAI kalitini `/var/www/test-creator/.env` ga yozing (ekranda ko'rinmaydi, chatga yubormang) va provayderni almashtiring:
+
+```bash
+read -rsp "OpenAI kaliti: " K && echo && sed -i '/^OPENAI_API_KEY=/d; /^TC_AI_PROVIDER=/d' /var/www/test-creator/.env && printf "OPENAI_API_KEY=%s\nTC_AI_PROVIDER=openai\n" "$K" >> /var/www/test-creator/.env && unset K && echo "tayyor"
+```
+
+3. Model nomini bering (hisobingizda ruxsat etilgan model; bo'lmasa standart `gpt-4o-mini`):
+
+```bash
+sed -i '/^OPENAI_MODEL=/d' /var/www/test-creator/.env && echo "OPENAI_MODEL=MODEL_NOMI" >> /var/www/test-creator/.env
+```
+
+4. Qayta yig'ing va ishga tushiring (yangi `openai` paketi o'rnatiladi):
+
+```bash
+cd /var/www/edu_platform && docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env up -d --build
+```
+
+Gemini'ga qaytish: `.env` dan `TC_AI_PROVIDER` qatorini o'chiring (yoki `gemini` qiling) va 4-qadamni takrorlang.
+Kalit va chegaralar: `OPENAI_MAX_OUTPUT_TOKENS` (standart 8192) — "reasoning" modellar uchun oshirish kerak bo'lishi mumkin.
+
 ## Bilib qo'ying
 
 - **Material kerak:** Test-creator mavzu nomidan emas, yuklangan materialdan savol yaratadi (matn asosida). Skanerlangan

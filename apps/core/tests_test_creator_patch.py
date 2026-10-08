@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import time
@@ -133,6 +134,11 @@ class ApplyPatchTests(SimpleTestCase):
         self.assertIn('_PROVIDER_REGISTRY["gemini"] = GeminiProvider', router)
         self.assertIn('"gemini": __import__("os").environ.get("GEMINI_MODEL", "gemini-3.5-flash"),', router)
         self.assertIn('google-genai>=1.0', self.read('backend/requirements.txt'))
+        self.assertIn('openai>=1.40', self.read('backend/requirements.txt'))
+        self.assertTrue((self.root / 'backend/app/services/providers/openai_provider.py').exists())
+        self.assertIn('_PROVIDER_REGISTRY["openai"] = OpenAIProvider', router)
+        self.assertIn('"openai": __import__("os").environ.get("OPENAI_MODEL", "gpt-4o-mini"),', router)
+        self.assertEqual(router.count('_PROVIDER_REGISTRY["gemini"]'), 1)  # Gemini ikki marta qo'shilmaydi
         auth = self.read('backend/app/api/v1/auth.py')
         self.assertIn('REGISTRATION_ALLOWED_EMAILS', auth)
         # tekshiruv register ichida, login'ga tegilmagan
@@ -431,10 +437,121 @@ class DeployFilesTests(SimpleTestCase):
 
     def test_test_creator_uses_gemini_and_closed_registration_defaults(self):
         compose = self.read('deploy/test-creator/docker-compose.tc.yml')
-        self.assertIn('AI_DEFAULT_PROVIDER: gemini', compose)
+        self.assertIn('AI_DEFAULT_PROVIDER: ${TC_AI_PROVIDER:-gemini}', compose)
         self.assertIn('DEBUG: "false"', compose)
         self.assertIn('QUALITY_AUTO_APPROVE_THRESHOLD: "55"', compose)
         self.assertIn('QUALITY_REJECT_THRESHOLD: "40"', compose)
         readme = self.read('deploy/test-creator/README.md')
         self.assertIn('REGISTRATION_ALLOWED_EMAILS', readme)
         self.assertIn('apply_patch.py', readme)
+
+
+# --------------------------------------------------------------------------- OpenAIProvider
+class OpenAIProviderTests(SimpleTestCase):
+    def setUp(self):
+        base = types.ModuleType('app.services.providers.base')
+        base.AIProvider = object
+        base.EmbeddingResult = EmbeddingResult
+        base.GeneratedQuestion = GeneratedQuestion
+        base.KnowledgeExtractionResult = KnowledgeExtractionResult
+        base.QuestionGenerationResult = QuestionGenerationResult
+        mock_module = types.ModuleType('app.services.providers.mock_provider')
+        mock_module.MockProvider = FakeMock
+        self.client = MagicMock()
+        openai = types.ModuleType('openai')
+        openai.OpenAI = MagicMock(return_value=self.client)
+        self.openai = openai
+        modules = {
+            'app': types.ModuleType('app'), 'app.services': types.ModuleType('app.services'),
+            'app.services.providers': types.ModuleType('app.services.providers'),
+            'app.services.providers.base': base, 'app.services.providers.mock_provider': mock_module,
+            'openai': openai,
+        }
+        patcher = patch.dict(sys.modules, modules)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # OpenAI provayderi Gemini provayderidan meros oladi — avval o'sha yuklanadi
+        sys.modules['app.services.providers.gemini_provider'] = load(DEPLOY / 'gemini_provider.py', 'tc_gem_for_openai')
+        env = patch.dict('os.environ', {'OPENAI_API_KEY': 'k', 'OPENAI_MODEL': 'gpt-test'})
+        env.start()
+        self.addCleanup(env.stop)
+        sleep = patch('time.sleep', lambda *_: None)
+        sleep.start()
+        self.addCleanup(sleep.stop)
+        self.module = load(DEPLOY / 'openai_provider.py', 'tc_openai_provider')
+        self.provider = self.module.OpenAIProvider()
+
+    @staticmethod
+    def completion(text, prompt=100, output=50):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+            usage=SimpleNamespace(prompt_tokens=prompt, completion_tokens=output),
+        )
+
+    def mcq(self, text='Q?', correct=1):
+        return {'question_text': text, 'question_type': 'multiple_choice', 'difficulty': 'easy',
+                'options': [{'label': l, 'text': f'v{l}', 'is_correct': i == correct} for i, l in enumerate('ABCD')],
+                'correct_answer': {'value': 'vB'}, 'explanation': 'because'}
+
+    def generate(self, **kw):
+        defaults = dict(subject_name='English', topic_name='T', chunks=[{'index': 0, 'text': 'x'}],
+                        standard_config={}, difficulty='easy', question_type='multiple_choice', count=5,
+                        avoid_similar_to=[], language='en')
+        return self.provider.generate_questions(**{**defaults, **kw})
+
+    def test_questions_use_chat_completions_with_json_mode_and_report_tokens(self):
+        payload = {'questions': [self.mcq('One?'), self.mcq('Two?')]}
+        self.client.chat.completions.create.return_value = self.completion('```json\n' + json.dumps(payload) + '\n```', 321, 87)
+        result = self.generate(count=2)
+        self.assertEqual([q.question_text for q in result.questions], ['One?', 'Two?'])
+        self.assertEqual((result.input_tokens, result.output_tokens), (321, 87))
+        call = self.client.chat.completions.create.call_args.kwargs
+        self.assertEqual(call['model'], 'gpt-test')
+        self.assertEqual(call['response_format'], {'type': 'json_object'})
+        self.assertEqual(call['max_completion_tokens'], 8192)
+        self.assertEqual([m['role'] for m in call['messages']], ['system', 'user'])
+        self.assertIn('JSON', call['messages'][0]['content'])  # JSON rejimi promptda "JSON" so'zini talab qiladi
+        sent = json.loads(call['messages'][1]['content'])
+        self.assertEqual((sent['count'], sent['language']), (2, 'en'))
+        self.openai.OpenAI.assert_called_once()
+        self.assertEqual(self.openai.OpenAI.call_args.kwargs['api_key'], 'k')
+
+    def test_questions_without_exactly_one_correct_option_are_dropped(self):
+        bad = self.mcq('Two correct')
+        bad['options'][0]['is_correct'] = True
+        self.client.chat.completions.create.return_value = self.completion(
+            json.dumps({'questions': [self.mcq('Good'), bad, {'question_text': ' '}]}))
+        self.assertEqual([q.question_text for q in self.generate().questions], ['Good'])
+
+    def test_invalid_json_is_retried_with_a_correction_message(self):
+        good = self.completion(json.dumps({'questions': [self.mcq('Q?')]}))
+        self.client.chat.completions.create.side_effect = [self.completion('not json'), good]
+        self.assertEqual(len(self.generate().questions), 1)
+        second = self.client.chat.completions.create.call_args_list[1].kwargs['messages']
+        self.assertIn('not a valid JSON', second[-1]['content'])
+
+    def test_network_errors_are_retried_then_raise_with_the_provider_name(self):
+        self.client.chat.completions.create.side_effect = ConnectionError('down')
+        with self.assertRaises(RuntimeError) as ctx:
+            self.generate()
+        self.assertIn('OpenAI', str(ctx.exception))
+        self.assertEqual(self.client.chat.completions.create.call_count, 3)
+
+    def test_knowledge_tree_and_embeddings_are_inherited(self):
+        tree = {'tree': [{'level': 'topic', 'name': 'Grammar', 'children': []}, {'level': 'topic'}]}
+        self.client.chat.completions.create.return_value = self.completion(json.dumps(tree))
+        result = self.provider.extract_knowledge('English', [{'index': 0, 'text': 'x'}])
+        self.assertEqual([n['name'] for n in result.tree], ['Grammar'])
+        self.assertEqual(len(self.provider.embed(['a']).vectors[0]), 384)
+
+    def test_missing_key_is_a_clear_error(self):
+        with patch.dict('os.environ', {'OPENAI_API_KEY': ''}):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.module.OpenAIProvider()
+        self.assertIn('OPENAI_API_KEY', str(ctx.exception))
+
+    def test_default_model_and_output_limit_are_overridable(self):
+        with patch.dict('os.environ', {'OPENAI_MODEL': '', 'OPENAI_MAX_OUTPUT_TOKENS': '4000'}):
+            os.environ.pop('OPENAI_MODEL')
+            provider = self.module.OpenAIProvider()
+        self.assertEqual((provider.model, provider.max_output_tokens), ('gpt-4o-mini', 4000))
