@@ -236,6 +236,64 @@ class PlanTests(SimpleTestCase):
         self.assertEqual(plan['sections'][0]['blocks'][0]['count'], 15)
 
 
+class SectionWriterTests(SimpleTestCase):
+    """Zaxira savollar va blok belgilari: yaroqsiz savollar zaxira bilan almashadi, bloklar aralashmaydi."""
+
+    PLAN = {
+        'exam_name': 'X', 'language': 'en', 'rules': [],
+        'sections': [{'title': 'S1', 'passage': None, 'focus': '', 'blocks': [
+            {'type': 'mcq', 'count': 2, 'instruction': 'A', 'options': 4, 'points': 1},
+            {'type': 'mcq', 'count': 2, 'instruction': 'B', 'options': 4, 'points': 1},
+        ]}],
+    }
+
+    @staticmethod
+    def mcq(text, block=None, valid=True):
+        item = {'kind': 'mcq', 'text': text, 'options': ['a', 'b', 'c'] if valid else ['only'], 'answer': 0}
+        if block is not None:
+            item['block'] = block
+        return item
+
+    def write(self, questions):
+        with patch('apps.quizzes.llm.chat_json', return_value={'passage': '', 'questions': questions}) as chat:
+            result = ai_exam.generate_section(self.PLAN, 0, 'material', avoid_topics=[])
+        return result, json.loads(chat.call_args.args[1])
+
+    def test_the_model_is_asked_for_spares_and_block_indexes(self):
+        _, sent = self.write([self.mcq('q', 0)])
+        blocks = sent['section_spec']['blocks']
+        self.assertEqual([(b['index'], b['spare']) for b in blocks], [(0, 1), (1, 1)])
+
+    def test_a_spare_replaces_an_invalid_question(self):
+        result, _ = self.write([
+            self.mcq('bad', 0, valid=False), self.mcq('one', 0), self.mcq('two', 0), self.mcq('spare', 0),
+            self.mcq('three', 1), self.mcq('four', 1),
+        ])
+        self.assertEqual([q['text'].split('\n\n')[-1] for q in result['questions']], ['one', 'two', 'three', 'four'])
+        self.assertEqual(result['missing'], 0)
+
+    def test_spares_of_one_block_do_not_leak_into_the_next_same_kind_block(self):
+        result, _ = self.write([
+            self.mcq('a1', 0), self.mcq('a2', 0), self.mcq('a-spare', 0), self.mcq('b1', 1), self.mcq('b2', 1),
+        ])
+        texts = [(q['block'], q['text'].split('\n\n')[-1]) for q in result['questions']]
+        self.assertEqual(texts, [(0, 'a1'), (0, 'a2'), (1, 'b1'), (1, 'b2')])
+
+    def test_without_block_markers_questions_are_assigned_in_order(self):
+        result, _ = self.write([self.mcq('1'), self.mcq('2'), self.mcq('3'), self.mcq('4')])
+        self.assertEqual([q['block'] for q in result['questions']], [0, 0, 1, 1])
+
+    def test_only_really_missing_questions_are_reported(self):
+        result, _ = self.write([self.mcq('a1', 0), self.mcq('b1', 1), self.mcq('b2', 1)])
+        self.assertEqual(result['missing'], 1)
+        groups, questions, summary = ai_exam.assemble(self.PLAN, [result])
+        self.assertIn('1 ta savol yetishmagani uchun tushib qoldi', summary)
+
+    def test_writer_prompt_demands_exact_spelling_and_unambiguous_questions(self):
+        for phrase in ('exactly as spelled', 'several valid answers', 'NOT GIVEN', '"spare"'):
+            self.assertIn(phrase, ai_exam._WRITER_SYSTEM)
+
+
 class QuestionConversionTests(SimpleTestCase):
     def convert(self, raw):
         question = ai_exam._to_question(raw, points=1)
@@ -629,11 +687,11 @@ class AiExamJobTests(QuizTestBase):
     def test_auto_count_without_an_exam_falls_back_to_a_standard_simple_test(self):
         response = self.post_raw(topic='Bees')
         del response
-        self.assertEqual(AiQuizJob.objects.latest('id').question_count, 10)
+        self.assertEqual(AiQuizJob.objects.latest('created_at').question_count, 10)
         self.auth(self.teacher_token)
         data = {'topic': 'Bees', 'course': self.course_id}
         self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
-        self.assertEqual(AiQuizJob.objects.latest('id').question_count, 20)
+        self.assertEqual(AiQuizJob.objects.latest('created_at').question_count, 20)
 
     def test_neither_name_nor_rules_means_no_planning_call(self):
         self.post_raw(topic='Bees')

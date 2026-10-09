@@ -12,11 +12,14 @@ Natija bizning savol turlarimizga o'tkaziladi va `QuestionWriteSerializer` bilan
 tashlanadi). Shu tariqa har bir test IELTS'dagi kabi ko'p turli savol, bo'limlar va matn parchalari bilan keladi.
 """
 import json
+import logging
 import re
 
 from django.conf import settings
 
 from . import llm
+
+logger = logging.getLogger('apps')
 
 # Reja tilidagi blok turlari
 KINDS = (
@@ -75,8 +78,14 @@ _WRITER_SYSTEM = (
     'the exam RULES. Base everything on the SOURCE MATERIAL: every correct answer must be supported by the '
     'passage/material, never invent facts that contradict it. Each question must have exactly one defensible '
     'answer (or the stated number of answers), plausible distractors, and no hints in the wording. '
-    'Follow the question blocks in order and give EXACTLY the requested count per block, using the block type as '
-    '"kind". Do not number the questions and do not repeat the block instruction inside each question '
+    'Copy answers exactly as spelled in the passage (keep British/American spelling and word forms). Never write a '
+    'question that has several valid answers in the passage (for example "which city" when several cities are '
+    'named). For true/false/not given and yes/no/not given blocks use all three outcomes in a realistic mix: NOT '
+    'GIVEN means the passage neither confirms nor contradicts the statement. '
+    'Follow the question blocks in order. For every block write its "count" questions PLUS its "spare" extra '
+    'questions of the same kind (spares replace questions that fail validation; put the best questions first). '
+    'Use the block type as "kind" and put the block "index" into every question as "block". '
+    'Do not number the questions and do not repeat the block instruction inside each question '
     '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
@@ -295,7 +304,22 @@ def _validated(question: dict):
     from .serializers import QuestionWriteSerializer
 
     serializer = QuestionWriteSerializer(data=question, context={'draft': True})
-    return serializer.validated_data if serializer.is_valid() else None
+    if serializer.is_valid():
+        return serializer.validated_data
+    logger.info("AI savoli yaroqsiz (%s): %s", question.get('type'), str(serializer.errors)[:300])
+    return None
+
+
+def _belongs(raw: dict, block_index: int, block: dict) -> bool:
+    """Savol shu blokka tegishlimi: turi mos va (model `block` raqamini yozgan bo'lsa) raqami ham mos."""
+    if raw.get('kind') != block['type']:
+        return False
+    marker = _int(raw.get('block'))
+    return marker is None or marker == block_index
+
+
+def _spares(count: int) -> int:
+    return 2 if count >= 3 else 1  # tushib qoladigan savollar o'rniga zaxira
 
 
 # ─── Bo'lim yozish ─────────────────────────────────────────────────────────
@@ -307,7 +331,8 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     section = plan['sections'][index]
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
-        'passage': section['passage'], 'focus': section.get('focus', ''), 'blocks': section['blocks'],
+        'passage': section['passage'], 'focus': section.get('focus', ''),
+        'blocks': [{**block, 'index': i, 'spare': _spares(block['count'])} for i, block in enumerate(section['blocks'])],
     }
     user = json.dumps({
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],
@@ -327,12 +352,14 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         for raw in list(raw_questions):
             if len(mine) >= block['count']:
                 break
-            if raw.get('kind') == block['type']:
+            if _belongs(raw, block_index, block):
                 raw_questions.remove(raw)
                 converted = _to_question(raw, points=block['points'])
                 valid = _validated(converted) if converted else None
                 if valid is None:
                     dropped += 1
+                    if converted is None:
+                        logger.info("AI savoli shaklga kelmadi (%s): %s", raw.get('kind'), str(raw)[:200])
                     continue
                 mine.append(valid)
         missing += max(0, block['count'] - len(mine))
@@ -358,6 +385,6 @@ def assemble(plan: dict, sections: list) -> tuple:
         dropped += section['dropped']
         missing += section['missing']
     summary = f"{len(sections)} bo'lim · {len(questions)} savol"
-    if dropped or missing:
-        summary += f" ({dropped + missing} ta savol yaroqsiz/yetishmagani uchun tushib qoldi)"
+    if missing:  # zaxira savollar bilan to'ldirilgan yaroqsizlar (dropped) hisobga olinmaydi — faqat reja bo'yicha yetishmaganlar
+        summary += f" ({missing} ta savol yetishmagani uchun tushib qoldi)"
     return groups, questions, summary
