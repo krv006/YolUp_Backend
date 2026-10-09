@@ -301,7 +301,9 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
     raise ValidationError({'format': _("Format faqat 'docx' yoki 'xlsx' bo'lishi mumkin.")})
 
 
-_EDITABLE_FIELDS = ('topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status')
+_EDITABLE_FIELDS = (
+    'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course',
+)
 
 
 @transaction.atomic
@@ -322,7 +324,19 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
 
     questions = fields.pop('questions', None)
     groups = fields.pop('groups', None)
+    new_course = fields.pop('course', None)
     requested_status = fields.pop('status', None)
+    moved = False
+    if new_course is not None and new_course.id != quiz.course_id:
+        # Faqat guruhsiz (fan bo'yicha, masalan AI yaratgan) testni o'z guruhiga biriktirish mumkin
+        if quiz.course_id is not None:
+            raise ValidationError({'course': _("Test allaqachon guruhga biriktirilgan.")})
+        if new_course.teacher_id != teacher.id:
+            raise PermissionDenied(_('Bu guruh sizga tegishli emas.'))
+        quiz.course, quiz.subject, moved = new_course, new_course.subject, True
+        quiz.save(update_fields=['course', 'subject'])
+        if quiz.status == Quiz.Status.DRAFT and requested_status is None:
+            requested_status = Quiz.Status.DRAFT  # guruhga ko'chirish qoralamani o'zi e'lon qilib yubormasin
     if requested_status == Quiz.Status.DRAFT and quiz.status == Quiz.Status.PUBLISHED:
         raise ValidationError({'status': _("E'lon qilingan testni qoralamaga qaytarib bo'lmaydi.")})
     if questions is not None:
@@ -352,14 +366,18 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
     # avtomatik e'lon qilinadi. To'liq bo'lmasa qoralama bo'lib qoladi (progress
     # yo'qolmaydi) — faqat `status: "published"` ANIQ so'ralgan bo'lsa 400.
     # `status: "draft"` — ataylab qoralamada ushlab turish.
+    published_now = False
     if quiz.status == Quiz.Status.DRAFT and requested_status != Quiz.Status.DRAFT:
         complete = quiz.questions.exists() and not incomplete_questions(quiz)
         if complete:
             quiz.status = Quiz.Status.PUBLISHED
             quiz.save(update_fields=['status'])
             _notify_if_open(quiz)
+            published_now = True
         elif requested_status == Quiz.Status.PUBLISHED:
             publish_quiz(teacher=teacher, quiz=quiz)  # tushunarli 400 xabari uchun
+    if moved and quiz.status == Quiz.Status.PUBLISHED and not published_now:
+        _notify_if_open(quiz)  # e'lon qilingan test guruhga endi tushdi — o'quvchilarga xabar
     return quiz
 
 

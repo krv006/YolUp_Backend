@@ -202,10 +202,12 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
     })
     questions = QuestionWriteSerializer(many=True, required=False)
     groups = GroupWriteSerializer(many=True, required=False)
+    # Guruhsiz testni guruhga biriktirish (services.update_quiz tekshiradi)
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False)
 
     class Meta:
         model = Quiz
-        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status']
+        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course']
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
             'description': {'required': False, 'allow_blank': True},
