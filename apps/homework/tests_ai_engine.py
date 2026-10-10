@@ -219,6 +219,22 @@ class CleanResultTests(SimpleTestCase):
         self.assertEqual(result['summary']['recommendations'], [])
 
     @override_settings(**LLM_ON)
+    def test_points_added_up_by_the_model_are_replaced_by_the_average(self):
+        # haqiqiy holat: "har masala 50 balldan" ko'rsatmasida model 50 + 40 = 90 deb umumiy ball bergan
+        result = ai_grader.clean_result({'overall_score': 90, 'questions': [{'score': 50}, {'score': 40}]})
+        self.assertEqual(result['overall_score'], 45.0)
+        self.assertEqual(result['grade'], 'Jiddiy yaxshilash kerak')
+
+    @override_settings(**LLM_ON)
+    def test_a_weighted_overall_inside_the_item_range_is_kept(self):
+        result = ai_grader.clean_result({'overall_score': 62, 'questions': [{'score': 100}, {'score': 40}]})
+        self.assertEqual(result['overall_score'], 62.0)  # 100 va 40 orasida: og'irlikli o'rtacha bo'lishi mumkin
+
+    def test_prompt_defines_scores_as_percentages_and_caps_a_wrong_answer(self):
+        for phrase in ('PERCENTAGE', 'never raw points', 'weighted average', 'wrong final answer must not get more than 60'):
+            self.assertIn(phrase, ai_grader._SYSTEM)
+
+    @override_settings(**LLM_ON)
     def test_empty_or_unreadable_work_has_no_score(self):
         result = ai_grader.clean_result({'overall_score': None, 'questions': [], 'summary': {'weaknesses': ['bo\'sh']}})
         self.assertIsNone(result['overall_score'])
