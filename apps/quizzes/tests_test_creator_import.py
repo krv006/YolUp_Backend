@@ -250,3 +250,42 @@ class TestCreatorImportApiTests(QuizTestBase):
         resp = self.upload('t.pdf', b'%PDF')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('.json', str(resp.json()))
+
+
+class NewExportFormatTests(SimpleTestCase):
+    """Test-creator'ning yangi (2026-10) JSON eksporti: `text`, `number`, `options[].letter/is_correct`, `answer`."""
+
+    PAYLOAD = {'title': 'IELTS Reading', 'mode': 'teacher', 'questions': [
+        {'number': 2, 'text': '2 + 2 = ?', 'difficulty': 'easy', 'answer': 'B', 'explanation': '',
+         'options': [{'letter': 'A', 'text': '3', 'is_correct': False}, {'letter': 'B', 'text': '4', 'is_correct': True}]},
+        {'number': 1, 'text': 'Capital of France?', 'difficulty': 'easy', 'answer': 'A', 'explanation': 'Paris',
+         'options': [{'letter': 'A', 'text': 'Paris', 'is_correct': True}, {'letter': 'B', 'text': 'Rome', 'is_correct': False},
+                     {'letter': 'C', 'text': 'Berlin', 'is_correct': False}]},
+    ]}
+
+    def parse(self, payload=None):
+        return test_creator_import.parse_test_creator_json(io.BytesIO(json.dumps(payload or self.PAYLOAD).encode()))
+
+    def test_questions_are_read_in_order_with_the_right_answers(self):
+        preview = self.parse()
+        self.assertEqual([q['text'] for q in preview['questions']], ['Capital of France?', '2 + 2 = ?'])
+        self.assertEqual([[o['is_correct'] for o in q['options']] for q in preview['questions']],
+                         [[True, False, False], [False, True]])
+        self.assertEqual((preview['title'], preview['warnings']), ('IELTS Reading', []))
+
+    def test_a_letter_only_answer_key_is_enough(self):
+        payload = json.loads(json.dumps(self.PAYLOAD))
+        for question in payload['questions']:
+            for option in question['options']:
+                option.pop('is_correct')
+        preview = self.parse(payload)
+        self.assertEqual([[o['is_correct'] for o in q['options']] for q in preview['questions']],
+                         [[True, False, False], [False, True]])
+
+    def test_student_copy_without_answers_is_flagged(self):
+        payload = json.loads(json.dumps(self.PAYLOAD))
+        for question in payload['questions']:
+            question.pop('answer')
+            question['options'] = [{'letter': o['letter'], 'text': o['text']} for o in question['options']]
+        preview = self.parse(payload)
+        self.assertEqual({w['reason'] for w in preview['warnings']}, {'answer_not_detected'})

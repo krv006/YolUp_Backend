@@ -1,38 +1,50 @@
-# Test-creator (RJalol/Test-creator) — standartga asoslangan savollar banki va test generatori.
+# Test-creator (RJalol/Test-creator, 2026-10 versiyasi) — standartga asoslangan savollar banki va test generatori.
 # ALOHIDA, ICHKI xizmat: asosiy docker-compose.prod.yml'dan mustaqil (u ishlamasa platforma ishlayveradi).
 # Foydalanuvchi unga hech qachon to'g'ridan-to'g'ri kirmaydi — o'qituvchi platformaning o'zidagi
-# "AI bilan test yaratish" tugmasini bosadi, bizning backend (`apps/quizzes/tc_client.py`) uni
-# ichki tarmoq orqali chaqiradi:  http://tc-api:8000/api/v1
+# "AI bilan test yaratish" sahifasida "Test banki" tanlovini ishlatadi, bizning backend
+# (`apps/quizzes/tc_client.py`) uni ichki tarmoq orqali chaqiradi:  http://tc-api:8000/api/v1
 #
 # Ishga tushirish (serverda, /var/www/edu_platform ichida):
-#   docker compose -f deploy/test-creator/docker-compose.tc.yml #       --env-file /var/www/test-creator/.env up -d --build
-# To'liq qadamlar (patch, .env, platformaga ulash): deploy/test-creator/README.md
+#   docker compose -f deploy/test-creator/docker-compose.tc.yml --env-file /var/www/test-creator/.env up -d --build
+# To'liq qadamlar (kod, .env, xizmat hisobi, platformaga ulash): deploy/test-creator/README.md
 #
 # Tashqariga PORT OCHILMAYDI va Caddy'da marshrut YO'Q; faqat `edu_platform_default` tarmog'idagi
 # bizning backend/cron konteynerlari `tc-api` nomi bilan ko'radi. Frontend ham yig'ilmaydi (kerak emas).
+# AI provayderi Test-creator'ning o'zida (OpenAI / Gemini / Claude) — sozlash faqat `.env` orqali, kod o'zgarmaydi.
 name: test_creator
+
+x-tc-env: &tc-env
+  DATABASE_URL: postgresql+psycopg://qbank:${TC_DB_PASSWORD:?TC_DB_PASSWORD .env da berilishi shart}@tc-db:5432/qbank
+  REDIS_URL: redis://tc-redis:6379/0
+  STORAGE_LOCAL_PATH: /app/storage
+  ENVIRONMENT: production
+  DEBUG: "false"
+  # Faol provayder: `.env` dagi TC_AI_PROVIDER (openai | gemini | anthropic | mock), standart openai.
+  # Kalit: OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY (tanlangan provayderniki shart —
+  # bo'sh bo'lsa xizmat ishga tushmaydi va xato matnida qaysi o'zgaruvchi yetishmayotganini aytadi).
+  AI_PROVIDER: ${TC_AI_PROVIDER:-openai}
+  # Faqat bizning backend ishlatadigan yagona xizmat hisobi (`create-user`, README 3-qadam);
+  # tashqaridan ro'yxatdan o'tish yopiq. CRM bilan yagona kirish (SSO) ishlatilmaydi.
+  ALLOW_REGISTRATION: "false"
+  SSO_ENABLED: "false"
+  CORS_ORIGINS: ""
+  # Savol sifati chegaralari (0-100). Asl qiymatlar 90/70 — qattiq: yaxshi savollarning ko'pi ham rad etilardi
+  # (haqiqiy sinovda 5 tadan 1 tasi o'tdi). Bizda o'qituvchi baribir qoralamani ko'rib chiqadi, shuning
+  # uchun 55 dan yuqorisi testga qo'shiladi, 40 dan pasti rad etiladi.
+  QUALITY_AUTO_APPROVE_THRESHOLD: "55"
+  QUALITY_REJECT_THRESHOLD: "40"
+  # Kunlik AI chaqiruv chegarasi: kalit bilan bog'liq xarajatni cheklaydi (0 — cheksiz)
+  AI_DAILY_REQUEST_LIMIT_PER_ORG: ${TC_AI_DAILY_LIMIT:-200}
+  AI_DAILY_REQUEST_LIMIT_GLOBAL: ${TC_AI_DAILY_LIMIT:-200}
 
 x-tc-backend: &tc-backend
   build:
     context: ${TC_SRC:-/var/www/test-creator}/backend
   restart: unless-stopped
   env_file: ${TC_ENV_FILE:-/var/www/test-creator/.env}
-  environment:
-    DATABASE_URL: postgresql+psycopg://qbank:${TC_DB_PASSWORD:?TC_DB_PASSWORD .env da berilishi shart}@tc-db:5432/qbank
-    REDIS_URL: redis://tc-redis:6379/0
-    ENVIRONMENT: production
-    DEBUG: "false"
-    # Faol provayder: `.env` dagi TC_AI_PROVIDER (gemini | openai | anthropic | mock), standart gemini
-    AI_DEFAULT_PROVIDER: ${TC_AI_PROVIDER:-gemini}
-    # Savol sifati chegaralari (0-100). Asl qiymatlar 90/70 — juda qattiq: Test-creator matnli savollarni
-    # "matematik hisoblagich" bilan tekshiradi va yaxshi savollarni ham 59-74 ball bilan rad etadi
-    # (haqiqiy sinovda 5 tadan 1 tasi o'tdi). Bizda o'qituvchi baribir qoralamani ko'rib chiqadi,
-    # shuning uchun 55 dan yuqorisi testga qo'shiladi, 40 dan pasti rad etiladi.
-    QUALITY_AUTO_APPROVE_THRESHOLD: "55"
-    QUALITY_REJECT_THRESHOLD: "40"
-    CORS_ORIGINS: '[]'
+  environment: *tc-env
   volumes:
-    - tc_storage:/app/storage
+    - tc2_storage:/app/storage
   depends_on:
     tc-db:
       condition: service_healthy
@@ -48,7 +60,7 @@ services:
       POSTGRES_PASSWORD: ${TC_DB_PASSWORD:?TC_DB_PASSWORD .env da berilishi shart}
       POSTGRES_DB: qbank
     volumes:
-      - tc_pgdata:/var/lib/postgresql/data
+      - tc2_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U qbank"]
       interval: 5s
@@ -58,6 +70,9 @@ services:
   tc-redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - tc2_redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -66,18 +81,23 @@ services:
 
   tc-api:
     <<: *tc-backend
-    # Migratsiya va boshlang'ich ma'lumotlar (UZBMB, IELTS Academic, Digital SAT standartlari) — qayta
-    # ishga tushirilsa takrorlanmaydi
+    # Migratsiya va boshlang'ich ma'lumotlar (UZBMB, IELTS Academic, Digital SAT standartlari, fanlar) —
+    # qayta ishga tushirilsa takrorlanmaydi
     command: >
       sh -c "alembic upgrade head &&
              python -m app.seed.seed_data &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+             gunicorn app.main:app -c gunicorn.conf.py"
+    environment:
+      <<: *tc-env
+      WEB_CONCURRENCY: "2"
+      # Bizning backend shu tarmoqdan ulanadi; X-Forwarded-For ishlatilmaydi
+      FORWARDED_ALLOW_IPS: "*"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 90s
     networks:
       default: {}
       edu:
@@ -89,8 +109,9 @@ services:
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
 
 volumes:
-  tc_pgdata:
-  tc_storage:
+  tc2_pgdata:
+  tc2_storage:
+  tc2_redis:
 
 networks:
   # Bizning backend va Caddy turgan tarmoq (docker-compose.prod.yml, loyiha nomi `edu_platform`)

@@ -4,14 +4,15 @@ Bu — bizning backend ichidagi AI EMAS: alohida Docker xizmati (`deploy/test-cr
 ochilmaydi, faqat bizning backend ichki tarmoq orqali chaqiradi. Xizmat sozlanmagan
 (`TEST_CREATOR_URL` bo'sh) bo'lsa "AI bilan test yaratish" o'chiq turadi.
 
-Xizmatdagi to'liq oqim (uning API'sidan):
-  POST /auth/login | /auth/register           — JWT (biz bitta "xizmat hisobi" bilan kiramiz)
-  GET  /subjects, /standards, /standards/{code}/versions
+Xizmatdagi to'liq oqim (uning API'sidan, 2026-10 versiyasi):
+  POST /auth/login                             — JWT (biz bitta "xizmat hisobi" bilan kiramiz)
+  GET  /subjects, /standards, /standards/{id}/versions  (standart kodi -> id: GET /standards)
   POST /documents (multipart file, subject_id) — material yuklash
   POST /documents/{id}/process                 — fon (Celery) tahlil; GET /documents/{id}/status
   POST /blueprints                             — test rejasi (standart + savollar soni)
-  POST /tests/generate                         — rejani bankdan/AI dan to'ldiradi (uzoq, sinxron)
-  POST /tests/{id}/export?format=json&mode=teacher — bizning JSON importer o'qiydigan eksport
+  POST /tests/generate                         — FONDA boshlaydi (202); GET /tests/{id} — holat:
+                                                 generating -> ready | partial | failed
+  GET  /tests/{id}/export?format=json&mode=teacher — bizning JSON importer o'qiydigan eksport
 """
 import logging
 
@@ -78,11 +79,16 @@ def _login() -> str:
     credentials = {'email': settings.TEST_CREATOR_EMAIL, 'password': settings.TEST_CREATOR_PASSWORD}
     response = _raw('POST', '/auth/login', json=credentials)
     if response.status_code == 401:
-        # Birinchi ishga tushirish: xizmat hisobi hali yo'q — ro'yxatdan o'tkazamiz.
-        # (Xizmatda ro'yxatdan o'tish yopiq bo'lsa, bu email ruxsat ro'yxatida bo'lishi shart.)
+        # Birinchi ishga tushirish: xizmat hisobi hali yo'q — ro'yxatdan o'tkazishga urinamiz
+        # (xizmatda ro'yxatdan o'tish yopiq bo'lsa, hisob `create-user` bilan oldindan yaratilgan bo'lishi kerak).
         register = _raw('POST', '/auth/register', json={
             **credentials, 'organization_name': settings.TEST_CREATOR_ORG_NAME, 'full_name': 'Edu Platform',
         })
+        if register.status_code == 403:  # yangi versiyada ro'yxatdan o'tish odatda yopiq (ALLOW_REGISTRATION=false)
+            raise TestCreatorError(
+                "Test-creator'da xizmat hisobi yo'q. Uni serverda yarating: `python -m app.cli create-user` "
+                "(deploy/test-creator/README.md, 3-qadam).", permanent=True,
+            )
         if register.status_code not in (200, 201):
             raise TestCreatorError(
                 f'Test-creator xizmat hisobi yaratilmadi ({register.status_code}): {_detail(register)}',
@@ -127,11 +133,14 @@ def _subject_id(code: str) -> str | None:
 
 def _standard_version_id(our_code: str) -> str:
     tc_code = STANDARD_CODES[our_code]
-    versions = _request('GET', f'/standards/{tc_code}/versions').json()
-    active = [v for v in versions if v.get('status') == 'active'] or versions
-    if not active:
+    standards = _request('GET', '/standards').json()
+    standard = next((item for item in standards if item.get('code') == tc_code), None)
+    if standard is None:
         raise TestCreatorError(f"Test-creator'da «{tc_code}» standarti topilmadi.", permanent=True)
-    return active[0]['id']
+    versions = _request('GET', f'/standards/{standard["id"]}/versions').json()  # eng yangisi birinchi
+    if not versions:
+        raise TestCreatorError(f"Test-creator'da «{tc_code}» standarti versiyasi topilmadi.", permanent=True)
+    return versions[0]['id']
 
 
 def upload_document(*, filename: str, content: bytes, course_subject: str, title: str) -> str:
@@ -153,23 +162,26 @@ def document_status(document_id: str) -> dict:
     return _request('GET', f'/documents/{document_id}/status').json()
 
 
-def generate_test_json(*, document_id: str, standard: str, title: str, count: int) -> bytes:
-    """Reja tuzadi, testni yaratadi (bankdan + yetishmaganini AI dan) va o'qituvchi nusxasini
-    JSON ko'rinishida qaytaradi (`apps.quizzes.test_creator_import` o'qiydi)."""
+def start_generation(*, document_id: str, standard: str, title: str, count: int) -> str:
+    """Reja tuzadi va test yaratishni FONDA boshlaydi (xizmat 202 qaytaradi). Qaytaradi: test id."""
     blueprint = _request('POST', '/blueprints', json={
         'standard_version_id': _standard_version_id(standard),
         'document_id': document_id,
         'name': title,
         'requested_total': count,
-        'question_type': 'multiple_choice',
     }).json()
-    generated = _request(
-        'POST', '/tests/generate', json={'blueprint_id': blueprint['id'], 'title': title},
+    started = _request('POST', '/tests/generate', json={'blueprint_id': blueprint['id'], 'title': title}).json()
+    return started['id']
+
+
+def test_status(test_id: str) -> dict:
+    """`status`: generating | ready | partial | failed; `error_message`; `capacity_notes`."""
+    return _request('GET', f'/tests/{test_id}').json()
+
+
+def export_json(test_id: str) -> bytes:
+    """O'qituvchi nusxasi (javoblar bilan) JSON ko'rinishida (`apps.quizzes.test_creator_import` o'qiydi)."""
+    return _request(
+        'GET', f'/tests/{test_id}/export', params={'format': 'json', 'mode': 'teacher'},
         timeout=settings.TEST_CREATOR_GENERATE_TIMEOUT,
-    ).json()
-    test_id = generated['test']['id']
-    exported = _request(
-        'POST', f'/tests/{test_id}/export', params={'format': 'json', 'mode': 'teacher'},
-        timeout=settings.TEST_CREATOR_GENERATE_TIMEOUT,
-    )
-    return exported.content
+    ).content

@@ -53,6 +53,9 @@ class FakeTestCreator:
         self.extraction_error = None
         self.export = json.dumps(EXPORT).encode()
         self.generate_status = 200
+        self.test_state = 'ready'        # GET /tests/{id} qaytaradigan holat: generating | ready | partial | failed
+        self.test_error = None
+        self.register_status = 201       # /auth/register javobi (403 — ro'yxatdan o'tish yopiq)
         self.upload_params = None
 
     def __call__(self, method, url, **kwargs):
@@ -63,6 +66,8 @@ class FakeTestCreator:
                 return reply(401, {'detail': 'Invalid email or password'})
             return reply(200, {'access_token': 'tok'})
         if path == '/auth/register':
+            if self.register_status >= 400:
+                return reply(self.register_status, {'detail': 'Ro\'yxatdan o\'tish yopilgan.'})
             self.registered = True
             return reply(201, {'access_token': 'tok'})
         assert kwargs['headers']['Authorization'] == 'Bearer tok'
@@ -77,14 +82,24 @@ class FakeTestCreator:
             return reply(200, {
                 'extraction_status': self.extraction, 'error_message': self.extraction_error,
             })
-        if path.startswith('/standards/') and path.endswith('/versions'):
-            return reply(200, [{'id': 'ver-old', 'status': 'draft'}, {'id': 'ver-1', 'status': 'active'}])
+        if path == '/standards':
+            return reply(200, [
+                {'id': 'std-sat', 'code': 'DIGITAL_SAT', 'name': 'SAT'},
+                {'id': 'std-uzbmb', 'code': 'UZBMB', 'name': 'UZBMB'},
+            ])
+        if path == '/standards/std-uzbmb/versions':  # eng yangisi birinchi
+            return reply(200, [{'id': 'ver-1', 'version_label': '2026'}, {'id': 'ver-old', 'version_label': '2024'}])
         if path == '/blueprints':
             self.blueprint_payload = kwargs['json']
             return reply(201, {'id': 'bp-1'})
         if path == '/tests/generate':
-            return reply(self.generate_status, {'test': {'id': 'test-1'}} if self.generate_status < 400 else {'detail': 'boom'})
+            if self.generate_status >= 400:
+                return reply(self.generate_status, {'detail': 'boom'})
+            return reply(202, {'id': 'test-1', 'status': 'generating'})
+        if path == '/tests/test-1':
+            return reply(200, {'id': 'test-1', 'status': self.test_state, 'error_message': self.test_error})
         if path == '/tests/test-1/export':
+            assert method == 'GET' and kwargs['params'] == {'format': 'json', 'mode': 'teacher'}
             return reply(200, content=self.export)
         raise AssertionError(f'kutilmagan so\'rov: {method} {path}')
 
@@ -192,7 +207,8 @@ class AiQuizJobTests(QuizTestBase):
         self.assertEqual(sorted(quiz.questions.values_list('points', flat=True)), [1, 2])
         self.assertFalse(job.source_file)  # material o'chirilgan
         # Xizmatga to'g'ri chaqiriqlar
-        self.assertEqual(self.fake.blueprint_payload['standard_version_id'], 'ver-1')  # faol versiya
+        self.assertEqual(self.fake.blueprint_payload['standard_version_id'], 'ver-1')  # eng yangi versiya
+        self.assertNotIn('question_type', self.fake.blueprint_payload)
         self.assertEqual(self.fake.blueprint_payload['requested_total'], 10)
         self.assertEqual(self.fake.blueprint_payload['document_id'], 'doc-1')
         self.assertEqual(self.fake.upload_params['subject_id'], 'sub-math')
@@ -210,6 +226,58 @@ class AiQuizJobTests(QuizTestBase):
         self.fake.extraction = 'done'
         self.sync()
         self.assertEqual(AiQuizJob.objects.get(pk=job_id).status, 'done')
+
+    def test_generation_runs_in_the_background_and_is_polled(self):
+        self.fake.test_state = 'generating'
+        job_id = self.start().json()['id']
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual((job.status, job.attempts), ('generating', 0))
+        self.assertEqual(job.plan['tc_test_id'], 'test-1')
+        self.assertNotIn(('GET', '/tests/test-1/export'), self.fake.calls)
+        self.sync()
+        self.assertEqual(self.fake.calls.count(('POST', '/tests/generate')), 1)  # qayta boshlanmaydi
+        self.assertEqual(AiQuizJob.objects.get(pk=job_id).attempts, 0)  # kutish urinish hisoblanmaydi
+        self.fake.test_state = 'ready'
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'done', job.error)
+        self.assertEqual(self.fake.calls.count(('POST', '/tests/generate')), 1)
+
+    def test_a_failed_generation_fails_the_job_with_the_services_reason(self):
+        self.fake.test_state = 'failed'
+        self.fake.test_error = "AI hisobida mablag' tugagan"
+        job_id = self.start().json()['id']
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn("mablag' tugagan", job.error)
+        self.assertTrue(Notification.objects.filter(kind='ai_quiz_failed').exists())
+
+    def test_a_partial_test_is_accepted_and_the_teacher_is_told(self):
+        self.fake.test_state = 'partial'
+        job_id = self.start(question_count=30).json()['id']
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'done', job.error)
+        self.assertIn('so\'ralgan 30 tadan kam', job.summary)
+
+    def test_unknown_standard_is_a_permanent_failure(self):
+        job_id = self.start(standard='sat').json()['id']  # soxta xizmatda DIGITAL_SAT versiyalari yo'q -> 404 emas, bo'sh emas
+        with patch.dict('apps.quizzes.tc_client.STANDARD_CODES', {'sat': 'NO_SUCH'}):
+            self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn('NO_SUCH', job.error)
+
+    def test_closed_registration_explains_how_to_create_the_service_account(self):
+        self.fake.registered = False
+        self.fake.register_status = 403
+        job_id = self.start().json()['id']
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(job.status, 'failed')
+        self.assertIn('create-user', job.error)
 
     def test_processing_failure_fails_the_job_with_reason(self):
         self.fake.extraction = 'failed'

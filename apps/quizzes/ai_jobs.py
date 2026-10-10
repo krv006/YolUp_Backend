@@ -232,12 +232,30 @@ def _check_processing(job: AiQuizJob) -> bool:
 
 
 def _generate(job: AiQuizJob) -> None:
-    job.status = AiQuizJob.Status.GENERATING
-    job.save(update_fields=['status', 'updated_at'])
-    raw = tc_client.generate_test_json(
-        document_id=job.tc_document_id, standard=job.standard, title=job.title or job.topic,
-        count=job.question_count,
-    )
+    """Test yaratishni boshlaydi (bir marta) va tayyor bo'lguncha har siklda holatini so'raydi.
+    Xizmat testni fonda yig'adi (bir necha daqiqa) — so'rov ichida kutmaymiz."""
+    state = job.plan if isinstance(job.plan, dict) else {}
+    if job.status != AiQuizJob.Status.GENERATING:
+        job.status = AiQuizJob.Status.GENERATING  # xato bo'lsa urinishlar hisobi va pauza shu holatga bog'liq
+        job.save(update_fields=['status', 'updated_at'])
+    if not state.get('tc_test_id'):
+        state['tc_test_id'] = tc_client.start_generation(
+            document_id=job.tc_document_id, standard=job.standard, title=job.title or job.topic,
+            count=job.question_count,
+        )
+        job.plan = state
+        job.save(update_fields=['plan', 'updated_at'])
+    status = tc_client.test_status(state['tc_test_id'])
+    outcome = status.get('status')
+    if outcome == 'generating':
+        return  # hali yig'ilmoqda — keyingi siklda yana so'raymiz
+    if outcome == 'failed':
+        raise tc_client.TestCreatorError(
+            status.get('error_message') or "Test-creator testni yarata olmadi.", permanent=True,
+        )
+    if outcome not in ('ready', 'partial'):
+        raise tc_client.TestCreatorError(f"Test-creator kutilmagan holat qaytardi: {outcome!r}.")
+    raw = tc_client.export_json(state['tc_test_id'])
     try:
         preview = test_creator_import.parse_test_creator_json(io.BytesIO(raw))
     except Exception as exc:  # noqa: BLE001
@@ -254,9 +272,11 @@ def _generate(job: AiQuizJob) -> None:
         )
         job.quiz = quiz
         job.warnings = preview.get('warnings', [])
+        if outcome == 'partial':  # so'ralganidan kam savol chiqdi — o'qituvchi bilsin
+            job.summary = f"{len(preview['questions'])} savol (so'ralgan {job.question_count} tadan kam: materialda yetarli mavzu yo'q)"[:300]
         job.status = AiQuizJob.Status.DONE
         job.error = ''
-        job.save(update_fields=['quiz', 'warnings', 'status', 'error', 'updated_at'])
+        job.save(update_fields=['quiz', 'warnings', 'summary', 'status', 'error', 'updated_at'])
     _release_source(job)
     _notify(job, ok=True)
 

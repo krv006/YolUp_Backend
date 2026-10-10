@@ -77,21 +77,26 @@ def parse_test_creator_json(file_obj) -> dict:
     else:
         raise ValueError("Test-creator JSON'ida 'questions' ro'yxati topilmadi.")
 
-    rows = sorted((r for r in rows if isinstance(r, dict)), key=lambda r: r.get('order') or 0)
+    rows = sorted((r for r in rows if isinstance(r, dict)), key=lambda r: r.get('order') or r.get('number') or 0)
     questions, warnings = [], []
     for row in rows:
-        text = str(row.get('question_text') or '').strip()
+        text = str(row.get('question_text') or row.get('text') or '').strip()  # yangi eksport: `text`
         if not text:
             continue
         order = len(questions)
         options = row.get('options') or []
         if options:
             correct = {str(label).strip().upper() for label in (row.get('correct_options') or [])}
+            if not correct and row.get('answer'):  # yangi eksport: `answer` — to'g'ri variant harfi
+                correct = {str(row['answer']).strip().upper()}
             question = {
                 'text': text, 'order': order,
                 'options': [
                     {'text': str(o.get('text') or '').strip(),
-                     'is_correct': str(o.get('label') or '').strip().upper() in correct, 'order': i}
+                     # eski eksport: `label` + `correct_options`; yangisi: `letter` + `is_correct`
+                     'is_correct': bool(o.get('is_correct')) or
+                     str(o.get('label') or o.get('letter') or '').strip().upper() in correct,
+                     'order': i}
                     for i, o in enumerate(options)
                 ],
             }
