@@ -3,10 +3,13 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
+from django.core.exceptions import ObjectDoesNotExist
+from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
@@ -82,6 +85,13 @@ class LoginHistoryView(APIView):
 
 class RefreshView(TokenRefreshView):
     throttle_scope = 'auth'
+
+    def post(self, request, *args, **kwargs):
+        try:
+            return super().post(request, *args, **kwargs)
+        except ObjectDoesNotExist:
+            # Token egasi o'chirilgan: simplejwt buni 500 qiladi — frontend sessiyani tugatishi uchun 401 qaytaramiz
+            raise InvalidToken(_('Foydalanuvchi topilmadi.'))
 
 
 class LogoutView(APIView):

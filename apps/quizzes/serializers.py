@@ -40,6 +40,8 @@ class GroupWriteSerializer(serializers.Serializer):
     id = serializers.UUIDField(required=False)
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     passage = serializers.CharField(max_length=30000, required=False, allow_blank=True, default='')
+    # Berilmasa mavjud skript saqlanadi (frontend uni qayta yubormaydi)
+    transcript = serializers.CharField(max_length=30000, required=False, allow_blank=True)
 
 
 class QuestionWriteSerializer(serializers.Serializer):
@@ -248,6 +250,13 @@ class GroupReadSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(group.audio.url) if request else group.audio.url
 
 
+class GroupStaffSerializer(GroupReadSerializer):
+    """O'qituvchi/admin ko'rinishi: o'quvchi ko'rmaydigan audio skripti (`transcript`) ham bor."""
+
+    class Meta(GroupReadSerializer.Meta):
+        fields = GroupReadSerializer.Meta.fields + ['transcript']
+
+
 class OptionTakeSerializer(serializers.ModelSerializer):
     """O'quvchi/ota-ona ko'radi — `is_correct` YO'Q (javob oldindan ko'rinmasin)."""
 
@@ -338,7 +347,7 @@ class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     """Faqat o'qituvchi/admin uchun — to'g'ri javoblar bilan (javob kaliti)."""
 
     questions = QuestionDetailSerializer(many=True, read_only=True)
-    groups = GroupReadSerializer(many=True, read_only=True)
+    groups = GroupStaffSerializer(many=True, read_only=True)
 
     class Meta:
         model = Quiz

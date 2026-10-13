@@ -290,7 +290,7 @@ class SectionWriterTests(SimpleTestCase):
         self.assertIn('1 ta savol yetishmagani uchun tushib qoldi', summary)
 
     def test_writer_prompt_demands_exact_spelling_and_unambiguous_questions(self):
-        for phrase in ('exactly as spelled', 'several valid answers', 'NOT GIVEN', '"spare"'):
+        for phrase in ('exactly as spelled', 'several valid answers', 'NOT GIVEN', '"spare"', 'never list synonyms'):
             self.assertIn(phrase, ai_exam._WRITER_SYSTEM)
 
 
@@ -700,3 +700,180 @@ class AiExamJobTests(QuizTestBase):
             self.sync()
         planner_calls = [c for c in chat.call_args_list if c.args and 'exam designer' in c.args[0]]
         self.assertEqual(planner_calls, [])
+
+
+# ─── Listening: AI skript yozadi, ovoz sintezi audio qiladi ─────────────────
+
+SCRIPT = [
+    {'speaker': 'A', 'text': 'Good morning, Riverside Sports Centre, how can I help you today? ' * 2},
+    {'speaker': 'B', 'text': 'Hello, I would like to book a tennis court for Saturday at ten o clock please. ' * 2},
+    {'speaker': 'A', 'text': 'Certainly. Can I take your name and your phone number? ' * 2},
+    {'speaker': 'B', 'text': 'My name is Sarah Thompson, that is T H O M P S O N, and my number is 0 7 7 1 2. ' * 2},
+]
+
+
+def listening_plan():
+    return {
+        'exam_name': 'IELTS Listening', 'language': 'en', 'rules': [],
+        'sections': [{'title': 'Section 1', 'passage': {'min_words': 300, 'max_words': 400},  # audio ustun
+                      'audio': {'min_words': 250, 'max_words': 500, 'speakers': 2, 'description': 'booking'},
+                      'blocks': [{'type': 'fill_blank', 'count': 1, 'instruction': 'Write ONE WORD.'},
+                                 {'type': 'mcq', 'count': 1, 'instruction': 'Choose the correct letter.'}]}],
+    }
+
+
+def listening_section(script=None):
+    return {
+        'passage': '', 'script': SCRIPT if script is None else script,
+        'questions': [
+            {'kind': 'fill_blank', 'text': 'Surname: {{1}}', 'blanks': [['Thompson']], 'block': 0},
+            {'kind': 'mcq', 'text': 'Which day is the booking for?', 'options': ['Friday', 'Saturday', 'Sunday'],
+             'answer': 1, 'block': 1},
+        ],
+    }
+
+
+class ListeningFake:
+    """Reja: bitta Listening bo'limi; yozuvchi: skript + savollar; `/audio/speech`: soxta mp3."""
+
+    def __init__(self):
+        self.speech = []  # (ovoz, matn)
+        self.writer_prompts = []
+        self.plan_prompts = []
+        self.script = None
+
+    def __call__(self, url, json=None, **kwargs):
+        if url.endswith('/audio/speech'):
+            self.speech.append((json['voice'], json['input']))
+            mock = MagicMock()
+            mock.status_code = 200
+            mock.content = b'ID3' + json['voice'].encode()
+            return mock
+        system, user = json['messages'][0]['content'], json['messages'][1]['content']
+        if system.startswith('You are an exam designer'):
+            self.plan_prompts.append(system)
+            return completion(listening_plan())
+        self.writer_prompts.append(__import__('json').loads(user)['section_spec'])
+        return completion(listening_section(self.script))
+
+
+@override_settings(**LLM_ON, OPENAI_TTS_MODEL='tts-test', OPENAI_TTS_VOICES=['alloy', 'onyx'])
+class AiListeningTests(QuizTestBase):
+    def setUp(self):
+        super().setUp()
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+        override = override_settings(MEDIA_ROOT=self.media)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.fake = ListeningFake()
+        patcher = patch('apps.quizzes.llm.requests.post', side_effect=self.fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def start(self):
+        self.auth(self.teacher_token)
+        response = self.client.post('/api/v1/quizzes/ai-generate/', {
+            'topic': 'Booking', 'exam_name': 'IELTS Listening', 'course': self.course_id,
+        }, format='multipart')
+        self.assertEqual(response.status_code, 202, response.content)
+        call_command('sync_ai_quizzes', stdout=io.StringIO())
+        return AiQuizJob.objects.get(pk=response.json()['id'])
+
+    def generate(self):
+        job = self.start()
+        self.assertEqual(job.status, 'done', job.error)
+        return Quiz.objects.get(pk=job.quiz_id), job
+
+    def test_a_listening_section_gets_audio_a_hidden_script_and_questions(self):
+        quiz, job = self.generate()
+        group = quiz.groups.get()
+        self.assertTrue(group.audio)  # audio guruhga biriktirilgan
+        self.assertEqual(group.passage, '')  # skript o'quvchiga matn sifatida chiqmaydi
+        self.assertIn('Thompson', group.transcript)
+        self.assertEqual(quiz.questions.count(), 2)
+        self.assertEqual(set(quiz.questions.values_list('group_id', flat=True)), {group.id})
+
+    def test_each_speaker_gets_a_consistent_voice(self):
+        self.generate()
+        voices = [voice for voice, _ in self.fake.speech]
+        self.assertEqual(voices, ['alloy', 'onyx', 'alloy', 'onyx'])  # A, B, A, B
+        self.assertEqual(len(self.fake.speech), len(SCRIPT))
+
+    def test_the_planner_is_told_listening_is_supported_and_the_writer_gets_the_audio_spec(self):
+        self.generate()
+        self.assertIn('LISTENING section', self.fake.plan_prompts[0])
+        spec = self.fake.writer_prompts[0]
+        self.assertEqual(spec['audio']['speakers'], 2)
+        self.assertIsNone(spec['passage'])  # audio matn parchasining o'rnini bosadi
+
+    def test_the_script_is_for_the_teacher_only(self):
+        quiz, _ = self.generate()
+        teacher = self.client.get(f'/api/v1/quizzes/{quiz.id}/')
+        self.assertIn('Thompson', teacher.json()['groups'][0]['transcript'])
+        self.assertTrue(teacher.json()['groups'][0]['audio_url'])
+        Quiz.objects.filter(pk=quiz.pk).update(status='published')
+        self.auth(self.child_token)
+        student = self.client.get(f'/api/v1/quizzes/{quiz.id}/')
+        self.assertEqual(student.status_code, 200, student.content)
+        group = student.json()['groups'][0]
+        self.assertNotIn('transcript', group)
+        self.assertNotIn('Thompson', json.dumps(group))
+        self.assertTrue(group['audio_url'])
+
+    def test_temporary_audio_files_are_removed(self):
+        self.generate()
+        leftovers = list(default_storage.listdir('ai_quiz_audio')[1]) if default_storage.exists('ai_quiz_audio') else []
+        self.assertEqual(leftovers, [])
+
+    def test_editing_the_quiz_keeps_the_script(self):
+        quiz, _ = self.generate()
+        group = quiz.groups.get()
+        resp = self.client.patch(f'/api/v1/quizzes/{quiz.id}/', {
+            'groups': [{'id': str(group.id), 'title': 'Renamed', 'passage': ''}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        group.refresh_from_db()
+        self.assertEqual(group.title, 'Renamed')
+        self.assertIn('Thompson', group.transcript)  # frontend skriptni yubormasa ham o'chib ketmaydi
+
+    def test_a_too_short_script_costs_nothing_and_does_not_finish(self):
+        self.fake.script = [{'speaker': 'A', 'text': 'hi'}]
+        job = self.start()
+        self.assertNotEqual(job.status, 'done')
+        self.assertEqual(self.fake.speech, [])  # bo'sh skript uchun pul sarflanmaydi
+
+
+class SpeechClientTests(SimpleTestCase):
+    @staticmethod
+    def audio_reply(status=200, content=b'ID3x', body=None):
+        mock = MagicMock()
+        mock.status_code = status
+        mock.content = content
+        mock.json.return_value = body or {}
+        return mock
+
+    def speak(self, response):
+        with patch('apps.quizzes.llm.requests.post', return_value=response) as post, override_settings(
+                **LLM_ON, OPENAI_TTS_MODEL='tts-test'):
+            return llm.speech('hello', 'alloy'), post
+
+    def test_success_sends_model_voice_and_returns_bytes(self):
+        data, post = self.speak(self.audio_reply())
+        self.assertEqual(data, b'ID3x')
+        self.assertTrue(post.call_args.args[0].endswith('/audio/speech'))
+        self.assertEqual(post.call_args.kwargs['json'], {'model': 'tts-test', 'input': 'hello', 'voice': 'alloy',
+                                                         'response_format': 'mp3'})
+
+    def test_permanent_and_transient_errors(self):
+        for status, body, permanent in (
+                (401, {}, True), (404, {}, True), (400, {'error': {'message': 'bad'}}, True),
+                (429, {'error': {'code': 'insufficient_quota'}}, True), (429, {'error': {'code': 'rate_limit'}}, False),
+                (503, {}, False)):
+            with self.assertRaises(llm.LLMError) as ctx:
+                self.speak(self.audio_reply(status=status, content=b'', body=body))
+            self.assertEqual(ctx.exception.permanent, permanent, (status, body))
+
+    def test_an_empty_200_is_not_accepted(self):
+        with self.assertRaises(llm.LLMError):
+            self.speak(self.audio_reply(content=b''))

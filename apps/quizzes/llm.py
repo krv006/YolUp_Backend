@@ -71,6 +71,32 @@ def _post(messages: list, max_tokens: int) -> dict:
     raise LLMError(f'AI xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
 
 
+def speech(text: str, voice: str) -> bytes:
+    """Matnni ovozga aylantiradi (OpenAI `/audio/speech`), mp3 baytlarini qaytaradi. Xato turlari `chat_json` bilan bir xil."""
+    url = settings.OPENAI_BASE_URL.rstrip('/') + '/audio/speech'
+    payload = {'model': settings.OPENAI_TTS_MODEL, 'input': text, 'voice': voice, 'response_format': 'mp3'}
+    try:
+        response = requests.post(
+            url, json=payload, timeout=settings.OPENAI_TIMEOUT,
+            headers={'Authorization': f'Bearer {settings.OPENAI_API_KEY}'},
+        )
+    except requests.RequestException as exc:
+        raise LLMError(f"Ovoz xizmatiga ulanib bo'lmadi: {exc}") from exc
+    status = response.status_code
+    if status == 200 and response.content:
+        return response.content
+    code, message = _error_message(response)
+    if status in (401, 403):
+        raise LLMError("AI kaliti noto'g'ri yoki ovoz yaratishga ruxsat yo'q (OPENAI_API_KEY).", permanent=True)
+    if status == 429 and code in ('insufficient_quota', 'billing_not_active'):
+        raise LLMError("AI hisobida mablag' yoki limit tugagan (OpenAI billing/quota).", permanent=True)
+    if status == 404:
+        raise LLMError(f"Ovoz modeli topilmadi yoki hisobingizda ochiq emas: {settings.OPENAI_TTS_MODEL}.", permanent=True)
+    if status == 400:
+        raise LLMError(f"Ovoz so'rovi rad etildi: {message}", permanent=True)
+    raise LLMError(f'Ovoz xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
+
+
 def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = ()) -> dict:
     """Tizim va foydalanuvchi xabari bo'yicha JSON obyekt qaytaradi. `images` — [(mime, bytes), ...]:
     rasmlar matn bilan birga yuboriladi (modelning ko'rish imkoniyati kerak, masalan gpt-4o-mini)."""

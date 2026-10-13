@@ -14,6 +14,7 @@ tashlanadi). Shu tariqa har bir test IELTS'dagi kabi ko'p turli savol, bo'limlar
 import json
 import logging
 import re
+import uuid
 
 from django.conf import settings
 
@@ -51,6 +52,9 @@ _PLANNER_SYSTEM = (
     'Put the student-facing instruction of each block exactly as the real exam prints it '
     '(for example "Choose NO MORE THAN TWO WORDS from the passage for each answer") in "instruction". '
     'If a section needs a reading passage, set "passage" with the word range; otherwise null. '
+    'If a section is a LISTENING section (the student listens to a recording), set "audio" instead of "passage": '
+    '{"min_words": 250, "max_words": 700, "speakers": 2, "description": "..."} - the platform writes the script and '
+    'turns it into spoken audio with a separate voice per speaker (a monologue has 1 speaker, a conversation 2-4). '
     'If the rules fix the counts, follow them. If they do not, use the official question counts and points of '
     'the exam; when a numeric target_total is given and the exam has no fixed count, spread it sensibly. If the rules are '
     'unclear, use the most standard interpretation. Never plan more than {max_total} questions in total and '
@@ -60,7 +64,8 @@ _PLANNER_SYSTEM = (
     'If SOURCE MATERIAL is given, look at it and decide which part of the exam each section can be written from: '
     'set "focus" of every section to a short note on WHICH topic/chapter/part of the material that section must '
     'use (different sections use different parts when the material is long). Plan only sections that can be '
-    'written from text; never plan audio/Listening/image-based sections. If the material is short, reduce counts '
+    'written from text or from a spoken script; never plan image-, map- or diagram-based sections, and never plan '
+    'Speaking or Writing sections. If the material is short, reduce counts '
     'proportionally but keep the exam section order and question types.\n'
     'Allowed block "type" values: ' + ', '.join(KINDS) + '. Meanings: mcq = one correct option; mcq_multiple = '
     'choose several; true_false_not_given / yes_no_not_given / true_false = statements judged against the text; '
@@ -69,7 +74,7 @@ _PLANNER_SYSTEM = (
     'ordering = put steps in order.\n\n'
     'Return ONLY valid JSON of this exact shape (no markdown):\n'
     '{"exam_name": "...", "language": "auto", "rules": ["..."], "sections": [{"title": "Passage 1", '
-    '"passage": {"min_words": 700, "max_words": 900, "description": "..."} , '
+    '"passage": {"min_words": 700, "max_words": 900, "description": "..."} , "audio": null, '
     '"focus": "...", "blocks": [{"type": "true_false_not_given", "count": 6, "instruction": "...", "options": 4, "points": 1}]}]}'
 )
 
@@ -78,7 +83,10 @@ _WRITER_SYSTEM = (
     'the exam RULES. Base everything on the SOURCE MATERIAL: every correct answer must be supported by the '
     'passage/material, never invent facts that contradict it. Each question must have exactly one defensible '
     'answer (or the stated number of answers), plausible distractors, and no hints in the wording. '
-    'Copy answers exactly as spelled in the passage (keep British/American spelling and word forms). Never write a '
+    'Copy answers exactly as spelled in the passage (keep British/American spelling and word forms). For '
+    'short_answer, fill_blank and numeric items every accepted answer must be words that appear in the passage '
+    '(or a trivial variant such as capitalisation or a number written as a figure): never list synonyms, '
+    'paraphrases or guesses, and give at most three accepted answers. Never write a '
     'question that has several valid answers in the passage (for example "which city" when several cities are '
     'named). For true/false/not given and yes/no/not given blocks use all three outcomes in a realistic mix: NOT '
     'GIVEN means the passage neither confirms nor contradicts the statement. '
@@ -88,12 +96,18 @@ _WRITER_SYSTEM = (
     'Do not number the questions and do not repeat the block instruction inside each question '
     '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
+    'If "audio" is requested, this is a LISTENING section: write a natural spoken SCRIPT as a list of turns '
+    '{"speaker": "A", "text": "..."} (speakers A-D; a monologue uses only A; no stage directions, no question text, '
+    'numbers/names/spellings dictated naturally as in the real exam, with the realistic distractors and '
+    'self-corrections of the exam). Every answer must be clearly stated in the script and the questions must be '
+    'answerable only by listening; use "passage": "". '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
     'that differ from "avoid_topics". If "source_material" is empty, there is no source: write original, accurate, '
     'exam-appropriate content yourself about the given "topic" (passages must be factual and well structured), '
     'and make every answer verifiable from the text you wrote.\n\n'
     + KIND_HELP + '\n\n'
-    'Return ONLY valid JSON (no markdown): {"passage": "...", "questions": [ ...question objects in order... ]}'
+    'Return ONLY valid JSON (no markdown): {"passage": "...", "script": [{"speaker": "A", "text": "..."}], '
+    '"questions": [ ...question objects in order... ]} ("script" only for an audio section).'
 )
 
 
@@ -164,8 +178,18 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
                        'description': str(passage.get('description') or '')[:300]}
         else:
             passage = None
+        audio = section.get('audio')
+        if isinstance(audio, dict):  # Listening: audio matn parchasining o'rnini bosadi (skript o'quvchiga ko'rsatilmaydi)
+            low = max(100, _int(audio.get('min_words'), 250))
+            high = max(low, _int(audio.get('max_words'), low + 300))
+            audio = {'min_words': min(low, 1200), 'max_words': min(high, 1500),
+                     'speakers': min(4, max(1, _int(audio.get('speakers'), 2))),
+                     'description': str(audio.get('description') or '')[:300]}
+            passage = None
+        else:
+            audio = None
         sections.append({'title': str(section.get('title') or f'Section {index}')[:200], 'passage': passage,
-                         'focus': str(section.get('focus') or '')[:300], 'blocks': blocks})
+                         'audio': audio, 'focus': str(section.get('focus') or '')[:300], 'blocks': blocks})
     if not sections:
         return default_plan(fallback_count)
     return {
@@ -318,6 +342,52 @@ def _belongs(raw: dict, block_index: int, block: dict) -> bool:
     return marker is None or marker == block_index
 
 
+def _script_turns(data: dict) -> list:
+    """Modelning `script` ro'yxatini tozalaydi: [{'speaker': 'A', 'text': '...'}]."""
+    turns = []
+    for item in data.get('script') or []:
+        if isinstance(item, dict):
+            text = str(item.get('text') or '').strip()
+            speaker = str(item.get('speaker') or 'A').strip().upper()[:1] or 'A'
+            if text:
+                turns.append({'speaker': speaker, 'text': text[:1500]})
+    return turns
+
+
+def _transcript(turns: list) -> str:
+    return '\n'.join(f"{t['speaker']}: {t['text']}" for t in turns)
+
+
+def _trim_turns(turns: list) -> list:
+    """Juda uzun skriptni chegaragacha qisqartiradi (ovoz xarajati va audio uzunligi cheklanadi)."""
+    kept, total = [], 0
+    for turn in turns:
+        total += len(turn['text']) + 3
+        if total > settings.AI_EXAM_AUDIO_MAX_CHARS:
+            break
+        kept.append(turn)
+    return kept
+
+
+def _synthesize(turns: list) -> bytes:
+    """Skriptni ovozga aylantiradi: har gapiruvchiga o'z ovozi, mp3 bo'laklari ketma-ket ulanadi."""
+    voices = settings.OPENAI_TTS_VOICES or ['alloy']
+    assigned = {}
+    chunks = []
+    for turn in turns:
+        voice = assigned.setdefault(turn['speaker'], voices[len(assigned) % len(voices)])
+        chunks.append(llm.speech(turn['text'], voice))
+    return b''.join(chunks)
+
+
+def _store_audio(data: bytes) -> str:
+    """Tayyor audioni vaqtincha saqlaydi (test yaratilgach guruhga biriktiriladi va o'chiriladi)."""
+    from django.core.files.base import ContentFile
+    from django.core.files.storage import default_storage
+
+    return default_storage.save(f'ai_quiz_audio/{uuid.uuid4().hex}.mp3', ContentFile(data))
+
+
 def _spares(count: int) -> int:
     return 2 if count >= 3 else 1  # tushib qoladigan savollar o'rniga zaxira
 
@@ -331,7 +401,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     section = plan['sections'][index]
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
-        'passage': section['passage'], 'focus': section.get('focus', ''),
+        'passage': section['passage'], 'audio': section.get('audio'), 'focus': section.get('focus', ''),
         'blocks': [{**block, 'index': i, 'spare': _spares(block['count'])} for i, block in enumerate(section['blocks'])],
     }
     user = json.dumps({
@@ -344,6 +414,16 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     passage = str(data.get('passage') or '').strip() if section['passage'] else ''
     if section['passage'] and len(passage) < 150:
         raise llm.LLMError('AI matn parchasini yozmadi (bo\'sh/juda qisqa javob).')
+
+    transcript, audio_path = '', ''
+    if section.get('audio'):
+        turns = _script_turns(data)
+        if len(_transcript(turns)) < 200:
+            raise llm.LLMError('AI audio skriptini yozmadi (bo\'sh/juda qisqa javob).')
+        if len(_transcript(turns)) > settings.AI_EXAM_AUDIO_MAX_CHARS:
+            turns = _trim_turns(turns)
+        transcript = _transcript(turns)
+        audio_path = _store_audio(_synthesize(turns))
 
     raw_questions = [q for q in (data.get('questions') or []) if isinstance(q, dict)]
     result, dropped, missing = [], 0, 0
@@ -366,7 +446,8 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         if mine and block['instruction']:
             mine[0] = {**mine[0], 'text': f"{block['instruction']}\n\n{mine[0]['text']}"}
         result.extend({**q, 'block': block_index} for q in mine)
-    return {'title': section['title'], 'passage': passage, 'questions': result, 'dropped': dropped, 'missing': missing}
+    return {'title': section['title'], 'passage': passage, 'transcript': transcript, 'audio_path': audio_path,
+            'questions': result, 'dropped': dropped, 'missing': missing}
 
 
 def assemble(plan: dict, sections: list) -> tuple:
@@ -374,9 +455,12 @@ def assemble(plan: dict, sections: list) -> tuple:
     groups, questions, dropped, missing = [], [], 0, 0
     for section in sections:
         group_index = None
-        if section['passage']:
+        if section['passage'] or section.get('audio_path'):
             group_index = len(groups)
-            groups.append({'title': section['title'], 'passage': section['passage'][:30000]})
+            groups.append({
+                'title': section['title'], 'passage': section['passage'][:30000],
+                'transcript': section.get('transcript', '')[:30000], 'audio_path': section.get('audio_path', ''),
+            })
         for question in section['questions']:
             item = {k: v for k, v in question.items() if k != 'block'}
             item['group'] = group_index

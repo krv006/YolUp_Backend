@@ -92,6 +92,8 @@ class QuestionGroup(TimeStampedUUIDModel):
     title = CharField(max_length=200, blank=True)
     passage = TextField(blank=True)
     audio = FileField(upload_to=quiz_audio_path, null=True, blank=True)
+    # Audio skripti (AI yaratgan Listening uchun): FAQAT o'qituvchiga ko'rinadi — o'quvchi eshitadi, o'qimaydi
+    transcript = TextField(blank=True)
 
     class Meta:
         ordering = ['order', 'created_at']

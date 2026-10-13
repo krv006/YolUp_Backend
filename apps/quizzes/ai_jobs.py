@@ -24,6 +24,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files import File
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.utils import timezone
@@ -166,8 +167,35 @@ def _fail(job: AiQuizJob, message: str) -> None:
     _notify(job, ok=False)
 
 
+def _delete_stored(path: str) -> None:
+    try:
+        default_storage.delete(path)
+    except Exception:  # noqa: BLE001
+        logger.warning("AI test: vaqtincha fayl o'chirilmadi (%s)", path, exc_info=True)
+
+
+def _attach_audio(quiz: Quiz, groups: list) -> None:
+    """Listening bo'limlarining tayyor audiosini test guruhlariga biriktiradi (vaqtincha fayl o'chiriladi).
+    Biriktirib bo'lmasa test baribir saqlanadi — o'qituvchi audioni qo'lda yuklashi mumkin."""
+    for data, group in zip(groups, quiz.groups.order_by('order')):
+        path = data.get('audio_path')
+        if not path:
+            continue
+        try:
+            with default_storage.open(path, 'rb') as handle:
+                group.audio.save('listening.mp3', File(handle), save=True)
+        except Exception:  # noqa: BLE001
+            logger.warning('AI test: audio guruhga biriktirilmadi', exc_info=True)
+        finally:
+            _delete_stored(path)
+
+
 def _release_source(job: AiQuizJob) -> None:
     """Yuklangan material va qoidalar fayli kerak bo'lmagach diskdan o'chiriladi."""
+    state = job.plan if isinstance(job.plan, dict) else {}
+    for section in (state.get('sections') or {}).values():  # tugamay qolgan ishning Listening audiolari ham
+        if isinstance(section, dict) and section.get('audio_path'):
+            _delete_stored(section['audio_path'])
     changed = []
     for field in ('source_file', 'rules_file'):
         stored = getattr(job, field)
@@ -345,6 +373,7 @@ def _run_engine(job: AiQuizJob) -> None:
         job.status = AiQuizJob.Status.DONE
         job.error = ''
         job.save(update_fields=['quiz', 'summary', 'status', 'error', 'updated_at'])
+    _attach_audio(quiz, groups)
     _release_source(job)
     _notify(job, ok=True)
 

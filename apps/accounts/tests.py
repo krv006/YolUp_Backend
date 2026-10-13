@@ -554,6 +554,12 @@ class MultiDeviceLoginTests(APITestCase):
         resp = self.client.post('/api/v1/auth/logout/', {})
         self.assertEqual(resp.status_code, 401)
 
+    def test_refresh_token_of_a_deleted_user_is_a_401_not_a_500(self):
+        first = self._login('Chrome/Windows')
+        User.objects.all().delete()  # hisob o'chirilgan, token hali amal qilmoqda
+        resp = self.client.post('/api/v1/auth/token/refresh/', {'refresh': first.json()['refresh']})
+        self.assertEqual(resp.status_code, 401)
+
 
 class LinkedAccountsTests(APITestCase):
     """Bitta real inson bir xil telefon raqami bilan bir nechta rol-akkaunt

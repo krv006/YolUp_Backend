@@ -121,6 +121,8 @@ def sync_groups(quiz: Quiz, groups_data: list) -> list:
         group.order = order
         group.title = data.get('title', '')
         group.passage = data.get('passage', '')
+        if 'transcript' in data:
+            group.transcript = data['transcript']
         group.save()
         kept.add(group.id)
         result.append(group)
