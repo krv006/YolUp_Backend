@@ -937,3 +937,38 @@ class OptionShuffleTests(SimpleTestCase):
     def test_true_false_not_given_keeps_its_fixed_order(self):
         question = ai_exam._to_question({'kind': 'true_false_not_given', 'text': 's', 'answer': 'false'}, points=1)
         self.assertEqual([o['text'] for o in question['options']], ['True', 'False', 'Not Given'])
+
+
+class LetterPrefixAndGapCountTests(SimpleTestCase):
+    def test_letter_prefixes_are_removed_when_every_option_has_one(self):
+        with patch('apps.quizzes.ai_exam.random.shuffle', side_effect=lambda items: None):
+            question = ai_exam._to_question({'kind': 'mcq', 'text': 'q', 'answer': 1,
+                                             'options': ['A. Hall', 'B. Studio', 'C) House']}, points=1)
+        self.assertEqual([o['text'] for o in question['options']], ['Hall', 'Studio', 'House'])
+        self.assertTrue(question['options'][1]['is_correct'])
+
+    def test_real_text_that_only_looks_like_a_prefix_is_kept(self):
+        for options in (['A. Smith', 'Jones', 'Brown'], ['A. Smith', 'C. Jones', 'B. Brown'], ['(a) one', 'two']):
+            self.assertEqual(ai_exam._strip_letters(options), options)
+
+    def test_a_note_completion_with_ten_gaps_fills_a_block_of_ten(self):
+        plan = {'exam_name': 'X', 'language': 'en', 'rules': [], 'sections': [
+            {'title': 'S', 'passage': None, 'audio': None, 'focus': '', 'blocks': [
+                {'type': 'fill_blank', 'count': 10, 'instruction': 'Complete the notes.', 'options': 4, 'points': 1}]}]}
+        text = ' '.join(f'item {i} {{{{{i}}}}}' for i in range(1, 11))
+        raw = {'kind': 'fill_blank', 'text': text, 'blanks': [[f'a{i}'] for i in range(1, 11)], 'block': 0}
+        with patch('apps.quizzes.llm.chat_json', return_value={'passage': '', 'questions': [raw]}):
+            result = ai_exam.generate_section(plan, 0, 'material', avoid_topics=[])
+        self.assertEqual((len(result['questions']), result['missing']), (1, 0))
+
+    def test_gaps_across_several_items_add_up_and_a_shortfall_is_reported(self):
+        plan = {'exam_name': 'X', 'language': 'en', 'rules': [], 'sections': [
+            {'title': 'S', 'passage': None, 'audio': None, 'focus': '', 'blocks': [
+                {'type': 'fill_blank', 'count': 5, 'instruction': '', 'options': 4, 'points': 1}]}]}
+        two = {'kind': 'fill_blank', 'text': 'x {{1}} y {{2}}', 'blanks': [['a'], ['b']], 'block': 0}
+        with patch('apps.quizzes.llm.chat_json', return_value={'passage': '', 'questions': [two, two]}):
+            result = ai_exam.generate_section(plan, 0, 'material', avoid_topics=[])
+        self.assertEqual((len(result['questions']), result['missing']), (2, 1))  # 2 + 2 = 4 bo'shliq, 5 kerak
+
+    def test_the_writer_prompt_explains_that_fill_blank_counts_gaps(self):
+        self.assertIn('number of GAPS', ai_exam._WRITER_SYSTEM)

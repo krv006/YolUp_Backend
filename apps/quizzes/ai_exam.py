@@ -95,6 +95,8 @@ _WRITER_SYSTEM = (
     'Follow the question blocks in order. For every block write its "count" questions PLUS its "spare" extra '
     'questions of the same kind (spares replace questions that fail validation; put the best questions first). '
     'Use the block type as "kind" and put the block "index" into every question as "block". '
+    'For fill_blank blocks "count" is the number of GAPS: one note/form/table/summary item with {{1}}..{{n}} counts '
+    'as n, so a block of 10 gaps is ONE item with ten gaps (or several items whose gaps add up to 10). '
     'Do not number the questions and do not repeat the block instruction inside each question '
     '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
@@ -258,9 +260,22 @@ def _tf_answer(value):
 _LETTER_REFERENCE = re.compile(r'\b(above|both|all of|none of|neither|a and b|b and c|a and c)\b', re.IGNORECASE)
 
 
+_LETTER_PREFIX = re.compile(r'^\(?([A-Ha-h])[\.\):]\s+')
+
+
+def _strip_letters(options: list) -> list:
+    """Model variantlarni "A. ...", "B) ..." deb yozsa, shu belgilar olib tashlanadi — faqat HAMMA variantda ketma-ket
+    harflar (A, B, C...) bo'lsa (aks holda "A. Smith" kabi haqiqiy matn buzilmasin)."""
+    matches = [_LETTER_PREFIX.match(o) for o in options]
+    if all(matches) and [m.group(1).upper() for m in matches] == [chr(65 + i) for i in range(len(options))]:
+        return [o[m.end():] for o, m in zip(options, matches)]
+    return options
+
+
 def _option_dicts(options: list, correct: set) -> list:
     """Variantlar ro'yxati; to'g'ri javob doim bir xil joyda (masalan, "B") bo'lib qolmasligi uchun aralashtiriladi.
     "yuqoridagilarning hammasi" kabi boshqa variantga ishora qiladigan variant bo'lsa — tartib saqlanadi."""
+    options = _strip_letters(options)
     order = list(range(len(options)))
     if not any(_LETTER_REFERENCE.search(o) for o in options):
         random.shuffle(order)
@@ -457,9 +472,9 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     raw_questions = [q for q in (data.get('questions') or []) if isinstance(q, dict)]
     result, dropped, missing = [], 0, 0
     for block_index, block in enumerate(section['blocks']):
-        mine = []
+        mine, filled = [], 0
         for raw in list(raw_questions):
-            if len(mine) >= block['count']:
+            if filled >= block['count']:
                 break
             if _belongs(raw, block_index, block):
                 raw_questions.remove(raw)
@@ -471,7 +486,8 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                         logger.info("AI savoli shaklga kelmadi (%s): %s", raw.get('kind'), str(raw)[:200])
                     continue
                 mine.append(valid)
-        missing += max(0, block['count'] - len(mine))
+                filled += len(valid.get('blanks') or []) if valid.get('type') == 'fill_blank' else 1
+        missing += max(0, block['count'] - filled)
         if mine and block['instruction']:
             mine[0] = {**mine[0], 'text': f"{block['instruction']}\n\n{mine[0]['text']}"}
         result.extend({**q, 'block': block_index} for q in mine)
