@@ -13,6 +13,7 @@ tashlanadi). Shu tariqa har bir test IELTS'dagi kabi ko'p turli savol, bo'limlar
 """
 import json
 import logging
+import random
 import re
 import uuid
 
@@ -53,7 +54,8 @@ _PLANNER_SYSTEM = (
     '(for example "Choose NO MORE THAN TWO WORDS from the passage for each answer") in "instruction". '
     'If a section needs a reading passage, set "passage" with the word range; otherwise null. '
     'If a section is a LISTENING section (the student listens to a recording), set "audio" instead of "passage": '
-    '{"min_words": 250, "max_words": 700, "speakers": 2, "description": "..."} - the platform writes the script and '
+    '{"min_words": 500, "max_words": 800, "speakers": 2, "description": "..."} (a real recording lasts 4-5 minutes, '
+    'about 130 spoken words per minute) - the platform writes the script and '
     'turns it into spoken audio with a separate voice per speaker (a monologue has 1 speaker, a conversation 2-4). '
     'If the rules fix the counts, follow them. If they do not, use the official question counts and points of '
     'the exam; when a numeric target_total is given and the exam has no fixed count, spread it sensibly. If the rules are '
@@ -100,7 +102,10 @@ _WRITER_SYSTEM = (
     '{"speaker": "A", "text": "..."} (speakers A-D; a monologue uses only A; no stage directions, no question text, '
     'numbers/names/spellings dictated naturally as in the real exam, with the realistic distractors and '
     'self-corrections of the exam). Every answer must be clearly stated in the script and the questions must be '
-    'answerable only by listening; use "passage": "". '
+    'answerable only by listening; use "passage": "". The script must contain AT LEAST "min_words" words: a real '
+    'recording is 4-5 minutes long, so write a full, detailed conversation or talk with realistic distractors '
+    '(e.g. a speaker corrects a day or a number, offers alternatives, spells a name) instead of stating each answer '
+    'once in plain words. '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
     'that differ from "avoid_topics". If "source_material" is empty, there is no source: write original, accurate, '
     'exam-appropriate content yourself about the given "topic" (passages must be factual and well structured), '
@@ -180,7 +185,7 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
             passage = None
         audio = section.get('audio')
         if isinstance(audio, dict):  # Listening: audio matn parchasining o'rnini bosadi (skript o'quvchiga ko'rsatilmaydi)
-            low = max(100, _int(audio.get('min_words'), 250))
+            low = max(350, _int(audio.get('min_words'), 500))  # haqiqiy yozuv ~4-5 daqiqa (daqiqasiga ~130 so'z)
             high = max(low, _int(audio.get('max_words'), low + 300))
             audio = {'min_words': min(low, 1200), 'max_words': min(high, 1500),
                      'speakers': min(4, max(1, _int(audio.get('speakers'), 2))),
@@ -250,6 +255,18 @@ def _tf_answer(value):
     return None
 
 
+_LETTER_REFERENCE = re.compile(r'\b(above|both|all of|none of|neither|a and b|b and c|a and c)\b', re.IGNORECASE)
+
+
+def _option_dicts(options: list, correct: set) -> list:
+    """Variantlar ro'yxati; to'g'ri javob doim bir xil joyda (masalan, "B") bo'lib qolmasligi uchun aralashtiriladi.
+    "yuqoridagilarning hammasi" kabi boshqa variantga ishora qiladigan variant bo'lsa — tartib saqlanadi."""
+    order = list(range(len(options)))
+    if not any(_LETTER_REFERENCE.search(o) for o in options):
+        random.shuffle(order)
+    return [{'text': options[old], 'is_correct': old in correct, 'order': new} for new, old in enumerate(order)]
+
+
 def _to_question(raw, *, points: int):
     """Modeldan kelgan bitta savol -> `create_quiz` formatidagi dict (tekshirilmagan). Yaroqsiz bo'lsa None."""
     if not isinstance(raw, dict) or raw.get('kind') not in KINDS:
@@ -263,16 +280,14 @@ def _to_question(raw, *, points: int):
         options, answer = _strs(raw.get('options')), _int(raw.get('answer'))
         if len(options) < 2 or answer is None or not 0 <= answer < len(options):
             return None
-        return {**base, 'type': 'single', 'options': [
-            {'text': o, 'is_correct': i == answer, 'order': i} for i, o in enumerate(options)]}
+        return {**base, 'type': 'single', 'options': _option_dicts(options, {answer})}
 
     if kind == 'mcq_multiple':
         options = _strs(raw.get('options'))
         answers = {a for a in (_int(x) for x in (raw.get('answers') or [])) if a is not None and 0 <= a < len(options)}
         if len(options) < 2 or not answers:
             return None
-        return {**base, 'type': 'multiple', 'options': [
-            {'text': o, 'is_correct': i in answers, 'order': i} for i, o in enumerate(options)]}
+        return {**base, 'type': 'multiple', 'options': _option_dicts(options, answers)}
 
     if kind in _TFNG:
         answer = _tf_answer(raw.get('answer'))
@@ -354,6 +369,10 @@ def _script_turns(data: dict) -> list:
     return turns
 
 
+def _words(text: str) -> int:
+    return len(text.split())
+
+
 def _transcript(turns: list) -> str:
     return '\n'.join(f"{t['speaker']}: {t['text']}" for t in turns)
 
@@ -410,6 +429,16 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         'source_material': material[:settings.AI_EXAM_MATERIAL_CHARS],
     }, ensure_ascii=False)
     data = llm.chat_json(_WRITER_SYSTEM, user)
+    if section.get('audio'):  # Listening skripti juda qisqa bo'lsa — bir marta kengaytirishni so'raymiz
+        words, wanted = _words(_transcript(_script_turns(data))), section['audio']['min_words']
+        if words < wanted * 0.7:
+            retry = json.dumps({
+                **json.loads(user),
+                'problem': f'Your previous script had only {words} words; it must have at least {wanted}. '
+                           'Write the FULL script again, longer and with realistic distractors, and re-write the '
+                           'questions to match it.',
+            }, ensure_ascii=False)
+            data = llm.chat_json(_WRITER_SYSTEM, retry)
 
     passage = str(data.get('passage') or '').strip() if section['passage'] else ''
     if section['passage'] and len(passage) < 150:
@@ -418,7 +447,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     transcript, audio_path = '', ''
     if section.get('audio'):
         turns = _script_turns(data)
-        if len(_transcript(turns)) < 200:
+        if len(_transcript(turns)) < 200 or _words(_transcript(turns)) < section['audio']['min_words'] * 0.4:
             raise llm.LLMError('AI audio skriptini yozmadi (bo\'sh/juda qisqa javob).')
         if len(_transcript(turns)) > settings.AI_EXAM_AUDIO_MAX_CHARS:
             turns = _trim_turns(turns)

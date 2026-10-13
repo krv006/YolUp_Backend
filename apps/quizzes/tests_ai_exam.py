@@ -295,6 +295,11 @@ class SectionWriterTests(SimpleTestCase):
 
 
 class QuestionConversionTests(SimpleTestCase):
+    def setUp(self):
+        patcher = patch('apps.quizzes.ai_exam.random.shuffle', side_effect=lambda items: None)  # tartib saqlansin
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def convert(self, raw):
         question = ai_exam._to_question(raw, points=1)
         return ai_exam._validated(question) if question else None
@@ -705,10 +710,10 @@ class AiExamJobTests(QuizTestBase):
 # ─── Listening: AI skript yozadi, ovoz sintezi audio qiladi ─────────────────
 
 SCRIPT = [
-    {'speaker': 'A', 'text': 'Good morning, Riverside Sports Centre, how can I help you today? ' * 2},
-    {'speaker': 'B', 'text': 'Hello, I would like to book a tennis court for Saturday at ten o clock please. ' * 2},
-    {'speaker': 'A', 'text': 'Certainly. Can I take your name and your phone number? ' * 2},
-    {'speaker': 'B', 'text': 'My name is Sarah Thompson, that is T H O M P S O N, and my number is 0 7 7 1 2. ' * 2},
+    {'speaker': 'A', 'text': 'Good morning, Riverside Sports Centre, how can I help you today? ' * 6},
+    {'speaker': 'B', 'text': 'Hello, I would like to book a tennis court for Saturday at ten o clock please. ' * 6},
+    {'speaker': 'A', 'text': 'Certainly. Can I take your name and your phone number? ' * 6},
+    {'speaker': 'B', 'text': 'My name is Sarah Thompson, that is T H O M P S O N, and my number is 0 7 7 1 2. ' * 6},
 ]
 
 
@@ -716,7 +721,7 @@ def listening_plan():
     return {
         'exam_name': 'IELTS Listening', 'language': 'en', 'rules': [],
         'sections': [{'title': 'Section 1', 'passage': {'min_words': 300, 'max_words': 400},  # audio ustun
-                      'audio': {'min_words': 250, 'max_words': 500, 'speakers': 2, 'description': 'booking'},
+                      'audio': {'min_words': 400, 'max_words': 600, 'speakers': 2, 'description': 'booking'},
                       'blocks': [{'type': 'fill_blank', 'count': 1, 'instruction': 'Write ONE WORD.'},
                                  {'type': 'mcq', 'count': 1, 'instruction': 'Choose the correct letter.'}]}],
     }
@@ -739,8 +744,10 @@ class ListeningFake:
     def __init__(self):
         self.speech = []  # (ovoz, matn)
         self.writer_prompts = []
+        self.writer_problems = []
         self.plan_prompts = []
         self.script = None
+        self.scripts = []  # bo'sh bo'lmasa: har bir yozuvchi chaqiruvida shu ro'yxatdan navbatdagisi
 
     def __call__(self, url, json=None, **kwargs):
         if url.endswith('/audio/speech'):
@@ -753,8 +760,11 @@ class ListeningFake:
         if system.startswith('You are an exam designer'):
             self.plan_prompts.append(system)
             return completion(listening_plan())
-        self.writer_prompts.append(__import__('json').loads(user)['section_spec'])
-        return completion(listening_section(self.script))
+        payload = __import__('json').loads(user)
+        self.writer_prompts.append(payload['section_spec'])
+        self.writer_problems.append(payload.get('problem'))
+        script = self.scripts.pop(0) if self.scripts else self.script
+        return completion(listening_section(script))
 
 
 @override_settings(**LLM_ON, OPENAI_TTS_MODEL='tts-test', OPENAI_TTS_VOICES=['alloy', 'onyx'])
@@ -837,6 +847,23 @@ class AiListeningTests(QuizTestBase):
         self.assertEqual(group.title, 'Renamed')
         self.assertIn('Thompson', group.transcript)  # frontend skriptni yubormasa ham o'chib ketmaydi
 
+    def test_a_short_script_is_rewritten_once_with_the_problem_explained(self):
+        self.fake.scripts = [[{'speaker': 'A', 'text': 'Hello there, this is a rather short and simple script. ' * 3}], SCRIPT]
+        job = self.start()
+        self.assertEqual(job.status, 'done', job.error)
+        self.assertEqual(len(self.fake.writer_prompts), 2)
+        self.assertIsNone(self.fake.writer_problems[0])
+        self.assertIn('at least 400', self.fake.writer_problems[1])
+        self.assertEqual(len(self.fake.speech), len(SCRIPT))  # faqat YAKUNIY skript ovozga aylantirilgan
+
+    def test_the_minimum_length_floor_and_the_prompt_demand_a_full_recording(self):
+        plan = ai_exam.normalize_plan({'sections': [{'title': 'S', 'audio': {'min_words': 120, 'speakers': 9},
+                                                     'blocks': [{'type': 'mcq', 'count': 2}]}]}, fallback_count=5)
+        audio = plan['sections'][0]['audio']
+        self.assertGreaterEqual(audio['min_words'], 350)
+        self.assertEqual(audio['speakers'], 4)
+        self.assertIn('AT LEAST "min_words"', ai_exam._WRITER_SYSTEM)
+
     def test_a_too_short_script_costs_nothing_and_does_not_finish(self):
         self.fake.script = [{'speaker': 'A', 'text': 'hi'}]
         job = self.start()
@@ -877,3 +904,36 @@ class SpeechClientTests(SimpleTestCase):
     def test_an_empty_200_is_not_accepted(self):
         with self.assertRaises(llm.LLMError):
             self.speak(self.audio_reply(content=b''))
+
+
+class OptionShuffleTests(SimpleTestCase):
+    @staticmethod
+    def correct_position(raw):
+        question = ai_exam._to_question(raw, points=1)
+        return next(i for i, o in enumerate(question['options']) if o['is_correct'])
+
+    def test_the_correct_answer_does_not_always_sit_in_the_same_place(self):
+        raw = {'kind': 'mcq', 'text': 'q', 'options': ['a', 'b', 'c', 'd'], 'answer': 1}
+        positions = {self.correct_position(raw) for _ in range(60)}
+        self.assertGreater(len(positions), 2)
+
+    def test_the_correct_option_stays_correct_and_orders_are_sequential(self):
+        question = ai_exam._to_question({'kind': 'mcq', 'text': 'q', 'options': ['x', 'right', 'z'], 'answer': 1}, points=1)
+        self.assertEqual([o['order'] for o in question['options']], [0, 1, 2])
+        self.assertEqual([o['text'] for o in question['options'] if o['is_correct']], ['right'])
+
+    def test_multiple_answers_follow_their_options(self):
+        raw = {'kind': 'mcq_multiple', 'text': 'q', 'options': ['a', 'b', 'c', 'd'], 'answers': [0, 2]}
+        for _ in range(20):
+            question = ai_exam._to_question(raw, points=1)
+            self.assertEqual(sorted(o['text'] for o in question['options'] if o['is_correct']), ['a', 'c'])
+
+    def test_options_that_refer_to_other_options_keep_their_order(self):
+        raw = {'kind': 'mcq', 'text': 'q', 'options': ['one', 'two', 'Both of the above'], 'answer': 2}
+        for _ in range(20):
+            question = ai_exam._to_question(raw, points=1)
+            self.assertEqual([o['text'] for o in question['options']], ['one', 'two', 'Both of the above'])
+
+    def test_true_false_not_given_keeps_its_fixed_order(self):
+        question = ai_exam._to_question({'kind': 'true_false_not_given', 'text': 's', 'answer': 'false'}, points=1)
+        self.assertEqual([o['text'] for o in question['options']], ['True', 'False', 'Not Given'])
