@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
-from . import ai_jobs, selectors, services
+from . import ai_jobs, export, selectors, services
 from .models import AiQuizJob, Quiz
 from .serializers import (
     AiQuizCreateSerializer,
@@ -204,6 +204,32 @@ class QuizTemplateView(APIView):
         content_type = _TEMPLATE_CONTENT_TYPES.get(fmt, 'application/octet-stream')
         response = HttpResponse(content, content_type=content_type)
         response['Content-Disposition'] = f'attachment; filename="test_shabloni.{fmt}"'
+        return response
+
+
+class QuizExportView(APIView):
+    """Testni yuklab olish: `?type=pdf|docx|xlsx|csv|json&mode=student|teacher` (standart: pdf, student).
+
+    `student` — o'quvchiga tarqatish uchun (javob kaliti YO'Q), `teacher` — javoblar va Listening skripti bilan.
+    Faqat test egasi (o'qituvchi). E'TIBOR: parametr `type` (DRF'ning `format`i content-negotiation uchun band)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def get(self, request, pk):
+        import re
+
+        quiz = _get_quiz(request.user, pk)
+        fmt = (request.query_params.get('type') or 'pdf').lower()
+        mode = (request.query_params.get('mode') or 'student').lower()
+        data = QuizDetailSerializer(quiz, context={'request': request}).data
+        try:
+            content, content_type = export.export_quiz(dict(data), fmt=fmt, mode=mode)
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        name = re.sub(r'[^A-Za-z0-9._-]+', '_', f"{quiz.title or quiz.topic}_{mode}").strip('_')[:80] or 'test'
+        response = HttpResponse(content, content_type=content_type)
+        response['Content-Disposition'] = f'attachment; filename="{name}.{fmt}"'
         return response
 
 
