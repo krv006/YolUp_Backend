@@ -62,6 +62,21 @@ class MoveQuizToGroupTests(HomeworkBase):
         self.assertEqual((quiz.course_id, quiz.status), (self.course.id, Quiz.Status.DRAFT))
         self.assertFalse(self.student_sees(quiz))  # javobi belgilanmagan savol o'quvchiga chiqmaydi
 
+    def test_the_quiz_keeps_its_own_subject_when_given_to_a_group_of_another_subject(self):
+        english = services.create_quiz(
+            teacher=self.teacher, topic='IELTS', subject='english', questions=QUESTIONS, status=Quiz.Status.PUBLISHED)
+        self.patch(english, {'course': str(self.course.id)})  # self.course — matematika guruhi
+        english.refresh_from_db()
+        self.assertEqual((english.course_id, english.subject), (self.course.id, 'english'))
+
+    def test_a_quiz_without_a_subject_takes_the_groups_subject(self):
+        blank = services.create_quiz(
+            teacher=self.teacher, topic='x', subject='math', questions=QUESTIONS, status=Quiz.Status.PUBLISHED)
+        Quiz.objects.filter(pk=blank.pk).update(subject='')  # eski/import qilingan test: fani yo'q
+        self.patch(blank, {'course': str(self.course.id)})
+        blank.refresh_from_db()
+        self.assertEqual(blank.subject, 'math')
+
     def test_cannot_move_into_someone_elses_group(self):
         other = Course.objects.create(teacher=self.parent, title='Boshqa', subject='math')
         self.assertEqual(self.patch(self.quiz(), {'course': str(other.id)}).status_code, 403)
