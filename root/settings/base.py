@@ -288,6 +288,8 @@ OPENAI_TTS_VOICES = [v.strip() for v in os.getenv('OPENAI_TTS_VOICES', 'alloy,on
 AI_EXAM_AUDIO_MAX_CHARS = 9000                                              # bitta audio bo'lim skriptining yuqori chegarasi
 AI_EXAM_MAX_QUESTIONS = 80                                                  # bitta testdagi savollar yuqori chegarasi
 AI_EXAM_MATERIAL_CHARS = 40000                                              # materialdan AI'ga beriladigan matn uzunligi
+AI_EXAM_JUDGE = os.getenv('AI_EXAM_JUDGE', '1').lower() not in ('0', 'false', 'no', 'off')  # har bo'limdan keyin AI tekshiruvi
+AI_EXAM_JUDGE_CHARS = 8000                                                  # tekshiruvchiga beriladigan manba matn uzunligi
 AI_EXAM_RULES_CHARS = 15000                                                 # qoidalar hujjatidan olinadigan matn uzunligi
 
 # Web Push (ilova/tab yopiq bo'lganda ham bildirishnoma) — apps/notifications.

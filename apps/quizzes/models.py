@@ -25,6 +25,7 @@ from django.db.models import (
     PositiveIntegerField,
     TextField,
     TextChoices,
+    UniqueConstraint,
 )
 
 from django.db.models.signals import post_delete
@@ -183,6 +184,27 @@ class AnswerResponse(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.question_id} · {"to\'g\'ri" if self.is_correct else "xato"}'
+
+
+class BankQuestion(TimeStampedUUIDModel):
+    """AI yaratgan savol (savollar banki): o'qituvchi + imtihon bo'yicha takrorlarni oldini olish va qayta ishlatish."""
+
+    teacher = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='bank_questions')
+    exam_key = CharField(max_length=120, db_index=True)
+    subject = CharField(max_length=100, blank=True)
+    kind = CharField(max_length=20, blank=True)
+    text = TextField()
+    digest = CharField(max_length=40)
+    payload = JSONField(default=dict, blank=True)  # to'liq savol (create_quiz formati, javob kaliti bilan)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            UniqueConstraint(fields=['teacher', 'exam_key', 'digest'], name='uniq_bank_question_per_exam'),
+        ]
+
+    def __str__(self):
+        return self.text[:60]
 
 
 class AiQuizJob(TimeStampedUUIDModel):

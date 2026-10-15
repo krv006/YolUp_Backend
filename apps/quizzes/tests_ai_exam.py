@@ -19,7 +19,8 @@ from . import ai_exam, llm, material_text
 from .models import AiQuizJob, Quiz
 from .tests_question_types import QuizTestBase
 
-LLM_ON = dict(OPENAI_API_KEY='sk-test', OPENAI_MODEL='gpt-test', OPENAI_BASE_URL='https://llm.test/v1')
+LLM_ON = dict(OPENAI_API_KEY='sk-test', OPENAI_MODEL='gpt-test', OPENAI_BASE_URL='https://llm.test/v1',
+              AI_EXAM_JUDGE=False)  # AI tekshiruvi alohida testlanadi (tests_ai_judge.py)
 LONG = ('Honeybees are social insects that live in large colonies with one queen, thousands of workers and '
         'a few drones. ') * 3
 
@@ -236,6 +237,7 @@ class PlanTests(SimpleTestCase):
         self.assertEqual(plan['sections'][0]['blocks'][0]['count'], 15)
 
 
+@override_settings(AI_EXAM_JUDGE=False)
 class SectionWriterTests(SimpleTestCase):
     """Zaxira savollar va blok belgilari: yaroqsiz savollar zaxira bilan almashadi, bloklar aralashmaydi."""
 

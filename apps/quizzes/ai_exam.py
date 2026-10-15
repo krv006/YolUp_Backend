@@ -113,7 +113,8 @@ _WRITER_SYSTEM = (
     '(e.g. a speaker corrects a day or a number, offers alternatives, spells a name) instead of stating each answer '
     'once in plain words. '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
-    'that differ from "avoid_topics". If "source_material" is empty, there is no source: write original, accurate, '
+    'that differ from "avoid_topics" and write NEW questions that do not repeat or closely paraphrase any text in '
+    '"avoid_questions" (questions that already exist). If "source_material" is empty, there is no source: write original, accurate, '
     'exam-appropriate content yourself about the given "topic" (passages must be factual and well structured), '
     'and make every answer verifiable from the text you wrote.\n\n'
     + KIND_HELP + '\n\n'
@@ -430,10 +431,72 @@ def _spares(count: int) -> int:
     return 2 if count >= 3 else 1  # tushib qoladigan savollar o'rniga zaxira
 
 
+def _size(question: dict) -> int:
+    """Savol blokdagi nechta o'rinni egallaydi: fill_blank - bo'shliqlar soni, qolganlari - 1."""
+    return len(question.get('blanks') or []) if question.get('type') == 'fill_blank' else 1
+
+
+_JUDGE_SYSTEM = (
+    'You are a strict but fair exam reviewer. You get a SOURCE (reading passage, listening script or study material; '
+    'it may be empty) and numbered exam QUESTIONS with the intended correct answers marked. For each question decide '
+    'whether it is sound: the marked answer must be correct and supported by the source (or, when the source is '
+    'empty, be a well-established fact), exactly one answer must be defensible, the wording must not give the answer '
+    'away, and the question must be understandable on its own. Reject a question ONLY when you are confident it is '
+    'wrong, unsupported by the source, ambiguous or broken; style preferences are not a reason to reject. '
+    'Return ONLY JSON: {"verdicts": [{"id": 0, "ok": true, "problem": ""}, ...]} with one entry per question id.'
+)
+
+
+def _judge_view(number: int, question: dict) -> dict:
+    kind = question.get('type')
+    view = {'id': number, 'type': kind, 'question': question.get('text', '')}
+    if kind in ('single', 'multiple'):
+        view['options'] = [o['text'] for o in question.get('options', [])]
+        view['correct'] = [o['text'] for o in question.get('options', []) if o.get('is_correct')]
+    elif kind == 'true_false':
+        view['correct'] = bool(question.get('correct_bool'))
+    elif kind == 'matching':
+        view['pairs'] = [[p['left'], p['right']] for p in question.get('pairs', [])]
+    elif kind == 'fill_blank':
+        view['correct_per_gap'] = [b.get('answers') for b in question.get('blanks', [])]
+    elif kind in ('text', 'numeric'):
+        view['accepted_answers'] = question.get('accepted_answers', [])
+    elif kind == 'ordering':
+        view['correct_order'] = question.get('items', [])
+    return view
+
+
+def _judge(candidates: list, source: str, language: str) -> set:
+    """Bo'lim savollarini AI bilan tekshiradi (javob manbaga mosmi, bitta to'g'ri javob bormi). Qaytaradi: tashlanadigan
+    nomzodlar tartib raqamlari. Tekshiruv ishlamasa yoki shubhali bo'lsa (savollarning ko'pi rad etilsa) - hech narsa
+    tashlanmaydi: tekshiruv hech qachon test yaratishni to'xtatmasligi kerak."""
+    payload = json.dumps({
+        'source': source, 'language': language,
+        'questions': [_judge_view(number, q) for number, (_block, q, _spare) in enumerate(candidates)],
+    }, ensure_ascii=False)
+    try:
+        data = llm.chat_json(_JUDGE_SYSTEM, payload, max_tokens=2500)
+    except llm.LLMError as exc:
+        logger.warning("AI tekshiruvi ishlamadi, o'tkazib yuborildi: %s", exc)
+        return set()
+    bad = set()
+    for item in data.get('verdicts') or []:
+        number = _int(item.get('id')) if isinstance(item, dict) else None
+        if number is not None and 0 <= number < len(candidates) and item.get('ok') is False:
+            bad.add(number)
+            logger.info("AI tekshiruvi savolni rad etdi (%s): %s", item.get('problem'),
+                        str(candidates[number][1].get('text'))[:120])
+    if len(bad) * 10 > len(candidates) * 6:  # >60% rad - tekshiruvchining o'zi adashgan bo'lishi mumkin
+        logger.warning("AI tekshiruvi savollarning ko'pini rad etdi (%d/%d) - e'tiborga olinmadi", len(bad), len(candidates))
+        return set()
+    return bad
+
+
 # ─── Bo'lim yozish ─────────────────────────────────────────────────────────
 
 
-def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '') -> dict:
+def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '',
+                     avoid_questions: list = ()) -> dict:
     """`plan['sections'][index]` uchun matn parchasi va savollar. Qaytaradi:
     {'title', 'passage', 'questions': [{...create_quiz formati, 'block': i}], 'dropped': n, 'missing': n}."""
     section = plan['sections'][index]
@@ -442,11 +505,14 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         'passage': section['passage'], 'audio': section.get('audio'), 'focus': section.get('focus', ''),
         'blocks': [{**block, 'index': i, 'spare': _spares(block['count'])} for i, block in enumerate(section['blocks'])],
     }
-    user = json.dumps({
+    payload = {
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],
         'avoid_topics': avoid_topics, 'topic': topic,
         'source_material': material[:settings.AI_EXAM_MATERIAL_CHARS],
-    }, ensure_ascii=False)
+    }
+    if avoid_questions:  # shu o'qituvchining oldingi testlaridagi savollar - takrorlanmasin
+        payload['avoid_questions'] = list(avoid_questions)
+    user = json.dumps(payload, ensure_ascii=False)
     data = llm.chat_json(_WRITER_SYSTEM, user)
     if section.get('audio'):  # Listening skripti juda qisqa bo'lsa — bir marta kengaytirishni so'raymiz
         words, wanted = _words(_transcript(_script_turns(data))), section['audio']['min_words']
@@ -474,15 +540,17 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         audio_path = _store_audio(_synthesize(turns))
 
     raw_questions = [q for q in (data.get('questions') or []) if isinstance(q, dict)]
-    result, dropped, missing = [], 0, 0
+    judging = bool(settings.AI_EXAM_JUDGE)
+    candidates, dropped = [], 0  # candidates: [(blok, savol, zaxirami)]
     for block_index, block in enumerate(section['blocks']):
-        mine, filled = [], 0
+        filled, spare_taken = 0, 0
         for raw in list(raw_questions):
-            if filled >= block['count']:
+            over = filled >= block['count']
+            if over and not (judging and _int(raw.get('block')) == block_index and spare_taken < _spares(block['count'])):
                 break
             if _belongs(raw, block_index, block):
                 raw_questions.remove(raw)
-                if mathcheck.contradicts(raw):  # javobi hisobga zid — zaxira savol o'rniga keladi
+                if mathcheck.contradicts(raw):  # javobi hisobga zid - zaxira savol o'rniga keladi
                     dropped += 1
                     continue
                 converted = _to_question(raw, points=block['points'])
@@ -492,8 +560,24 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                     if converted is None:
                         logger.info("AI savoli shaklga kelmadi (%s): %s", raw.get('kind'), str(raw)[:200])
                     continue
-                mine.append(valid)
-                filled += len(valid.get('blanks') or []) if valid.get('type') == 'fill_blank' else 1
+                candidates.append((block_index, valid, over))
+                if over:
+                    spare_taken += 1
+                else:
+                    filled += _size(valid)
+
+    rejected = _judge(candidates, passage or transcript or material[:settings.AI_EXAM_JUDGE_CHARS], plan['language']) \
+        if judging and candidates else set()
+    dropped += len(rejected)
+
+    result, missing = [], 0
+    for block_index, block in enumerate(section['blocks']):
+        mine, filled = [], 0
+        for number, (owner, valid, _spare) in enumerate(candidates):
+            if owner != block_index or number in rejected or filled >= block['count']:
+                continue
+            mine.append(valid)
+            filled += _size(valid)
         missing += max(0, block['count'] - filled)
         if mine and block['instruction']:
             mine[0] = {**mine[0], 'text': f"{block['instruction']}\n\n{mine[0]['text']}"}

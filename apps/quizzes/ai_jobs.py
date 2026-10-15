@@ -33,7 +33,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.accounts.models import User
 
-from . import ai_exam, llm, material_text, services, tc_client, test_creator_import
+from . import ai_exam, bank, llm, material_text, services, tc_client, test_creator_import
 from .models import AiQuizJob, Quiz
 
 logger = logging.getLogger('apps')
@@ -362,11 +362,12 @@ def _run_engine(job: AiQuizJob) -> None:
         job.save(update_fields=['plan', 'updated_at'])
     sections = state.setdefault('sections', {})
 
-    avoid = []
+    avoid, known = [], bank.recent_texts(job)
     for index in range(len(plan['sections'])):
         key = str(index)
         if key not in sections:
-            sections[key] = ai_exam.generate_section(plan, index, material, avoid_topics=avoid, topic=job.topic)
+            sections[key] = ai_exam.generate_section(
+                plan, index, material, avoid_topics=avoid, topic=job.topic, avoid_questions=known)
             job.plan = state
             job.save(update_fields=['plan', 'updated_at'])
         done = sections[key]
@@ -389,6 +390,7 @@ def _run_engine(job: AiQuizJob) -> None:
         job.status = AiQuizJob.Status.DONE
         job.error = ''
         job.save(update_fields=['quiz', 'summary', 'status', 'error', 'updated_at'])
+    bank.remember(job, plan, sections)
     _attach_audio(quiz, groups)
     published = _publish_for_group(job, quiz)
     _release_source(job)

@@ -62,5 +62,18 @@ Workspace → **AI** sahifasi: material, **imtihon qoidalari** (fayl tanlash yok
 ro'yxati (holat, `summary`, tayyor bo'lsa "Testni ochish"). Xatoda `error` matnini ko'rsating.
 
 ## 5. Cheklovlar
-- Audio (Listening) yaratilmaydi; Listening/Speaking uchun faqat savol/topshiriq matni bo'lishi mumkin, audio'ni o'qituvchi yuklaydi.
+- Listening bo'limi uchun AI skript yozadi va ovozga (mp3) aylantiradi; skript (`transcript`) faqat o'qituvchiga ko'rinadi. Speaking uchun audio yaratilmaydi.
 - Sifat materialning to'liqligiga va qoidalarning aniqligiga bog'liq: qoidalar qanchalik aniq bo'lsa, tuzilma shunchalik to'g'ri chiqadi.
+
+## 6. Sifat tekshiruvlari (avtomatik, frontend uchun hech narsa o'zgarmaydi)
+- **Hisob-kitob**: `numeric` / raqamli variantli savollarda AI javobga mos arifmetik ifoda ham yozadi; biz uni mustaqil hisoblaymiz va
+  javobga zid savollarni tashlaymiz (zaxira savol o'rniga keladi). Modul: `apps/quizzes/mathcheck.py`.
+- **AI tekshiruvchi (judge)**: har bo'limdan keyin alohida so'rov savollarni manbaga (matn / skript / material) solishtiradi;
+  javobi manbada yo'q, noaniq yoki bir nechta to'g'ri javobli savollar tashlanadi. O'chirish: `AI_EXAM_JUDGE=0` (`.env`). Tekshiruv
+  ishlamasa yoki savollarning >60% ini rad etsa — e'tiborga olinmaydi, test baribir yaratiladi.
+- **Savollar banki**: yaratilgan savollar o'qituvchi + imtihon bo'yicha eslab qolinadi (`BankQuestion`); keyingi testda AI'ga
+  "bular allaqachon bor" deb beriladi — takrorlanmaydi.
+
+## 7. Testni yuklab olish — `GET /api/v1/quizzes/{id}/export/?type=pdf|docx|xlsx|csv|json&mode=student|teacher`
+Faqat test egasi (o'qituvchi). `student` — javobsiz (chop etib tarqatish), `teacher` — to'g'ri javoblar va Listening skripti bilan.
+Javob — fayl (`Content-Disposition: attachment`). Bearer token bilan so'rang (`fetch` + blob), oddiy `<a href>` ishlamaydi.
