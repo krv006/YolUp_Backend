@@ -19,7 +19,7 @@ import uuid
 
 from django.conf import settings
 
-from . import llm
+from . import llm, mathcheck
 
 logger = logging.getLogger('apps')
 
@@ -97,6 +97,10 @@ _WRITER_SYSTEM = (
     'Use the block type as "kind" and put the block "index" into every question as "block". '
     'For fill_blank blocks "count" is the number of GAPS: one note/form/table/summary item with {{1}}..{{n}} counts '
     'as n, so a block of 10 gaps is ONE item with ten gaps (or several items whose gaps add up to 10). '
+    'For numeric questions, and for mcq whose correct option is a number, ALSO add "check": a pure arithmetic '
+    'expression (digits, + - * / ^ ( ) and sqrt() only, no words or units) whose value equals the correct answer, '
+    'e.g. "check": "3*(4+5)"; it is used to verify your answer automatically. Omit it when the answer is not a '
+    'single computable number. '
     'Do not number the questions and do not repeat the block instruction inside each question '
     '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '
@@ -478,6 +482,9 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                 break
             if _belongs(raw, block_index, block):
                 raw_questions.remove(raw)
+                if mathcheck.contradicts(raw):  # javobi hisobga zid — zaxira savol o'rniga keladi
+                    dropped += 1
+                    continue
                 converted = _to_question(raw, points=block['points'])
                 valid = _validated(converted) if converted else None
                 if valid is None:
