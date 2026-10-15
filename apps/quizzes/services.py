@@ -337,8 +337,6 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
             raise PermissionDenied(_('Bu guruh sizga tegishli emas.'))
         quiz.course, quiz.subject, moved = new_course, new_course.subject, True
         quiz.save(update_fields=['course', 'subject'])
-        if quiz.status == Quiz.Status.DRAFT and requested_status is None:
-            requested_status = Quiz.Status.DRAFT  # guruhga ko'chirish qoralamani o'zi e'lon qilib yubormasin
     if requested_status == Quiz.Status.DRAFT and quiz.status == Quiz.Status.PUBLISHED:
         raise ValidationError({'status': _("E'lon qilingan testni qoralamaga qaytarib bo'lmaydi.")})
     if questions is not None:

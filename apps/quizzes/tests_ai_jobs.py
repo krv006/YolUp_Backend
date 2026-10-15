@@ -201,7 +201,7 @@ class AiQuizJobTests(QuizTestBase):
         job = AiQuizJob.objects.get(pk=job_id)
         self.assertEqual(job.status, 'done', job.error)
         quiz = Quiz.objects.get(pk=job.quiz_id)
-        self.assertEqual(quiz.status, Quiz.Status.DRAFT)
+        self.assertEqual(quiz.status, Quiz.Status.PUBLISHED)  # guruh tanlangan: darhol e'lon qilinadi
         self.assertEqual(str(quiz.course_id), str(self.course_id))
         self.assertEqual(quiz.questions.count(), 2)
         self.assertEqual(sorted(quiz.questions.values_list('points', flat=True)), [1, 2])
@@ -310,7 +310,7 @@ class AiQuizJobTests(QuizTestBase):
         self.sync()
         job = AiQuizJob.objects.get(pk=job_id)
         self.assertEqual(job.status, 'done', job.error)
-        self.assertEqual(Quiz.objects.filter(status='draft').count(), 1)
+        self.assertEqual(Quiz.objects.filter(status='published').count(), 1)
 
     def test_repeated_generation_failures_stop_with_a_clear_message(self):
         self.fake.generate_status = 500
@@ -403,7 +403,7 @@ class AiQuizJobTests(QuizTestBase):
         body = self.client.get(f'/api/v1/quizzes/ai-generate/{job_id}/').json()
         self.assertEqual(body['status'], 'done')
         quiz = self.client.get(f"/api/v1/quizzes/{body['quiz']}/").json()
-        self.assertEqual(quiz['status'], 'draft')
+        self.assertEqual(quiz['status'], 'published')
 
     # ── qotib qolgan ishlar ───────────────────────────────────────────
 

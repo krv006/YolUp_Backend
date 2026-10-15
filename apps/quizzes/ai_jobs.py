@@ -218,11 +218,26 @@ def _release_source(job: AiQuizJob) -> None:
         job.save(update_fields=changed + ['updated_at'])
 
 
-def _notify(job: AiQuizJob, *, ok: bool) -> None:
+def _publish_for_group(job: AiQuizJob, quiz: Quiz) -> bool:
+    """Guruh tanlangan bo'lsa test tayyor bo'lishi bilan e'lon qilinadi (o'quvchiga ko'rinadi va xabar boradi).
+    Savollarda to'g'ri javob yetishmasa — qoralama qoladi (o'qituvchi to'ldirib e'lon qiladi)."""
+    if job.course_id is None:
+        return False
+    try:
+        services.publish_quiz(teacher=job.teacher, quiz=quiz)
+    except ValidationError:
+        return False
+    return True
+
+
+def _notify(job: AiQuizJob, *, ok: bool, published: bool = False) -> None:
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 
-    if ok:
+    if ok and published:
+        text = f'«{job.topic}» uchun AI test tayyor va guruhga e\'lon qilindi — o\'quvchilar ko\'ra oladi.'
+        link_type, link_id = 'quiz', str(job.quiz_id)
+    elif ok:
         text = f'«{job.topic}» uchun AI test tayyor — qoralama sifatida saqlandi. Ko\'rib chiqing va e\'lon qiling.'
         link_type, link_id = 'quiz', str(job.quiz_id)
     else:
@@ -305,8 +320,9 @@ def _generate(job: AiQuizJob) -> None:
         job.status = AiQuizJob.Status.DONE
         job.error = ''
         job.save(update_fields=['quiz', 'warnings', 'summary', 'status', 'error', 'updated_at'])
+    published = _publish_for_group(job, quiz)
     _release_source(job)
-    _notify(job, ok=True)
+    _notify(job, ok=True, published=published)
 
 
 def _read(stored, name: str, limit: int) -> str:
@@ -374,8 +390,9 @@ def _run_engine(job: AiQuizJob) -> None:
         job.error = ''
         job.save(update_fields=['quiz', 'summary', 'status', 'error', 'updated_at'])
     _attach_audio(quiz, groups)
+    published = _publish_for_group(job, quiz)
     _release_source(job)
-    _notify(job, ok=True)
+    _notify(job, ok=True, published=published)
 
 
 def _advance(job: AiQuizJob) -> None:

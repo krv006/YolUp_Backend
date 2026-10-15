@@ -41,13 +41,26 @@ class MoveQuizToGroupTests(HomeworkBase):
             self.patch(quiz, {'course': str(self.course.id)})
         self.assertTrue(NotificationRecipient.objects.filter(user=self.student).exists())
 
-    def test_an_ai_draft_is_not_published_by_the_move(self):
+    def test_a_complete_draft_is_published_by_the_move_and_students_see_it(self):
         quiz = self.quiz(status=Quiz.Status.DRAFT)
-        resp = self.patch(quiz, {'course': str(self.course.id)})
+        with self.captureOnCommitCallbacks(execute=True):
+            resp = self.patch(quiz, {'course': str(self.course.id)})
         self.assertEqual(resp.status_code, 200, resp.content)
         quiz.refresh_from_db()
+        self.assertEqual((quiz.course_id, quiz.status), (self.course.id, Quiz.Status.PUBLISHED))
+        self.assertTrue(self.student_sees(quiz))  # o'qituvchi "e'lon qilish"ni alohida bosishi shart emas
+        self.assertTrue(NotificationRecipient.objects.filter(user=self.student).exists())
+
+    def test_a_draft_with_a_missing_answer_stays_a_draft(self):
+        quiz = services.create_quiz(
+            teacher=self.teacher, topic='x', subject='math', status=Quiz.Status.DRAFT, questions=[{
+                'text': 'q', 'type': 'single', 'points': 1,
+                'options': [{'text': 'a', 'is_correct': False, 'order': 0}, {'text': 'b', 'is_correct': False, 'order': 1}],
+            }])
+        self.patch(quiz, {'course': str(self.course.id)})
+        quiz.refresh_from_db()
         self.assertEqual((quiz.course_id, quiz.status), (self.course.id, Quiz.Status.DRAFT))
-        self.assertFalse(self.student_sees(quiz))  # o'qituvchi tekshirib e'lon qilmaguncha ko'rinmaydi
+        self.assertFalse(self.student_sees(quiz))  # javobi belgilanmagan savol o'quvchiga chiqmaydi
 
     def test_cannot_move_into_someone_elses_group(self):
         other = Course.objects.create(teacher=self.parent, title='Boshqa', subject='math')

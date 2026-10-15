@@ -439,6 +439,32 @@ class AiExamJobTests(QuizTestBase):
     def sync(self):
         call_command('sync_ai_quizzes', stdout=io.StringIO())
 
+    def test_a_group_less_ai_test_stays_a_draft_until_it_is_given_to_a_group(self):
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/quizzes/ai-generate/', {
+            'file': self.upload(), 'topic': 'Bees', 'question_count': 10, 'subject': 'math',
+            'exam_name': 'IELTS Reading',
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 202, resp.content)
+        self.sync()
+        job = AiQuizJob.objects.get(pk=resp.json()['id'])
+        self.assertEqual(job.status, 'done', job.error)
+        quiz = Quiz.objects.get(pk=job.quiz_id)
+        self.assertEqual((quiz.status, quiz.course_id), (Quiz.Status.DRAFT, None))
+        note = Notification.objects.get(kind='ai_quiz_ready')
+        self.assertIn('qoralama', note.description)
+
+    def test_an_ai_test_for_a_group_is_published_and_the_teacher_is_told(self):
+        job_id = self.start(exam_name='IELTS Reading').json()['id']
+        self.sync()
+        job = AiQuizJob.objects.get(pk=job_id)
+        self.assertEqual(Quiz.objects.get(pk=job.quiz_id).status, Quiz.Status.PUBLISHED)
+        note = Notification.objects.get(kind='ai_quiz_ready')
+        self.assertIn("e'lon qilindi", note.description)
+        self.auth(self.child_token)  # guruh a'zosi o'quvchi uni ko'radi
+        seen = self.client.get('/api/v1/quizzes/')
+        self.assertIn(str(job.quiz_id), [str(item['id']) for item in seen.json().get('results', seen.json())])
+
     def test_rules_file_produces_a_sectioned_mixed_type_draft(self):
         job_id = self.start(rules_file=self.upload('ielts_rules.txt', IELTS_RULES * 3)).json()['id']
         self.assertEqual(AiQuizJob.objects.get(pk=job_id).standard, '')
@@ -446,7 +472,7 @@ class AiExamJobTests(QuizTestBase):
         job = AiQuizJob.objects.get(pk=job_id)
         self.assertEqual(job.status, 'done', job.error)
         quiz = Quiz.objects.get(pk=job.quiz_id)
-        self.assertEqual(quiz.status, Quiz.Status.DRAFT)
+        self.assertEqual(quiz.status, Quiz.Status.PUBLISHED)  # guruh tanlangan: darhol e'lon qilinadi
         self.assertEqual(quiz.groups.count(), 2)  # har matn parchasi — guruh
         questions = list(quiz.questions.order_by('order'))
         self.assertEqual([q.type for q in questions], ['single', 'single', 'fill_blank', 'single'])  # tashlangani yo'q
