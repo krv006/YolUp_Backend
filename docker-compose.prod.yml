@@ -137,6 +137,32 @@ services:
       redis:
         condition: service_started
 
+  # Dars yozuvlarini iOS ochadigan MP4 (H.264 + AAC) ga o'giradi: brauzerdan WebM keladi, iOS uni ochmaydi.
+  # ALOHIDA xizmat va cpus bilan cheklangan, shunda og'ir qayta kodlash saytga va jonli darslarga halaqit bermaydi;
+  # bir vaqtda bitta yozuv, past ustuvorlik (nice). Eski yozuvlar ham shu yerda navbat bilan o'giriladi.
+  transcoder:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    cpus: ${TRANSCODER_CPUS:-2}
+    environment:
+      DJANGO_ENV: prod
+      POSTGRES_HOST: db
+      REDIS_URL: redis://redis:6379/0
+      RECORDINGS_DIR: /app/recordings
+    command: >
+      sh -c "sleep 60 &&
+             while true; do
+               python manage.py convert_recordings --limit 1;
+               sleep 30;
+             done"
+    volumes:
+      - logs:/app/logs
+      - recordings:/app/recordings
+    depends_on:
+      db:
+        condition: service_healthy
+
   caddy:
     # Frontend alohida loyihaga ko'chirildi — Caddy endi faqat TLS + API proxy
     image: caddy:2-alpine

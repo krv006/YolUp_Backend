@@ -346,7 +346,7 @@ class _FileSlice:
         self._f.close()
 
 
-_VIDEO_CONTENT_TYPES = {'.mp4': 'video/mp4', '.webm': 'video/webm'}
+_VIDEO_CONTENT_TYPES = {'.mp4': 'video/mp4', '.webm': 'video/webm', '.m4a': 'audio/mp4'}
 
 
 def _ranged_video_response(request, path):

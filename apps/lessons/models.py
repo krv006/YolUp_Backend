@@ -217,6 +217,10 @@ class LessonRecording(TimeStampedUUIDModel):
     egress_id = CharField(max_length=64, blank=True)
     # Yakuniy (video+audio birlashtirilgan) fayl — faqat merge tugagach to'ladi
     file_name = CharField(max_length=255, blank=True)
+    # iOS/Safari ochadigan nusxa (H.264 + AAC: MP4, faqat audio bo'lsa M4A). Asl WebM saqlanadi; nusxa fonda
+    # tayyorlanadi (`manage.py convert_recordings`). `mp4_error`: '' (navbatda) | 'converting' | xato matni.
+    mp4_file_name = CharField(max_length=255, blank=True)
+    mp4_error = TextField(blank=True)
     status = CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     error = TextField(blank=True)
     ended_at = DateTimeField(null=True, blank=True)

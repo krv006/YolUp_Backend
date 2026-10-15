@@ -640,6 +640,12 @@ def recording_stream_path(*, lesson: Lesson, token: str):
     path = _recording_path(recording)
     if not path.exists():
         raise NotFound(_("Yozuv fayli hali tayyor emas."))
+    if recording.mp4_file_name:  # iOS ham ochadigan nusxa tayyor bo'lsa — shuni beramiz (WebM iOS'da ochilmaydi)
+        from django.conf import settings
+
+        mp4_path = settings.RECORDINGS_DIR / recording.mp4_file_name
+        if mp4_path.exists():
+            return mp4_path
     return path
 
 
@@ -655,7 +661,8 @@ def delete_recording(*, teacher: User, lesson: Lesson) -> None:
     recording = LessonRecording.objects.filter(lesson=lesson).first()
     if recording is None:
         raise NotFound(_("Yozuv yo'q."))
-    for name in (recording.file_name, recording.video_file_name, recording.audio_file_name):
+    for name in (recording.file_name, recording.mp4_file_name, recording.video_file_name,
+                 recording.audio_file_name):
         if not name:
             continue
         path = settings.RECORDINGS_DIR / name
