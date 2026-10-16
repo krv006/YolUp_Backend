@@ -9,7 +9,6 @@ urlpatterns = [
     path('assignments/<uuid:assignment_id>/submit/', views.SubmitView.as_view(), name='hw-submit'),
     path('assignments/<uuid:assignment_id>/board/', views.HomeworkBoardView.as_view(), name='hw-board'),
     path('assignments/<uuid:assignment_id>/board/submit/', views.HomeworkBoardSubmitView.as_view(), name='hw-board-submit'),
-    path('assignments/<uuid:assignment_id>/board/solve/', views.HomeworkBoardSolveView.as_view(), name='hw-board-solve'),
     path('submissions/<uuid:submission_id>/', views.SubmissionDetailView.as_view(), name='hw-submission'),
     path('submissions/<uuid:submission_id>/file/', views.SubmissionFileView.as_view(), name='hw-submission-file'),
     path('submissions/<uuid:submission_id>/recheck/', views.RecheckView.as_view(), name='hw-recheck'),

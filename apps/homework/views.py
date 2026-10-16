@@ -119,14 +119,6 @@ class HomeworkBoardSubmitView(APIView):
         return Response(board.submit_board(student=request.user, assignment_id=assignment_id), status=201)
 
 
-class HomeworkBoardSolveView(APIView):
-    permission_classes = [RequirePerm('homework.submit')]
-
-    def post(self, request, assignment_id):
-        return Response(board.solve_formula(
-            student=request.user, assignment_id=assignment_id, expr=request.data.get('expr')))
-
-
 class SubmissionDetailView(APIView):
     """GET — topshiriq va (o'qituvchi tasdiqlagach) natija."""
 

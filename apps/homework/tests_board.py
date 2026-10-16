@@ -63,8 +63,8 @@ class HomeworkBoardApiTests(HomeworkBase):
         body = resp.json()
         self.assertEqual(body['sheets'], [{'index': 0, 'strokes': []}])
         self.assertEqual(body['size'], [1600, 900])
-        self.assertTrue(body['math_enabled'])  # self.course — matematika
-        self.assertFalse(body['chemistry_enabled'])
+        self.assertNotIn('math_enabled', body)  # doska fanga bog'lanmagan: hamma fanda bir xil
+        self.assertNotIn('chemistry_enabled', body)
         self.assertFalse(HomeworkBoard.objects.exists())  # faqat ochish hech narsa yaratmaydi
 
     def test_the_board_is_saved_validated_and_comes_back_after_a_refresh(self):
@@ -132,13 +132,8 @@ class HomeworkBoardApiTests(HomeworkBase):
         self.assertEqual(codes[0], 201)
         self.assertIn(400, codes)
 
-    def test_the_formula_solver_works_in_maths_courses_only(self):
-        ok = self.api(self.student).post(self.url('solve/'), {'expr': '2*x + 3'}, format='json')
-        self.assertEqual(ok.status_code, 200, ok.content)
-        Course.objects.filter(pk=self.course.pk).update(subject=Course.Subject.PHYSICS)
-        bad = self.api(self.student).post(self.url('solve/'), {'expr': '2*x + 3'}, format='json')
-        self.assertEqual(bad.status_code, 400)
-        self.assertFalse(self.api(self.student).get(self.url()).json()['math_enabled'])
+    def test_there_is_no_answer_solver_endpoint_for_homework(self):
+        self.assertEqual(self.api(self.student).post(self.url('solve/'), {'expr': '2*x + 3'}, format='json').status_code, 404)
 
     def test_the_ai_reads_the_board_pdf_as_page_images(self):
         from apps.homework import ai_grader

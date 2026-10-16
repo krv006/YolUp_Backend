@@ -16,7 +16,6 @@ from apps.accounts.models import User
 from apps.board import render
 from apps.board.models import SHEET_H, SHEET_W
 from apps.board.services import _validate_stroke
-from apps.lessons.models import Course
 
 from . import services
 from .models import HomeworkBoard
@@ -36,12 +35,9 @@ def _assignment_for(student: User, assignment_id):
 
 def _view(assignment, board) -> dict:
     sheets = (board.sheets if board else None) or [{'strokes': []}]
-    subject = assignment.course.subject
     return {
         'sheets': [{'index': i, 'strokes': sheet.get('strokes', [])} for i, sheet in enumerate(sheets)],
         'size': [SHEET_W, SHEET_H],
-        'math_enabled': subject == Course.Subject.MATH,
-        'chemistry_enabled': subject == Course.Subject.CHEMISTRY,
         'updated_at': board.updated_at if board else None,
     }
 
@@ -118,16 +114,3 @@ def submit_board(*, student: User, assignment_id) -> dict:
         raise ValidationError({'sheets': _("Doska bo'sh — avval vazifani yeching.")})
     upload = SimpleUploadedFile('doska.pdf', pdf, content_type='application/pdf')
     return services.submit(student=student, assignment_id=assignment.id, upload=upload)
-
-
-def solve_formula(*, student: User, assignment_id, expr: str) -> dict:
-    """Photomath uslubidagi yechuvchi — dars doskasidagi kabi faqat matematika kurslarida."""
-    assignment = _assignment_for(student, assignment_id)
-    if assignment.course.subject != Course.Subject.MATH:
-        raise ValidationError({'expr': _('Formula yechuvchi faqat matematika kurslarida ishlaydi.')})
-    from apps.board.math_solver import MathError, solve_math
-
-    try:
-        return solve_math(expr)
-    except MathError as exc:
-        raise ValidationError({'expr': str(exc)})
