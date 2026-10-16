@@ -5,7 +5,6 @@ yechim va formulalar matn emas, shuning uchun har sahifa to'liq rasm sifatida PD
 PDF dars doskasi uchun, u yerda rasm talab qilinmaydi). Chizish qoidalari frontend (`board-stroke.tsx`) bilan bir xil:
 matn bazaviy chizig'i `y` da, qatorlar oralig'i 1.35 x o'lcham, to'rtburchak burchagi 6 px.
 """
-import base64
 import io
 import math
 from pathlib import Path
@@ -73,51 +72,15 @@ def _arrow_head(draw, x1, y1, x2, y2, width, color):
                   fill=color, width=max(1, int(width)))
 
 
-PAPER_STEP = 40
-RULED_STEP = 48
-
-
-def _paper(draw, paper: str):
-    """Daftar turi (frontend bilan bir xil qadamlar): nuqtali, katakli, chiziqli."""
-    if paper == 'dots':
-        for x in range(PAPER_STEP, SHEET_W, PAPER_STEP):
-            for y in range(PAPER_STEP, SHEET_H, PAPER_STEP):
-                draw.ellipse([x - 1.5, y - 1.5, x + 1.5, y + 1.5], fill=(190, 195, 210))
-    elif paper == 'grid':
-        for x in range(PAPER_STEP, SHEET_W, PAPER_STEP):
-            draw.line([(x, 0), (x, SHEET_H)], fill=(226, 232, 240), width=1)
-        for y in range(PAPER_STEP, SHEET_H, PAPER_STEP):
-            draw.line([(0, y), (SHEET_W, y)], fill=(226, 232, 240), width=1)
-    elif paper == 'ruled':
-        for y in range(RULED_STEP, SHEET_H, RULED_STEP):
-            draw.line([(0, y), (SHEET_W, y)], fill=(203, 213, 225), width=1)
-
-
-def _image(stroke: dict):
-    src = str(stroke.get('src') or '')
-    try:
-        raw = base64.b64decode(src.split(',', 1)[1])
-        image = Image.open(io.BytesIO(raw)).convert('RGBA')
-        return image.resize((max(1, int(float(stroke.get('w', 100)))), max(1, int(float(stroke.get('h', 100))))), Image.LANCZOS)
-    except Exception:  # noqa: BLE001 - buzuq rasm sahifani buzmasin
-        return None
-
-
-def render_sheet(strokes: list, paper: str = 'blank') -> Image.Image:
+def render_sheet(strokes: list) -> Image.Image:
     """Bitta sheet (1600 x 900) -> RGB rasm."""
     page = Image.new('RGBA', (SHEET_W, SHEET_H), (255, 255, 255, 255))
     draw = ImageDraw.Draw(page)
-    _paper(draw, paper)
     for stroke in strokes or []:
         kind = stroke.get('type')
         color = _color(stroke.get('color'))
         width = max(1, int(stroke.get('width') or 4))
-        if kind == 'image':
-            image = _image(stroke)
-            if image is not None:
-                page.alpha_composite(image, (int(max(0, float(stroke.get('x', 0)))), int(max(0, float(stroke.get('y', 0))))))
-                draw = ImageDraw.Draw(page)
-        elif kind == 'text':
+        if kind == 'text':
             size = int(stroke.get('size') or 22)
             font = _font(size)
             y = float(stroke.get('y', 60))
@@ -162,10 +125,8 @@ def render_sheet(strokes: list, paper: str = 'blank') -> Image.Image:
 
 
 def sheets_to_pdf(sheets: list):
-    """[[stroke, ...] yoki {'strokes': [...], 'paper': 'grid'}, ...] -> PDF baytlari (har bo'sh bo'lmagan sheet — bitta rasm
-    sahifa). Hammasi bo'sh -> None."""
-    items = [(s.get('strokes', []), s.get('paper', 'blank')) if isinstance(s, dict) else (s, 'blank') for s in sheets]
-    pages = [render_sheet(strokes, paper) for strokes, paper in items if strokes]
+    """[[stroke, ...], ...] -> PDF baytlari (har bo'sh bo'lmagan sheet — bitta rasm sahifa). Hammasi bo'sh -> None."""
+    pages = [render_sheet(strokes) for strokes in sheets if strokes]
     if not pages:
         return None
     buffer = io.BytesIO()

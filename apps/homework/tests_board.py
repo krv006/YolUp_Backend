@@ -61,7 +61,7 @@ class HomeworkBoardApiTests(HomeworkBase):
         resp = self.api(self.student).get(self.url())
         self.assertEqual(resp.status_code, 200, resp.content)
         body = resp.json()
-        self.assertEqual(body['sheets'], [{'index': 0, 'strokes': [], 'paper': 'grid'}])
+        self.assertEqual(body['sheets'], [{'index': 0, 'strokes': []}])
         self.assertEqual(body['size'], [1600, 900])
         self.assertTrue(body['math_enabled'])  # self.course — matematika
         self.assertFalse(body['chemistry_enabled'])
@@ -149,76 +149,3 @@ class HomeworkBoardApiTests(HomeworkBase):
         self.assertEqual(text, '')
         self.assertEqual(len(images), 1)
         self.assertEqual(json.dumps(bool(images[0][1])), 'true')
-
-
-def photo(size=(300, 200), color=(220, 40, 40), fmt='JPEG'):
-    import base64
-
-    buffer = io.BytesIO()
-    Image.new('RGB', size, color).save(buffer, fmt)
-    mime = 'jpeg' if fmt == 'JPEG' else 'png'
-    return f"data:image/{mime};base64," + base64.b64encode(buffer.getvalue()).decode()
-
-
-class PaperAndImageTests(HomeworkBase):
-    def setUp(self):
-        super().setUp()
-        self.assignment_id = self.assignment(body='<p>Chizmani to\'ldiring</p>')
-
-    def url(self, suffix=''):
-        return f'/api/v1/homework/assignments/{self.assignment_id}/board/{suffix}'
-
-    def put(self, sheets):
-        return self.api(self.student).put(self.url(), {'sheets': sheets}, format='json')
-
-    def test_the_default_paper_depends_on_the_subject(self):
-        from .board import default_paper
-
-        self.assertEqual([default_paper(s) for s in ('math', 'physics', 'english', 'biology', 'history')],
-                         ['grid', 'grid', 'ruled', 'blank', 'blank'])
-        body = self.api(self.student).get(self.url()).json()
-        self.assertEqual((body['default_paper'], body['sheets'][0]['paper']), ('grid', 'grid'))  # matematika kursi
-
-    def test_the_paper_choice_is_saved_and_unknown_papers_become_blank(self):
-        saved = self.put([{'strokes': [PEN], 'paper': 'dots'}, {'strokes': [], 'paper': 'weird'}]).json()
-        self.assertEqual([s['paper'] for s in saved['sheets']], ['dots', 'blank'])
-
-    def test_a_photo_can_be_placed_on_the_board_and_comes_back(self):
-        image = {'type': 'image', 'src': photo(), 'x': 100, 'y': 120, 'w': 600, 'h': 400}
-        saved = self.put([{'strokes': [image, PEN], 'paper': 'blank'}]).json()
-        stroke = saved['sheets'][0]['strokes'][0]
-        self.assertEqual((stroke['type'], stroke['w'], stroke['h']), ('image', 600, 400))
-        self.assertTrue(stroke['id'])
-
-    def test_bad_images_are_refused(self):
-        base = {'type': 'image', 'x': 0, 'y': 0, 'w': 100, 'h': 100}
-        for src in ('http://evil.test/x.png', 'data:text/html;base64,PGgxPg==', 'data:image/png;base64,@@@',
-                    'data:image/png;base64,' + 'A' * 100, photo()[:-10] + 'x' * 2000 + '=',
-                    'javascript:alert(1)', ''):
-            self.assertEqual(self.put([{'strokes': [{**base, 'src': src}]}]).status_code, 400, src[:40])
-        huge = 'data:image/png;base64,' + 'A' * 460_000
-        self.assertEqual(self.put([{'strokes': [{**base, 'src': huge}]}]).status_code, 400)
-        many = [{**base, 'src': photo((20, 20))} for _ in range(7)]
-        self.assertEqual(self.put([{'strokes': many}]).status_code, 400)
-
-    def test_image_coordinates_are_clamped(self):
-        image = {'type': 'image', 'src': photo(), 'x': -50, 'y': 99999, 'w': 99999, 'h': 1}
-        stroke = self.put([{'strokes': [image]}]).json()['sheets'][0]['strokes'][0]
-        self.assertEqual((stroke['x'], stroke['y'], stroke['w'], stroke['h']), (0, 880, 1600, 20))
-
-    def test_the_pdf_shows_the_photo_and_the_paper(self):
-        blank_grid = render.render_sheet([], 'grid')
-        self.assertNotEqual(blank_grid.tobytes(), render.render_sheet([], 'blank').tobytes())
-        self.assertNotEqual(render.render_sheet([], 'ruled').tobytes(), render.render_sheet([], 'dots').tobytes())
-        image = {'type': 'image', 'src': photo(color=(255, 0, 0)), 'x': 100, 'y': 100, 'w': 200, 'h': 100}
-        page = render.render_sheet([image])
-        red, green, blue = page.getpixel((150, 150))
-        self.assertTrue(red > 240 and green < 20 and blue < 20)  # JPEG siqishi rangni 1-2 birlikka o'zgartirishi mumkin
-        self.assertEqual(page.getpixel((20, 20)), (255, 255, 255))
-
-    def test_submitting_a_board_with_a_photo_and_paper_makes_a_pdf(self):
-        self.put([{'strokes': [{'type': 'image', 'src': photo(), 'x': 0, 'y': 0, 'w': 500, 'h': 300}], 'paper': 'grid'}])
-        resp = self.api(self.student).post(self.url('submit/'), {}, format='json')
-        self.assertEqual(resp.status_code, 201, resp.content)
-        with Submission.objects.get(pk=resp.json()['id']).file.open('rb') as handle:
-            self.assertTrue(handle.read(5).startswith(b'%PDF'))
