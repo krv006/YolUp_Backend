@@ -52,6 +52,27 @@ def get_board(*, student: User, assignment_id) -> dict:
     return _view(assignment, board)
 
 
+def _clean_lines(raw):
+    """Matn blokidagi qalin/qiya/tagiga chizilgan/ro'yxat formatlari (dars doskasidagi kabi) - soddalashtirib saqlanadi."""
+    lines = []
+    for line in (raw if isinstance(raw, list) else [])[:100]:
+        if not isinstance(line, dict):
+            continue
+        runs = []
+        for run in (line.get('runs') if isinstance(line.get('runs'), list) else [])[:60]:
+            if isinstance(run, dict) and isinstance(run.get('text'), str):
+                item = {'text': run['text'][:500]}
+                for flag in ('bold', 'italic', 'underline'):
+                    if run.get(flag):
+                        item[flag] = True
+                runs.append(item)
+        item = {'runs': runs}
+        if line.get('list') in ('bullet', 'number'):
+            item['list'] = line['list']
+        lines.append(item)
+    return lines
+
+
 def _clean_sheets(raw) -> list:
     if not isinstance(raw, list) or not raw:
         raise ValidationError({'sheets': _("Kamida bitta sheet kerak.")})
@@ -69,6 +90,8 @@ def _clean_sheets(raw) -> list:
             if not isinstance(stroke, dict):
                 raise ValidationError({'sheets': _("Chiziq shakli noto'g'ri.")})
             item = _validate_stroke(stroke)
+            if item.get('type') == 'text' and stroke.get('lines'):
+                item['lines'] = _clean_lines(stroke['lines'])
             given = str(stroke.get('id') or '')
             item['id'] = given if _ID.match(given) else uuid.uuid4().hex[:12]
             clean.append(item)

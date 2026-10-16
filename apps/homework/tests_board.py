@@ -149,3 +149,16 @@ class HomeworkBoardApiTests(HomeworkBase):
         self.assertEqual(text, '')
         self.assertEqual(len(images), 1)
         self.assertEqual(json.dumps(bool(images[0][1])), 'true')
+
+
+class RichTextTests(HomeworkBase):
+    def test_rich_text_formatting_survives_a_save(self):
+        assignment_id = self.assignment()
+        rich = {**TEXT, 'lines': [{'runs': [{'text': 'x = ', 'bold': True}, {'text': '4', 'italic': True, 'evil': 1}], 'list': 'number'},
+                                  {'runs': []}, 'junk', {'runs': [{'text': 5}], 'list': 'weird'}]}
+        resp = self.api(self.student).put(
+            f'/api/v1/homework/assignments/{assignment_id}/board/', {'sheets': [{'strokes': [rich]}]}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        lines = resp.json()['sheets'][0]['strokes'][0]['lines']
+        self.assertEqual(lines[0], {'runs': [{'text': 'x = ', 'bold': True}, {'text': '4', 'italic': True}], 'list': 'number'})
+        self.assertEqual(lines[1:], [{'runs': []}, {'runs': []}])
