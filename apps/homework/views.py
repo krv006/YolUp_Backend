@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 
 from apps.core.permissions import RequirePerm, user_has_perm
 
-from . import services
+from . import board, services
 
 
 class AssignmentListCreateView(APIView):
@@ -95,6 +95,36 @@ class SubmitView(APIView):
             upload=request.FILES.get('file'),
         )
         return Response(data, status=201)
+
+
+class HomeworkBoardView(APIView):
+    """O'quvchining shu vazifa uchun shaxsiy doskasi: GET — holat, PUT — avtosaqlash."""
+
+    permission_classes = [RequirePerm('homework.submit')]
+
+    def get(self, request, assignment_id):
+        return Response(board.get_board(student=request.user, assignment_id=assignment_id))
+
+    def put(self, request, assignment_id):
+        return Response(board.save_board(
+            student=request.user, assignment_id=assignment_id, sheets=request.data.get('sheets')))
+
+
+class HomeworkBoardSubmitView(APIView):
+    """Doskani PDF qilib topshiradi (fayl yuklash bilan bir xil topshiriq yaratiladi)."""
+
+    permission_classes = [RequirePerm('homework.submit')]
+
+    def post(self, request, assignment_id):
+        return Response(board.submit_board(student=request.user, assignment_id=assignment_id), status=201)
+
+
+class HomeworkBoardSolveView(APIView):
+    permission_classes = [RequirePerm('homework.submit')]
+
+    def post(self, request, assignment_id):
+        return Response(board.solve_formula(
+            student=request.user, assignment_id=assignment_id, expr=request.data.get('expr')))
 
 
 class SubmissionDetailView(APIView):

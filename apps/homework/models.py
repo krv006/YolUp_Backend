@@ -24,6 +24,7 @@ from django.db.models import (
     PositiveSmallIntegerField,
     TextChoices,
     TextField,
+    UniqueConstraint,
 )
 
 from apps.core.models import TimeStampedUUIDModel
@@ -122,6 +123,25 @@ class Submission(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.student.username} → {self.assignment.title} [{self.status}]'
+
+
+class HomeworkBoard(TimeStampedUUIDModel):
+    """O'quvchining shu vazifa uchun shaxsiy doskasi (qoralama ham, topshirilgan holat ham shu yerda).
+
+    `sheets` — [{"strokes": [...]}, ...]; chiziqlar dars doskasi (`apps.board`) bilan bir xil shaklda. Avtosaqlash
+    butun holatni almashtiradi (`PUT`); topshirishda sahifalar rasmli PDF'ga aylantirilib oddiy `Submission` yaratiladi."""
+
+    assignment = ForeignKey('homework.Assignment', CASCADE, related_name='boards')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='homework_boards')
+    sheets = JSONField(default=list)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['assignment', 'student'], name='unique_homework_board_per_student'),
+        ]
+
+    def __str__(self):
+        return f'{self.student_id} · {self.assignment_id} ({len(self.sheets)} sheet)'
 
 
 class AssignmentFocusEvent(TimeStampedUUIDModel):
