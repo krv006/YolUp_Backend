@@ -19,7 +19,7 @@ from pathlib import Path
 
 from django.conf import settings
 
-from apps.quizzes import llm, material_text
+from apps.quizzes import ielts_writing, llm, material_text
 
 from . import rules
 
@@ -32,6 +32,7 @@ MAX_IMAGES = 6                # bitta topshiriqdagi rasmlar soni (skanerlangan P
 IMAGE_SIDE = 2000             # rasm uzun tomoni (px): kattasi kichraytiriladi
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 _LANGUAGES = {'uz': 'Uzbek (Latin script)', 'ru': 'Russian', 'en': 'English'}
+IELTS_SUBJECTS = ('english',)  # "writing" ko'nikmali vazifa shu fanlarda IELTS mezonlari bilan baholanadi
 
 
 class GraderError(Exception):
@@ -224,6 +225,8 @@ def grade(submission) -> dict:
     Xatolar: `GraderError` (fayl AI uchun yaroqsiz) yoki `llm.LLMError` (AI xizmati)."""
     assignment = submission.assignment
     text, images = student_work(submission)
+    if assignment.skill_key == 'writing' and assignment.course.subject in IELTS_SUBJECTS:
+        return _grade_ielts_writing(assignment, submission, text, images)
     subject = assignment.course.get_subject_display()
     lines = [
         f'SUBJECT: {subject}' + (f' (skill: {assignment.skill_key})' if assignment.skill_key else ''),
@@ -235,3 +238,15 @@ def grade(submission) -> dict:
     language = _LANGUAGES.get(submission.feedback_language, _LANGUAGES['uz'])
     data = llm.chat_json(_SYSTEM.replace('{language}', language), '\n\n'.join(lines), images=tuple(images))
     return clean_result(data)
+
+
+def _grade_ielts_writing(assignment, submission, text: str, images: list) -> dict:
+    """Ingliz tili "Writing" vazifasi: IELTS 4 mezoni bo'yicha band (o'qituvchi tasdiqlaydi)."""
+    prompt = '\n'.join(filter(None, [
+        assignment.title, assignment.description, _html_to_text(assignment.body), assignment.extra_instructions]))
+    try:
+        result = ielts_writing.evaluate(
+            text, prompt=prompt, task=None, language=submission.feedback_language or 'uz', images=images)
+    except ielts_writing.IeltsWritingError as exc:
+        raise GraderError(str(exc)) from exc
+    return ielts_writing.to_homework_result(result, model=settings.OPENAI_MODEL)

@@ -26,7 +26,7 @@ logger = logging.getLogger('apps')
 # Reja tilidagi blok turlari
 KINDS = (
     'mcq', 'mcq_multiple', 'true_false_not_given', 'yes_no_not_given', 'true_false',
-    'matching', 'fill_blank', 'short_answer', 'numeric', 'ordering',
+    'matching', 'fill_blank', 'short_answer', 'numeric', 'ordering', 'essay',
 )
 _TFNG = {'true_false_not_given': ('True', 'False', 'Not Given'), 'yes_no_not_given': ('Yes', 'No', 'Not Given')}
 MAX_SECTIONS = 6
@@ -45,7 +45,8 @@ KIND_HELP = '''Block / question kinds (use these names exactly):
                                                        {"kind":"fill_blank","text":"... {{1}} ... {{2}}","blanks":[["answer","accepted variant"],["answer"]]}
 - short_answer: answer in a few words.                 {"kind":"short_answer","text":"...","answers":["..",".."]}
 - numeric: a number.                                   {"kind":"numeric","text":"...","answers":["12"],"tolerance":0}
-- ordering: put steps in the correct order.            {"kind":"ordering","text":"...","items":["first","second",..]}'''
+- ordering: put steps in the correct order.            {"kind":"ordering","text":"...","items":["first","second",..]}
+- essay: a WRITING task (long written answer, graded by the teacher). {"kind":"essay","text":"<the full task prompt>","min_words":250}'''
 
 _PLANNER_SYSTEM = (
     'You are an exam designer. Convert the EXAM FORMAT RULES into a precise JSON test plan.\n'
@@ -66,8 +67,10 @@ _PLANNER_SYSTEM = (
     'If SOURCE MATERIAL is given, look at it and decide which part of the exam each section can be written from: '
     'set "focus" of every section to a short note on WHICH topic/chapter/part of the material that section must '
     'use (different sections use different parts when the material is long). Plan only sections that can be '
-    'written from text or from a spoken script; never plan image-, map- or diagram-based sections, and never plan '
-    'Speaking or Writing sections. If the material is short, reduce counts '
+    'written from text or from a spoken script; never plan image-, map- or diagram-based sections and never plan '
+    'Speaking sections. Plan a WRITING section only when the exam or the rules call for it (for example "IELTS '
+    'Writing" = Task 1 with min_words 150 and Task 2 with min_words 250): one block of type "essay", count 1 and '
+    '"min_words", per task, no passage. If the material is short, reduce counts '
     'proportionally but keep the exam section order and question types.\n'
     'Allowed block "type" values: ' + ', '.join(KINDS) + '. Meanings: mcq = one correct option; mcq_multiple = '
     'choose several; true_false_not_given / yes_no_not_given / true_false = statements judged against the text; '
@@ -92,6 +95,17 @@ _WRITER_SYSTEM = (
     'question that has several valid answers in the passage (for example "which city" when several cities are '
     'named). For true/false/not given and yes/no/not given blocks use all three outcomes in a realistic mix: NOT '
     'GIVEN means the passage neither confirms nor contradicts the statement. '
+    'For essay blocks write ONE original, exam-style writing prompt (no spares). IELTS Task 1 (Academic): since '
+    'images cannot be shown, state what is described and put the data IN THE QUESTION TEXT as a compact plain-text '
+    'table (4-6 rows, 3-5 columns, with units and years), then the standard instruction: "Summarise the information '
+    'by selecting and reporting the main features, and make comparisons where relevant. Write at least 150 words."; '
+    'IELTS Task 2: a statement plus one question type (opinion / discuss both views / problem-solution / two-part '
+    'question) and "Give reasons for your answer and include any relevant examples from your own knowledge or '
+    'experience. Write at least 250 words." Always set "min_words" (150 for Task 1, 250 for Task 2). '
+    'If "topic" mentions a target band or CEFR level, write at exactly that difficulty (text complexity, vocabulary '
+    'range, question difficulty and distractor quality); IELTS band 5-5.5 = clear everyday texts and mostly direct '
+    'questions, 6-6.5 = standard Academic texts with paraphrase, 7-7.5 = dense argumentative texts and '
+    'subtle distractors, 8+ = very demanding abstract texts. '
     'Follow the question blocks in order. For every block write its "count" questions PLUS its "spare" extra '
     'questions of the same kind (spares replace questions that fail validation; put the best questions first). '
     'Use the block type as "kind" and put the block "index" into every question as "block". '
@@ -179,6 +193,7 @@ def normalize_plan(raw, *, fallback_count: int) -> dict:
                 'instruction': str(block.get('instruction') or '').strip()[:500],
                 'options': min(6, max(3, _int(block.get('options'), 4))),
                 'points': min(10, max(1, _int(block.get('points'), 1))),
+                'min_words': min(1000, max(0, _int(block.get('min_words'), 0))),
             })
         if not blocks:
             continue
@@ -287,7 +302,7 @@ def _option_dicts(options: list, correct: set) -> list:
     return [{'text': options[old], 'is_correct': old in correct, 'order': new} for new, old in enumerate(order)]
 
 
-def _to_question(raw, *, points: int):
+def _to_question(raw, *, points: int, min_words: int = 0):
     """Modeldan kelgan bitta savol -> `create_quiz` formatidagi dict (tekshirilmagan). Yaroqsiz bo'lsa None."""
     if not isinstance(raw, dict) or raw.get('kind') not in KINDS:
         return None
@@ -295,6 +310,10 @@ def _to_question(raw, *, points: int):
     if not text:
         return None
     base = {'text': text, 'points': points}
+
+    if kind == 'essay':
+        wanted = _int(raw.get('min_words'), 0) or min_words
+        return {**base, 'type': 'essay', 'min_words': min(1000, max(0, wanted))}
 
     if kind == 'mcq':
         options, answer = _strs(raw.get('options')), _int(raw.get('answer'))
@@ -431,6 +450,10 @@ def _spares(count: int) -> int:
     return 2 if count >= 3 else 1  # tushib qoladigan savollar o'rniga zaxira
 
 
+def _block_spares(block: dict) -> int:
+    return 0 if block['type'] == 'essay' else _spares(block['count'])  # insho uchun zaxira yozilmaydi
+
+
 def _size(question: dict) -> int:
     """Savol blokdagi nechta o'rinni egallaydi: fill_blank - bo'shliqlar soni, qolganlari - 1."""
     return len(question.get('blanks') or []) if question.get('type') == 'fill_blank' else 1
@@ -470,9 +493,12 @@ def _judge(candidates: list, source: str, language: str) -> set:
     """Bo'lim savollarini AI bilan tekshiradi (javob manbaga mosmi, bitta to'g'ri javob bormi). Qaytaradi: tashlanadigan
     nomzodlar tartib raqamlari. Tekshiruv ishlamasa yoki shubhali bo'lsa (savollarning ko'pi rad etilsa) - hech narsa
     tashlanmaydi: tekshiruv hech qachon test yaratishni to'xtatmasligi kerak."""
+    checkable = [(number, q) for number, (_block, q, _spare) in enumerate(candidates) if q.get('type') != 'essay']
+    if not checkable:
+        return set()
     payload = json.dumps({
         'source': source, 'language': language,
-        'questions': [_judge_view(number, q) for number, (_block, q, _spare) in enumerate(candidates)],
+        'questions': [_judge_view(number, q) for number, q in checkable],
     }, ensure_ascii=False)
     try:
         data = llm.chat_json(_JUDGE_SYSTEM, payload, max_tokens=2500)
@@ -503,7 +529,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
         'passage': section['passage'], 'audio': section.get('audio'), 'focus': section.get('focus', ''),
-        'blocks': [{**block, 'index': i, 'spare': _spares(block['count'])} for i, block in enumerate(section['blocks'])],
+        'blocks': [{**block, 'index': i, 'spare': _block_spares(block)} for i, block in enumerate(section['blocks'])],
     }
     payload = {
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],
@@ -546,14 +572,14 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
         filled, spare_taken = 0, 0
         for raw in list(raw_questions):
             over = filled >= block['count']
-            if over and not (judging and _int(raw.get('block')) == block_index and spare_taken < _spares(block['count'])):
+            if over and not (judging and _int(raw.get('block')) == block_index and spare_taken < _block_spares(block)):
                 break
             if _belongs(raw, block_index, block):
                 raw_questions.remove(raw)
                 if mathcheck.contradicts(raw):  # javobi hisobga zid - zaxira savol o'rniga keladi
                     dropped += 1
                     continue
-                converted = _to_question(raw, points=block['points'])
+                converted = _to_question(raw, points=block['points'], min_words=block.get('min_words', 0))
                 valid = _validated(converted) if converted else None
                 if valid is None:
                     dropped += 1

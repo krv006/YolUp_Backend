@@ -160,6 +160,16 @@ class ExamResultDetailView(APIView):
         return Response(services.student_detail(user=request.user, exam=exam, student_id=student_id))
 
 
+class ExamWritingAiView(APIView):
+    """O'qituvchi IELTS Writing uchun AI tahlilini so'raydi (natija birozdan keyin `results/<student>/` da)."""
+
+    permission_classes = [RequirePerm('exam.manage')]
+
+    def post(self, request, pk, student_id):
+        exam = _get_exam(request.user, pk)
+        return Response(services.request_writing_ai(teacher=request.user, exam=exam, student_id=student_id))
+
+
 class ExamManualScoreView(APIView):
     """O'qituvchi qo'lda baholaydigan bo'limlar (IELTS Writing/Speaking va h.k.)."""
 

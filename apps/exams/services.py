@@ -12,7 +12,7 @@ from django.utils.translation import gettext as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
-from apps.quizzes import grading
+from apps.quizzes import grading, ielts_writing, llm
 from apps.quizzes.models import Question, Quiz
 
 from . import scoring as scoring_engines
@@ -503,11 +503,86 @@ def student_detail(*, user: User, exam: Exam, student_id) -> dict:
             ).select_related('section', 'question')
         ]
     if item.get('participated') and not item.get('hidden'):
+        item['writing_ai'] = _writing_ai_view(exam, student_id, staff_view)
         # Savol-savol tahlil (qaysi javob xato, to'g'risi qaysi): o'qituvchiga doim, o'quvchi/ota-onaga esa faqat
         # imtihon TUGAGACH - erta tugatgan o'quvchi javoblarni hali yozayotgan sinfdoshlariga aytib qo'ymasligi uchun.
         if staff_view or timezone.now() >= exam.ends_at:
             item['review'] = _review(exam, student_id)
     return item
+
+
+def _writing_ai_view(exam: Exam, student_id, staff_view: bool):
+    """O'qituvchiga — AI holati va taklif; o'quvchiga — faqat o'qituvchi Writing bandini qo'ygach, tahlil (taklif bandisiz)."""
+    attempt = ExamAttempt.objects.filter(exam=exam, student_id=student_id).first()
+    data = ((attempt.ai_results or {}).get('writing') if attempt else None) or None
+    if not data:
+        return None
+    if staff_view:
+        return data
+    if data.get('status') != 'done' or (attempt.manual_scores or {}).get('writing') is None:
+        return None
+    return {'status': 'done', 'items': data.get('items', [])}
+
+
+def _writing_answers(exam: Exam, attempt: ExamAttempt) -> list:
+    return list(
+        ExamAnswer.objects.filter(attempt=attempt, section__manual=True, section__key='writing')
+        .select_related('question').order_by('question__order', 'created_at')
+    )
+
+
+def request_writing_ai(*, teacher: User, exam: Exam, student_id) -> dict:
+    """O'qituvchi IELTS Writing uchun AI tahlilini so'raydi; baholash fonda (cron) bajariladi."""
+    if not _is_owner(exam, teacher):
+        raise PermissionDenied(_('Bu imtihon sizga tegishli emas.'))
+    if exam.scoring.get('type') != 'ielts':
+        raise ValidationError(_("AI Writing tahlili faqat IELTS imtihonida ishlaydi."))
+    if not llm.enabled():
+        raise ValidationError(_("AI xizmati sozlanmagan."))
+    attempt = ExamAttempt.objects.filter(exam=exam, student_id=student_id).first()
+    if attempt is None:
+        raise NotFound(_("O'quvchi imtihonda qatnashmagan."))
+    if not any((a.given_display or '').strip() for a in _writing_answers(exam, attempt)):
+        raise ValidationError(_("O'quvchi Writing bo'limiga javob yozmagan."))
+    current = (attempt.ai_results or {}).get('writing') or {}
+    if current.get('status') != 'queued':
+        attempt.ai_results = {**(attempt.ai_results or {}), 'writing': {
+            'status': 'queued', 'requested_at': timezone.now().isoformat()}}
+        attempt.save(update_fields=['ai_results', 'updated_at'])
+    return student_detail(user=teacher, exam=exam, student_id=student_id)
+
+
+def _evaluate_attempt_writing(attempt: ExamAttempt) -> dict:
+    items = []
+    for answer in _writing_answers(attempt.exam, attempt):
+        text = (answer.given_display or '').strip()
+        if not text:
+            continue
+        minimum = int((answer.question.answer_key or {}).get('min_words') or 0)
+        result = ielts_writing.evaluate(
+            text, prompt=answer.question.text, minimum=minimum,
+            task=ielts_writing.detect_task(answer.question.text, minimum=minimum))
+        items.append({**result, 'question': answer.question.text[:500]})
+    if not items:
+        raise ielts_writing.IeltsWritingError("Baholanadigan Writing javobi yo'q.")
+    return {'status': 'done', 'items': items, 'suggested_band': ielts_writing.writing_band(items),
+            'finished_at': timezone.now().isoformat()}
+
+
+def sync_writing_ai(limit: int = 3) -> dict:
+    """Cron: navbatdagi Writing tahlillarini bajaradi. Qaytaradi: {'done': n, 'failed': n}."""
+    done = failed = 0
+    queued = ExamAttempt.objects.filter(ai_results__writing__status='queued').select_related('exam')[:limit]
+    for attempt in queued:
+        try:
+            outcome = _evaluate_attempt_writing(attempt)
+            done += 1
+        except (ielts_writing.IeltsWritingError, llm.LLMError) as exc:
+            outcome = {'status': 'failed', 'error': str(exc)[:300]}
+            failed += 1
+        attempt.ai_results = {**(attempt.ai_results or {}), 'writing': outcome}
+        attempt.save(update_fields=['ai_results', 'updated_at'])
+    return {'done': done, 'failed': failed}
 
 
 def _review(exam: Exam, student_id) -> list:

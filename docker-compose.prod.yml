@@ -120,6 +120,7 @@ services:
              done) &
              (while true; do
                python manage.py sync_ai_quizzes;
+               python manage.py sync_exam_writing_ai;
                sleep 30;
              done) &
              while true; do

@@ -244,3 +244,53 @@ class CleanResultTests(SimpleTestCase):
     def test_html_task_text_is_flattened(self):
         text = ai_grader._html_to_text('<p>Birinchi &amp; ikkinchi</p><ul><li>A</li><li>B</li></ul>')
         self.assertEqual(text, 'Birinchi & ikkinchi\nA\nB')
+
+
+IELTS_REPLY = {
+    'task': 2, 'word_count': 0,
+    'criteria': {name: {'band': band, 'comment': f'{name} comment', 'evidence': 'a quote'}
+                 for name, band in (('task', 6.0), ('coherence', 6.5), ('lexical', 6.0), ('grammar', 5.5))},
+    'errors': [{'quote': 'people is', 'issue': 'agreement', 'correction': 'people are'}],
+    'strengths': ['Clear position'], 'improvements': ['Vary sentence structures'], 'upgraded_paragraph': 'Better.',
+}
+
+
+@override_settings(**LLM_ON)
+class IeltsWritingHomeworkTests(HomeworkBase):
+    """Ingliz tili + "writing" ko'nikmasi: umumiy baholash o'rniga IELTS 4 mezoni bo'yicha band."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch('apps.quizzes.llm.requests.post', side_effect=FakeGrader(completion(IELTS_REPLY)))
+        self.fake = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def checking(self, subject, skill='writing'):
+        Course.objects.filter(pk=self.course.pk).update(subject=subject)
+        assignment = self.assignment(skill_key=skill, title='Writing Task 2', description='Discuss both views.')
+        resp = self.submit(assignment, SimpleUploadedFile(
+            'essay.pdf', make_pdf('Some people think that technology isolates us from each other. ' * 40),
+            content_type='application/pdf'))
+        self.assertEqual(resp.status_code, 201, resp.content)
+        return Submission.objects.get(pk=resp.data['id'])
+
+    def test_an_english_writing_assignment_is_graded_with_ielts_bands(self):
+        submission = self.checking('english')
+        services.sync_ai_results()
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, 'pending_review')
+        result = submission.result
+        self.assertEqual(result['grade'], 'IELTS Writing Band 6')  # (6 + 6.5 + 6 + 5.5) / 4 = 6.0
+        self.assertEqual(result['ielts']['task'], 2)
+        self.assertEqual(len(result['ielts']['criteria']), 4)
+        self.assertEqual(submission.overall_score, round(6 / 9 * 100, 1))
+        self.assertIn('Task Response', result['questions'][0]['question'])
+
+    def test_other_subjects_and_skills_keep_the_general_grader(self):
+        for subject, skill in (('math', 'writing'), ('english', 'reading'), ('english', '')):
+            self.fake.reset_mock()
+            self.fake.side_effect = FakeGrader()
+            submission = self.checking(subject, skill)
+            services.sync_ai_results()
+            submission.refresh_from_db()
+            self.assertNotIn('ielts', submission.result, (subject, skill))

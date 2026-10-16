@@ -106,8 +106,8 @@ class ExamAttempt(TimeStampedUUIDModel):
     finished_at = DateTimeField(null=True, blank=True)
     # {bo'lim_kaliti: ball} — o'qituvchi qo'lda kiritgan (IELTS Writing/Speaking va h.k.)
     manual_scores = JSONField(default=dict, blank=True)
-    # ESKIRGAN: IELTS Writing AI taklifi uchun edi (Gemini olib tashlangan, 2026-10) —
-    # ustun eski ma'lumot uchun qoldirilgan, ishlatilmaydi.
+    # IELTS Writing AI taklifi: {'writing': {status: queued|done|failed, items: [...], suggested_band, error}} —
+    # o'qituvchi so'raydi, cron (`sync_exam_writing_ai`) baholaydi; yakuniy bandni o'qituvchi qo'yadi.
     ai_results = JSONField(default=dict, blank=True)
 
     class Meta:
