@@ -130,6 +130,15 @@ def _grade_text(question, answer) -> Graded:
     return Graded(earned, {'value_text': str(raw)}, ' '.join(str(raw).split()))
 
 
+def _grade_essay(question, answer) -> Graded:
+    """Insho (Writing) avtomatik baholanmaydi: javob saqlanadi, ball 0 — baholash o'qituvchi/AI ishi."""
+    raw = answer.get('value_text')
+    if raw is None or not str(raw).strip():
+        return _unanswered()
+    text = str(raw).strip()[:20000]
+    return Graded(0.0, {'value_text': text}, text)
+
+
 def _grade_matching(question, answer) -> Graded:
     given_pairs = answer.get('pairs') or []
     if not given_pairs:
@@ -194,6 +203,7 @@ _HANDLERS = {
     T.MATCHING: _grade_matching,
     T.ORDERING: _grade_ordering,
     T.FILL_BLANK: _grade_fill_blank,
+    T.ESSAY: _grade_essay,
 }
 
 

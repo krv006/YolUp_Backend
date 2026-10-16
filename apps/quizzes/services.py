@@ -80,6 +80,8 @@ def _build_answer_key(q_data: dict) -> dict:
             'accepted_answers': [a.strip() for a in q_data['accepted_answers']],
             'case_sensitive': bool(q_data.get('case_sensitive')),
         }
+    if qtype == T.ESSAY:
+        return {'min_words': int(q_data.get('min_words') or 0)}
     if qtype == T.MATCHING:
         # Chap/o'ng elementlarga alohida ID — aks holda o'quvchi ko'rinishida
         # ID'lar juftni oshkor qilib qo'yadi.
@@ -457,6 +459,6 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
 
     # Javobsiz qolgan savollar ham maksimal ballga qo'shiladi (adolatli ball).
     attempt.score = grading.round_points(score)
-    attempt.max_score = sum(q.points for q in questions)
+    attempt.max_score = sum(q.points for q in questions if q.type != T.ESSAY)  # insho avtomatik baholanmaydi
     attempt.save(update_fields=['score', 'max_score'])
     return attempt

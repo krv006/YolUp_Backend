@@ -403,7 +403,8 @@ def _section_inputs(exam: Exam, attempt_ids: list) -> dict:
     quiz_ids = [s.quiz_id for s in sections if s.quiz_id]
     maximum = {
         row['quiz_id']: row['total']
-        for row in Question.objects.filter(quiz_id__in=quiz_ids).values('quiz_id').annotate(total=Sum('points'))
+        for row in Question.objects.filter(quiz_id__in=quiz_ids).exclude(type=Question.Type.ESSAY)
+        .values('quiz_id').annotate(total=Sum('points'))
     }
     earned = {
         (row['attempt_id'], row['section_id']): row['total']
@@ -492,7 +493,8 @@ def student_detail(*, user: User, exam: Exam, student_id) -> dict:
             break
     else:
         raise NotFound(_("O'quvchi topilmadi."))
-    if user.role not in (User.Role.STUDENT, User.Role.PARENT) and item.get('participated'):
+    staff_view = user.role not in (User.Role.STUDENT, User.Role.PARENT)
+    if staff_view and item.get('participated'):
         # O'qituvchi qo'lda baholashi uchun yozma javoblarni ko'radi
         item['manual_answers'] = [
             {'section': a.section.key, 'question': a.question.text, 'answer': a.given_display}
@@ -500,7 +502,37 @@ def student_detail(*, user: User, exam: Exam, student_id) -> dict:
                 attempt__exam=exam, attempt__student_id=student_id, section__manual=True,
             ).select_related('section', 'question')
         ]
+    if item.get('participated') and not item.get('hidden'):
+        # Savol-savol tahlil (qaysi javob xato, to'g'risi qaysi): o'qituvchiga doim, o'quvchi/ota-onaga esa faqat
+        # imtihon TUGAGACH - erta tugatgan o'quvchi javoblarni hali yozayotgan sinfdoshlariga aytib qo'ymasligi uchun.
+        if staff_view or timezone.now() >= exam.ends_at:
+            item['review'] = _review(exam, student_id)
     return item
+
+
+def _review(exam: Exam, student_id) -> list:
+    """Avtomatik tekshiriladigan bo'limlar: har savol uchun o'quvchi javobi, to'g'ri javob va ball."""
+    attempt = ExamAttempt.objects.filter(exam=exam, student_id=student_id).first()
+    if attempt is None:
+        return []
+    answers = {a.question_id: a for a in ExamAnswer.objects.filter(attempt=attempt)}
+    rows = []
+    for section in exam.sections.filter(kind=Kind.SECTION, manual=False).exclude(quiz=None).order_by('order'):
+        questions = Question.objects.filter(quiz_id=section.quiz_id).prefetch_related('options')
+        for number, question in enumerate(questions.order_by('order', 'created_at'), start=1):
+            if question.type == Question.Type.ESSAY:
+                continue
+            answer = answers.get(question.id)
+            earned = float(answer.earned_points) if answer else 0.0
+            rows.append({
+                'section': section.key, 'section_title': section.title, 'number': number,
+                'question': question.text, 'type': question.type,
+                'given': answer.given_display if answer else None,
+                'correct_answer': grading.correct_display(question),
+                'earned': earned, 'points': question.points,
+                'is_correct': earned >= question.points,
+            })
+    return rows
 
 
 def set_manual_scores(*, teacher: User, exam: Exam, student_id, scores: dict) -> dict:

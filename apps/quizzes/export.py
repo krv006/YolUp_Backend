@@ -73,6 +73,12 @@ def _question_block(question: dict, number: int, *, teacher: bool) -> dict:
         text = _GAP.sub(lambda m: f'______({m.group(1)})', text)
         blanks = question.get('blanks') or []
         answer = _answer_list(f"{i}) {' / '.join(b.get('answers', []))}" for i, b in enumerate(blanks, start=1))
+    elif qtype == 'essay':
+        minimum = question.get('min_words') or 0
+        if minimum:
+            text += f'  (kamida {minimum} ta so\'z)'
+        lines.extend(('_' * 60, False) for _ in range(6))
+        answer = ''  # insho: to'g'ri javob yo'q
     else:  # text, numeric
         lines.append(('Javob: ____________________', False))
         answer = _answer_list(question.get('accepted_answers') or [])

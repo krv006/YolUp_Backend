@@ -64,6 +64,7 @@ class QuestionWriteSerializer(serializers.Serializer):
     pairs = PairWriteSerializer(many=True, required=False)
     items = serializers.ListField(child=serializers.CharField(max_length=500), required=False)
     blanks = BlankWriteSerializer(many=True, required=False)
+    min_words = serializers.IntegerField(min_value=0, max_value=2000, required=False, default=0)  # essay
 
     def validate(self, attrs):
         getattr(self, f'_check_{attrs["type"]}')(attrs)
@@ -106,6 +107,9 @@ class QuestionWriteSerializer(serializers.Serializer):
             self._fail('accepted_answers', _("Javoblar son ko'rinishida bo'lishi kerak (masalan 3.14)."))
         if not math.isfinite(attrs['tolerance']):
             self._fail('tolerance', _("Tolerantlik chekli son bo'lishi kerak."))
+
+    def _check_essay(self, attrs):
+        pass  # to'g'ri javob yo'q: insho o'qituvchi (yoki AI) tomonidan baholanadi
 
     def _check_text(self, attrs):
         answers = attrs.get('accepted_answers') or []
@@ -291,6 +295,8 @@ class QuestionTakeSerializer(serializers.Serializer):
             data['pairs_right'] = right
         elif question.type == T.FILL_BLANK:
             data['blank_count'] = len(key.get('blanks', []))
+        elif question.type == T.ESSAY:
+            data['min_words'] = key.get('min_words', 0)
         return data
 
 
@@ -340,6 +346,8 @@ class QuestionDetailSerializer(serializers.Serializer):
             data['items'] = [o.text for o in options]
         elif qtype == T.FILL_BLANK:
             data['blanks'] = key.get('blanks', [])
+        elif qtype == T.ESSAY:
+            data['min_words'] = key.get('min_words', 0)
         return data
 
 

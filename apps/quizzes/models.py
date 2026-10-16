@@ -119,6 +119,7 @@ class Question(TimeStampedUUIDModel):
         MATCHING = 'matching', 'Moslashtirish'
         ORDERING = 'ordering', 'Tartibga solish'
         FILL_BLANK = 'fill_blank', "Bo'sh joyni to'ldirish"
+        ESSAY = 'essay', 'Insho (Writing)'  # uzun yozma javob; avtomatik baholanmaydi (o'qituvchi/AI)
 
     quiz = ForeignKey(Quiz, CASCADE, related_name='questions')
     group = ForeignKey(
