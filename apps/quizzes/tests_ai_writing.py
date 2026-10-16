@@ -8,7 +8,9 @@ from . import ai_exam
 
 TASK1 = ('The table below shows the percentage of households with internet access in four countries.\n\n'
          'Country | 2010 | 2020\nA | 40 | 90\nB | 25 | 70\n\nSummarise the information. Write at least 150 words.')
-TASK2 = 'Some people think technology isolates us. Discuss both views and give your opinion. Write at least 250 words.'
+TASK2 = ('Some people think that modern technology isolates us from each other, while others believe it brings people '
+         'closer together. Discuss both views and give your own opinion. Give reasons for your answer and include any '
+         'relevant examples. Write at least 250 words.')
 
 PLAN = {
     'exam_name': 'IELTS Writing', 'language': 'en', 'rules': [],
@@ -84,3 +86,59 @@ class EssaySectionTests(SimpleTestCase):
     def test_a_missing_essay_is_reported(self):
         result, _ = self.write([{'kind': 'essay', 'text': TASK1, 'block': 0}])
         self.assertEqual(result['missing'], 1)
+
+
+class FixedWritingPlanTests(SimpleTestCase):
+    def test_ielts_writing_gets_the_official_two_task_plan_without_asking_the_ai(self):
+        with patch('apps.quizzes.llm.chat_json') as chat:
+            for name in ('IELTS Writing', 'ielts academic writing', 'Writing (IELTS)'):
+                plan = ai_exam.plan_exam('', target_total=0, topic='Technology', exam_name=name)
+                blocks = plan['sections'][0]['blocks']
+                self.assertEqual([(b['type'], b['min_words']) for b in blocks], [('essay', 150), ('essay', 250)])
+        chat.assert_not_called()
+
+    def test_own_rules_still_go_through_the_planner(self):
+        with patch('apps.quizzes.llm.chat_json', return_value={'sections': []}) as chat:
+            ai_exam.plan_exam('My own writing rules', target_total=0, exam_name='IELTS Writing')
+        chat.assert_called_once()
+
+    def test_other_exams_are_not_affected(self):
+        with patch('apps.quizzes.llm.chat_json', return_value={'sections': []}) as chat:
+            ai_exam.plan_exam('', target_total=0, exam_name='IELTS Listening')
+        chat.assert_called_once()
+
+
+class EssayCompletenessTests(SimpleTestCase):
+    FULL1 = TASK1 + ' The table is about internet access in four countries between 2010 and 2020.'
+    SHORT = 'Summarise the information below. Write at least 150 words.'
+
+    def run_section(self, replies):
+        calls = []
+
+        def fake(system, user, **kwargs):
+            calls.append(json.loads(user))
+            return replies[min(len(calls), len(replies)) - 1]
+
+        with patch('apps.quizzes.llm.chat_json', side_effect=fake):
+            result = ai_exam.generate_section(PLAN, 0, '', avoid_topics=[])
+        return result, calls
+
+    def test_a_bare_instruction_line_triggers_one_retry_and_the_full_task_is_kept(self):
+        bad = {'passage': '', 'questions': [{'kind': 'essay', 'text': self.SHORT, 'block': 0},
+                                            {'kind': 'essay', 'text': TASK2, 'block': 1}]}
+        good = {'passage': '', 'questions': [{'kind': 'essay', 'text': self.FULL1, 'block': 0},
+                                             {'kind': 'essay', 'text': TASK2 + ' ' + TASK2, 'block': 1}]}
+        result, calls = self.run_section([bad, good])
+        self.assertEqual(len(calls), 2)
+        self.assertIn('problem', calls[1])
+        self.assertIn('2010 and 2020', result['questions'][0]['text'])
+
+    def test_complete_tasks_need_no_retry_and_the_block_instruction_is_not_glued_on(self):
+        plan = json.loads(json.dumps(PLAN))
+        plan['sections'][0]['blocks'][0]['instruction'] = 'Write at least 150 words.'
+        good = {'passage': '', 'questions': [{'kind': 'essay', 'text': self.FULL1, 'block': 0},
+                                             {'kind': 'essay', 'text': TASK2 + ' ' + TASK2, 'block': 1}]}
+        with patch('apps.quizzes.llm.chat_json', return_value=good) as chat:
+            result = ai_exam.generate_section(plan, 0, '', avoid_topics=[])
+        self.assertEqual(chat.call_count, 1)
+        self.assertEqual(result['questions'][0]['text'], self.FULL1)

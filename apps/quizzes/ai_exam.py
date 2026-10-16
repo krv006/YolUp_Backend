@@ -95,7 +95,10 @@ _WRITER_SYSTEM = (
     'question that has several valid answers in the passage (for example "which city" when several cities are '
     'named). For true/false/not given and yes/no/not given blocks use all three outcomes in a realistic mix: NOT '
     'GIVEN means the passage neither confirms nor contradicts the statement. '
-    'For essay blocks write ONE original, exam-style writing prompt (no spares). IELTS Task 1 (Academic): since '
+    'For essay blocks write ONE original, exam-style writing prompt (no spares). The essay "text" must be the COMPLETE '
+    'task exactly as the candidate sees it (context sentence, the data table for Task 1 or the statement and question for '
+    'Task 2, and the instruction line) - never return only the instruction line. '
+    'IELTS Task 1 (Academic): since '
     'images cannot be shown, state what is described and put the data IN THE QUESTION TEXT as a compact plain-text '
     'table (4-6 rows, 3-5 columns, with units and years), then the standard instruction: "Summarise the information '
     'by selecting and reporting the main features, and make comparisons where relevant. Write at least 150 words."; '
@@ -236,6 +239,21 @@ def _material_outline(material: str, limit: int = 12000) -> str:
     return '\n[...]\n'.join([material[:third], material[mid - third // 2: mid + third // 2], material[-third:]])
 
 
+_IELTS_WRITING = re.compile(r'ielts.*writing|writing.*ielts', re.IGNORECASE)
+
+
+def ielts_writing_plan() -> dict:
+    """IELTS Writing: Task 1 (150 so'z) va Task 2 (250 so'z) — format rasmiy va doimiy, AI rejalashtirishi shart emas."""
+    return {
+        'exam_name': 'IELTS Writing', 'language': 'en',
+        'rules': ['Original IELTS Academic Writing tasks, exam-style wording, one clear task each.'],
+        'sections': [{'title': 'Writing', 'passage': None, 'audio': None, 'focus': '', 'blocks': [
+            {'type': 'essay', 'count': 1, 'instruction': '', 'options': 4, 'points': 1, 'min_words': 150},
+            {'type': 'essay', 'count': 1, 'instruction': '', 'options': 4, 'points': 2, 'min_words': 250},
+        ]}],
+    }
+
+
 def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '', material: str = '') -> dict:
     """Reja tuzadi. Manba: (1) o'qituvchining qoidalar matni, (2) imtihon nomi — AI uning rasmiy tuzilmasini
     o'zi eslaydi (IELTS, SAT...), (3) ikkalasi ham bo'sh — oddiy variantli reja (AI chaqirilmaydi).
@@ -244,6 +262,8 @@ def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name:
     exam_name = (exam_name or '').strip()
     if not rules_text and not exam_name:
         return default_plan(target_total or 20)
+    if not rules_text and _IELTS_WRITING.search(exam_name):
+        return ielts_writing_plan()
     total = f'target_total: {target_total}' if target_total else 'target_total: auto (use the official counts of the exam)'
     parts = [total, f'topic: {topic}']
     if exam_name:
@@ -521,6 +541,12 @@ def _judge(candidates: list, source: str, language: str) -> set:
 # ─── Bo'lim yozish ─────────────────────────────────────────────────────────
 
 
+def _complete_essays(data: dict) -> int:
+    """Nechta insho savolida to'liq topshiriq bor (kamida ~25 so'z; ko'rsatma qatorining o'zi yetarli emas)."""
+    return sum(1 for q in (data.get('questions') or [])
+               if isinstance(q, dict) and q.get('kind') == 'essay' and len(str(q.get('text') or '').split()) >= 25)
+
+
 def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '',
                      avoid_questions: list = ()) -> dict:
     """`plan['sections'][index]` uchun matn parchasi va savollar. Qaytaradi:
@@ -550,6 +576,15 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                            'questions to match it.',
             }, ensure_ascii=False)
             data = llm.chat_json(_WRITER_SYSTEM, retry)
+
+    required = sum(block['count'] for block in section['blocks'] if block['type'] == 'essay')
+    if required and _complete_essays(data) < required:  # topshiriq matni yetarli emas - bir marta qayta so'raymiz
+        retry = json.dumps({
+            **json.loads(user),
+            'problem': 'Each essay question must contain the COMPLETE writing task (context, data table for Task 1 / '
+                       'statement and question for Task 2, and the instruction line). Write all of them again, in full.',
+        }, ensure_ascii=False)
+        data = llm.chat_json(_WRITER_SYSTEM, retry)
 
     passage = str(data.get('passage') or '').strip() if section['passage'] else ''
     if section['passage'] and len(passage) < 150:
@@ -605,7 +640,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
             mine.append(valid)
             filled += _size(valid)
         missing += max(0, block['count'] - filled)
-        if mine and block['instruction']:
+        if mine and block['instruction'] and block['type'] != 'essay':
             mine[0] = {**mine[0], 'text': f"{block['instruction']}\n\n{mine[0]['text']}"}
         result.extend({**q, 'block': block_index} for q in mine)
     return {'title': section['title'], 'passage': passage, 'transcript': transcript, 'audio_path': audio_path,
