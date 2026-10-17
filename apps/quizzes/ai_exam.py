@@ -327,7 +327,29 @@ def _option_dicts(options: list, correct: set) -> list:
     return [{'text': options[old], 'is_correct': old in correct, 'order': new} for new, old in enumerate(order)]
 
 
+def _marks(question: dict) -> int:
+    """Savol nechta "ball-birlik" (mark)dan iborat: IELTSda har bo'shliq, har moslashtirilgan juft va ikki javobli
+    savolning har to'g'ri javobi alohida 1 ball (Reading/Listening jami 40). Boshqa turlar - 1."""
+    kind = question.get('type')
+    if kind == 'fill_blank':
+        return max(1, len(question.get('blanks') or []))
+    if kind == 'matching':
+        return max(1, len(question.get('pairs') or []))
+    if kind == 'multiple':
+        return max(1, sum(1 for option in question.get('options') or [] if option.get('is_correct')))
+    return 1
+
+
 def _to_question(raw, *, points: int, min_words: int = 0):
+    """Modeldan kelgan savol -> `create_quiz` formati. Ball = blok balli x savoldagi ball-birliklar soni (`_marks`),
+    shunda 5 bo'shliqli savol 5 ball turadi va test jami haqiqiy imtihondagidek hisoblanadi."""
+    question = _convert_question(raw, points=points, min_words=min_words)
+    if question is not None:
+        question['points'] = min(100, points * _marks(question))
+    return question
+
+
+def _convert_question(raw, *, points: int, min_words: int = 0):
     """Modeldan kelgan bitta savol -> `create_quiz` formatidagi dict (tekshirilmagan). Yaroqsiz bo'lsa None."""
     if not isinstance(raw, dict) or raw.get('kind') not in KINDS:
         return None
