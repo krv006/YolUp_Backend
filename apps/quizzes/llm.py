@@ -43,10 +43,10 @@ def _error_message(response: requests.Response) -> tuple:
     return str(body.get('code') or body.get('type') or ''), str(body.get('message') or '')[:300]
 
 
-def _post(messages: list, max_tokens: int) -> dict:
+def _post(messages: list, max_tokens: int, model: str = '') -> dict:
     url = settings.OPENAI_BASE_URL.rstrip('/') + '/chat/completions'
     payload = {
-        'model': settings.OPENAI_MODEL, 'messages': messages,
+        'model': model or settings.OPENAI_MODEL, 'messages': messages,
         'response_format': {'type': 'json_object'}, 'max_completion_tokens': max_tokens,
     }
     try:
@@ -97,7 +97,7 @@ def speech(text: str, voice: str) -> bytes:
     raise LLMError(f'Ovoz xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
 
 
-def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = ()) -> dict:
+def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = (), model: str = '') -> dict:
     """Tizim va foydalanuvchi xabari bo'yicha JSON obyekt qaytaradi. `images` — [(mime, bytes), ...]:
     rasmlar matn bilan birga yuboriladi (modelning ko'rish imkoniyati kerak, masalan gpt-4o-mini)."""
     max_tokens = max_tokens or settings.OPENAI_MAX_OUTPUT_TOKENS
@@ -111,7 +111,7 @@ def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = ()
     last = ''
     for attempt in range(_JSON_RETRIES + 1):
         started = time.monotonic()
-        body = _post(messages, max_tokens)
+        body = _post(messages, max_tokens, model)
         try:
             choice = body['choices'][0]
             text = choice['message']['content']

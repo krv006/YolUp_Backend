@@ -280,6 +280,8 @@ TEST_CREATOR_GIVE_UP_MINUTES = 45                                          # shu
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+# IELTS Writing baholash uchun alohida (kuchliroq) model; bo'sh bo'lsa OPENAI_MODEL ishlatiladi
+OPENAI_WRITING_MODEL = os.getenv('OPENAI_WRITING_MODEL', '')
 OPENAI_TIMEOUT = 180                                                       # soniya (bitta so'rov)
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv('OPENAI_MAX_OUTPUT_TOKENS', '8192'))
 # Listening (audio) bo'limlari: AI skript yozadi, OpenAI ovoz sintezi uni mp3 qiladi (har gapiruvchiga alohida ovoz)

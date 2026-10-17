@@ -248,8 +248,13 @@ def ielts_writing_plan() -> dict:
         'exam_name': 'IELTS Writing', 'language': 'en',
         'rules': ['Original IELTS Academic Writing tasks, exam-style wording, one clear task each.'],
         'sections': [{'title': 'Writing', 'passage': None, 'audio': None, 'focus': '', 'blocks': [
-            {'type': 'essay', 'count': 1, 'instruction': '', 'options': 4, 'points': 1, 'min_words': 150},
-            {'type': 'essay', 'count': 1, 'instruction': '', 'options': 4, 'points': 2, 'min_words': 250},
+            {'type': 'essay', 'count': 1, 'options': 4, 'points': 1, 'min_words': 150, 'data_table': True,
+             'instruction': 'IELTS WRITING TASK 1 (Academic). Images cannot be shown, so give the data as a plain-text table INSIDE '
+                            'the question text: one context sentence, then 4-6 table rows with columns separated by " | " '
+                            '(include units and years), then the standard instruction and "Write at least 150 words."'},
+            {'type': 'essay', 'count': 1, 'options': 4, 'points': 2, 'min_words': 250,
+             'instruction': 'IELTS WRITING TASK 2: an essay question (a statement plus opinion / discuss both views / '
+                            'problem-solution / two-part question), ending with "Write at least 250 words."'},
         ]}],
     }
 
@@ -332,7 +337,7 @@ def _to_question(raw, *, points: int, min_words: int = 0):
     base = {'text': text, 'points': points}
 
     if kind == 'essay':
-        wanted = _int(raw.get('min_words'), 0) or min_words
+        wanted = min_words or _int(raw.get('min_words'), 0)  # blokdagi minimum ustun (Task 1 = 150, Task 2 = 250)
         return {**base, 'type': 'essay', 'min_words': min(1000, max(0, wanted))}
 
     if kind == 'mcq':
@@ -541,10 +546,19 @@ def _judge(candidates: list, source: str, language: str) -> set:
 # ─── Bo'lim yozish ─────────────────────────────────────────────────────────
 
 
-def _complete_essays(data: dict) -> int:
-    """Nechta insho savolida to'liq topshiriq bor (kamida ~25 so'z; ko'rsatma qatorining o'zi yetarli emas)."""
-    return sum(1 for q in (data.get('questions') or [])
-               if isinstance(q, dict) and q.get('kind') == 'essay' and len(str(q.get('text') or '').split()) >= 25)
+def _essays_ok(data: dict, section: dict) -> bool:
+    """Har insho blokida to'liq topshiriq bormi: kamida ~25 so'z (ko'rsatma qatorining o'zi yetarli emas); ma'lumot
+    jadvali talab qilinadigan blokda (IELTS Task 1) - kamida 3 qator jadval (`|`). Blok raqami bo'yicha, yo'q bo'lsa tartib bo'yicha."""
+    essays = [q for q in (data.get('questions') or []) if isinstance(q, dict) and q.get('kind') == 'essay']
+    positions = [i for i, block in enumerate(section['blocks']) if block['type'] == 'essay']
+    for order, index in enumerate(positions):
+        mine = [q for q in essays if _int(q.get('block')) == index] or essays[order:order + 1]
+        text = str(mine[0].get('text') or '') if mine else ''
+        if len(text.split()) < 25:
+            return False
+        if section['blocks'][index].get('data_table') and sum(1 for line in text.splitlines() if '|' in line) < 3:
+            return False
+    return True
 
 
 def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '',
@@ -577,12 +591,13 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
             }, ensure_ascii=False)
             data = llm.chat_json(_WRITER_SYSTEM, retry)
 
-    required = sum(block['count'] for block in section['blocks'] if block['type'] == 'essay')
-    if required and _complete_essays(data) < required:  # topshiriq matni yetarli emas - bir marta qayta so'raymiz
+    if any(block['type'] == 'essay' for block in section['blocks']) and not _essays_ok(data, section):  # topshiriq to'liq emas - bir marta qayta so'raymiz
         retry = json.dumps({
             **json.loads(user),
             'problem': 'Each essay question must contain the COMPLETE writing task (context, data table for Task 1 / '
-                       'statement and question for Task 2, and the instruction line). Write all of them again, in full.',
+                       'statement and question for Task 2, and the instruction line). Task 1 MUST contain the data as '
+                       'table rows separated by " | ". Block 0 is Task 1 and block 1 is Task 2 - keep that order. Write '
+                       'all of them again, in full.',
         }, ensure_ascii=False)
         data = llm.chat_json(_WRITER_SYSTEM, retry)
 

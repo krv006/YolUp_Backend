@@ -18,6 +18,8 @@ import logging
 import math
 import re
 
+from django.conf import settings
+
 from . import llm
 
 logger = logging.getLogger('apps')
@@ -57,7 +59,11 @@ _SYSTEM = (
     '- For every criterion give a short "comment" (1-2 sentences) and one short "evidence" quote from the response '
     '(English, verbatim) or "" if none.\n'
     '- "errors": up to 8 of the most important concrete mistakes: {"quote": exact words from the response, "issue": '
-    'the mistake type, "correction": a corrected version}. Prefer errors that repeat or hurt meaning.\n'
+    'the mistake type, "correction": a corrected version}. Prefer errors that repeat or hurt meaning. List ONLY '
+    'mistakes you are certain about: check that the quoted words are really wrong AND that your correction is itself '
+    'correct. Never "correct" acceptable English (for example a verb that agrees with a plural noun it follows, a '
+    'tense that fits the context, a valid comparison, or a mere style preference). If you find fewer certain '
+    'mistakes, list fewer - an empty list is fine.\n'
     '- "strengths" and "improvements": 2-4 short, concrete items each (what to keep / what to change to gain a '
     'higher band).\n'
     '- "upgraded_paragraph": rewrite ONE weak paragraph or part of the response at about +1 band (English), '
@@ -181,7 +187,7 @@ def evaluate(essay: str, *, prompt: str = '', task=None, minimum: int = 0, langu
         f'CANDIDATE RESPONSE ({count_words(essay)} words counted):\n{essay[:12000] or "[see the attached image(s)]"}'
     )
     system = _SYSTEM.replace('{language}', _LANGUAGES.get(language, _LANGUAGES['uz']))
-    data = llm.chat_json(system, payload, max_tokens=3500, images=tuple(images))
+    data = llm.chat_json(system, payload, max_tokens=3500, images=tuple(images), model=settings.OPENAI_WRITING_MODEL)
     words = count_words(essay)
     if not essay:  # rasm: so'z sonini modeldan olamiz
         try:

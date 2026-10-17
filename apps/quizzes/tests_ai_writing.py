@@ -40,7 +40,7 @@ class EssayPlanTests(SimpleTestCase):
         question = ai_exam._to_question({'kind': 'essay', 'text': TASK2}, points=9, min_words=250)
         self.assertEqual((question['type'], question['min_words'], question['points']), ('essay', 250, 9))
         own = ai_exam._to_question({'kind': 'essay', 'text': TASK1, 'min_words': 150}, points=9, min_words=250)
-        self.assertEqual(own['min_words'], 150)  # modelning o'z qiymati ustun
+        self.assertEqual(own['min_words'], 250)  # blokdagi minimum ustun (model adashmasin)
         self.assertIsNone(ai_exam._to_question({'kind': 'essay', 'text': '  '}, points=9))
 
     def test_an_essay_passes_the_real_question_validation_without_any_answer_key(self):
@@ -142,3 +142,92 @@ class EssayCompletenessTests(SimpleTestCase):
             result = ai_exam.generate_section(plan, 0, '', avoid_topics=[])
         self.assertEqual(chat.call_count, 1)
         self.assertEqual(result['questions'][0]['text'], self.FULL1)
+
+
+class TaskOneNeedsDataTests(SimpleTestCase):
+    """IELTS Writing: Task 1 da ma'lumot jadvali bo'lishi shart, tartib Task 1 -> Task 2."""
+
+    TABLE = ('The table shows internet access in four countries.\n\nCountry | 2010 | 2020\nA | 40 | 90\nB | 25 | 70\n'
+             'C | 10 | 55\n\nSummarise the information by selecting and reporting the main features. Write at least 150 words.')
+
+    def plan(self):
+        return ai_exam.ielts_writing_plan()
+
+    def run_section(self, replies):
+        calls = []
+
+        def fake(system, user, **kwargs):
+            calls.append(json.loads(user))
+            return replies[min(len(calls), len(replies)) - 1]
+
+        with patch('apps.quizzes.llm.chat_json', side_effect=fake):
+            result = ai_exam.generate_section(self.plan(), 0, '', avoid_topics=[])
+        return result, calls
+
+    def test_the_fixed_plan_tells_the_writer_which_block_is_which_task(self):
+        blocks = self.plan()['sections'][0]['blocks']
+        self.assertIn('TASK 1', blocks[0]['instruction'])
+        self.assertIn('TASK 2', blocks[1]['instruction'])
+        self.assertTrue(blocks[0]['data_table'] and not blocks[1].get('data_table'))
+
+    def test_a_task_one_without_a_table_is_asked_again_and_the_order_is_kept(self):
+        no_table = {'passage': '', 'questions': [
+            {'kind': 'essay', 'text': TASK2 + ' ' + TASK2, 'block': 0}, {'kind': 'essay', 'text': TASK2, 'block': 1}]}
+        good = {'passage': '', 'questions': [
+            {'kind': 'essay', 'text': self.TABLE, 'block': 0}, {'kind': 'essay', 'text': TASK2, 'block': 1}]}
+        result, calls = self.run_section([no_table, good])
+        self.assertEqual(len(calls), 2)
+        self.assertIn('table rows', calls[1]['problem'])
+        self.assertEqual([(q['min_words'], '|' in q['text']) for q in result['questions']], [(150, True), (250, False)])
+
+    def test_a_good_answer_needs_no_retry(self):
+        good = {'passage': '', 'questions': [
+            {'kind': 'essay', 'text': self.TABLE, 'block': 0}, {'kind': 'essay', 'text': TASK2, 'block': 1}]}
+        result, calls = self.run_section([good])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(result['questions']), 2)
+
+    def test_markers_missing_falls_back_to_order(self):
+        good = {'passage': '', 'questions': [{'kind': 'essay', 'text': self.TABLE}, {'kind': 'essay', 'text': TASK2}]}
+        _result, calls = self.run_section([good])
+        self.assertEqual(len(calls), 1)
+
+
+class WritingModelTests(SimpleTestCase):
+    def test_a_separate_writing_model_is_used_when_configured(self):
+        from django.test import override_settings
+
+        from . import ielts_writing
+
+        criteria = {k: {'band': 6, 'comment': 'c', 'evidence': ''} for k in ('task', 'coherence', 'lexical', 'grammar')}
+        reply = {'task': 2, 'criteria': criteria}
+        for configured, expected in (('', ''), ('gpt-strong', 'gpt-strong')):
+            with override_settings(OPENAI_WRITING_MODEL=configured), \
+                    patch('apps.quizzes.llm.chat_json', return_value=reply) as chat:
+                ielts_writing.evaluate('word ' * 260, prompt='x', minimum=250)
+            self.assertEqual(chat.call_args.kwargs['model'], expected)
+
+    def test_the_post_uses_the_given_model_else_the_default(self):
+        from django.test import override_settings
+
+        from . import llm
+
+        class Ok:
+            status_code = 200
+            text = '{}'
+            headers = {}
+
+            def json(self):
+                return {'choices': [{'message': {'content': '{}'}, 'finish_reason': 'stop'}]}
+
+        with override_settings(OPENAI_API_KEY='k', OPENAI_MODEL='default-model'), \
+                patch('apps.quizzes.llm.requests.post', return_value=Ok()) as post:
+            llm._post([{'role': 'user', 'content': 'x'}], 10)
+            llm._post([{'role': 'user', 'content': 'x'}], 10, 'other-model')
+        self.assertEqual([c.kwargs['json']['model'] for c in post.call_args_list], ['default-model', 'other-model'])
+
+    def test_the_grader_prompt_forbids_false_corrections(self):
+        from . import ielts_writing
+
+        for phrase in ('List ONLY mistakes you are certain about', 'correction is itself correct', 'an empty list is fine'):
+            self.assertIn(phrase, ielts_writing._SYSTEM)
