@@ -434,6 +434,36 @@ def _student_info(student: User) -> dict:
     return {'id': student.id, 'username': student.username, 'name': full_name or student.username}
 
 
+FOCUS_KINDS = ('blur', 'paste')
+MAX_FOCUS_EVENTS = 200
+
+
+def record_focus(*, student: User, exam: Exam, kind: str, now=None) -> int:
+    """Imtihon DAVOMIDA boshqa oynaga o'tish (`blur`) yoki tashqaridan nusxa qo'yishga urinish (`paste`) qayd etiladi.
+    Imtihon tugagan/boshlanmagan bo'lsa yoki urinish yo'q bo'lsa - hech narsa yozilmaydi. Qaytaradi: jami hodisalar soni."""
+    if kind not in FOCUS_KINDS:
+        raise ValidationError({'kind': _("Noto'g'ri hodisa turi.")})
+    now = now or timezone.now()
+    attempt = ExamAttempt.objects.filter(exam=exam, student=student).first()
+    if attempt is None or attempt.finished_at or exam_state(exam, now) != 'running':
+        return 0
+    events = list(attempt.focus_events or [])
+    if len(events) < MAX_FOCUS_EVENTS:
+        events.append({'t': now.isoformat(), 'kind': kind})
+        attempt.focus_events = events
+        attempt.save(update_fields=['focus_events', 'updated_at'])
+    return len(events)
+
+
+def _integrity(attempt: ExamAttempt) -> dict:
+    events = attempt.focus_events or []
+    return {
+        'away': sum(1 for e in events if e.get('kind') == 'blur'),
+        'paste': sum(1 for e in events if e.get('kind') == 'paste'),
+        'events': events[-20:],
+    }
+
+
 def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
     inputs = _section_inputs(exam, [a.id for a in attempts])
     results = []
@@ -443,6 +473,8 @@ def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
             'student': _student_info(attempt.student), 'participated': True,
             'finished_at': attempt.finished_at,
         })
+        if staff:  # halollik jurnali faqat o'qituvchiga
+            data['integrity'] = _integrity(attempt)
         results.append(data)
     return results
 

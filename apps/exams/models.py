@@ -109,6 +109,9 @@ class ExamAttempt(TimeStampedUUIDModel):
     # IELTS Writing AI taklifi: {'writing': {status: queued|done|failed, items: [...], suggested_band, error}} —
     # o'qituvchi so'raydi, cron (`sync_exam_writing_ai`) baholaydi; yakuniy bandni o'qituvchi qo'yadi.
     ai_results = JSONField(default=dict, blank=True)
+    # Halollik jurnali: [{'t': ISO vaqt, 'kind': 'blur'|'paste'}] - imtihon vaqtida boshqa oynaga o'tish / tashqaridan
+    # nusxa qo'yishga urinish. Faqat o'qituvchiga ko'rinadi, ball avtomatik o'zgarmaydi.
+    focus_events = JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ['-created_at']

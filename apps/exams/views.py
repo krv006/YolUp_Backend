@@ -133,6 +133,17 @@ class ExamAnswersView(APIView):
         return Response({'saved': saved, 'server_now': timezone.now()})
 
 
+class ExamFocusView(APIView):
+    """Imtihon davomida oynadan chiqish / tashqaridan nusxa qo'yishga urinishni qayd etadi."""
+
+    permission_classes = [RequirePerm('exam.take')]
+
+    def post(self, request, pk):
+        exam = _get_exam(request.user, pk)
+        count = services.record_focus(student=request.user, exam=exam, kind=str(request.data.get('kind') or ''))
+        return Response({'recorded': count})
+
+
 class ExamFinishView(APIView):
     """Imtihonni muddatidan oldin yakunlash (qaytib kirib bo'lmaydi)."""
 
