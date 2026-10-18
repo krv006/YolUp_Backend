@@ -9,6 +9,7 @@ urlpatterns = [
     path('<uuid:pk>/', views.ExamDetailView.as_view(), name='exam-detail'),
     path('<uuid:pk>/current/', views.ExamCurrentView.as_view(), name='exam-current'),
     path('<uuid:pk>/answers/', views.ExamAnswersView.as_view(), name='exam-answers'),
+    path('<uuid:pk>/next-section/', views.ExamNextSectionView.as_view(), name='exam-next-section'),
     path('<uuid:pk>/focus/', views.ExamFocusView.as_view(), name='exam-focus'),
     path('<uuid:pk>/finish/', views.ExamFinishView.as_view(), name='exam-finish'),
     path('<uuid:pk>/results/', views.ExamResultsView.as_view(), name='exam-results'),

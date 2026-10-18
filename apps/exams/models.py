@@ -112,6 +112,9 @@ class ExamAttempt(TimeStampedUUIDModel):
     # Halollik jurnali: [{'t': ISO vaqt, 'kind': 'blur'|'paste'}] - imtihon vaqtida boshqa oynaga o'tish / tashqaridan
     # nusxa qo'yishga urinish. Faqat o'qituvchiga ko'rinadi, ball avtomatik o'zgarmaydi.
     focus_events = JSONField(default=list, blank=True)
+    # {bo'lim_kaliti: ISO vaqt} - o'quvchi bo'limni muddatidan oldin tugatib keyingisiga o'tgan payt.
+    # Shu o'quvchining jadvali shundan keyin siljiydi, boshqalarniki o'zgarmaydi.
+    advances = JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-created_at']

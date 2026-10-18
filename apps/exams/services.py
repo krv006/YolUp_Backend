@@ -8,6 +8,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
@@ -289,6 +290,25 @@ def timeline(exam: Exam, sections=None) -> list:
     return result
 
 
+def student_timeline(exam: Exam, sections, attempt) -> list:
+    """O'quvchining o'z jadvali: u bo'limni oldinroq tugatgan bo'lsa (`attempt.advances`), keyingilari shu paytdan
+    boshlanadi. Hech narsa o'tkazib yuborilmagan bo'lsa `timeline` bilan bir xil."""
+    advances = (attempt.advances or {}) if attempt else {}
+    cursor, result = exam.starts_at, []
+    for section in sections:
+        if section.kind == Kind.OFFLINE:
+            continue
+        end = cursor + timedelta(minutes=section.minutes)
+        early = advances.get(section.key)
+        if early:
+            moment = parse_datetime(early)
+            if moment and cursor <= moment < end:
+                end = moment
+        result.append((section, cursor, end))
+        cursor = end
+    return result
+
+
 def exam_state(exam: Exam, now=None) -> str:
     now = now or timezone.now()
     if now < exam.starts_at:
@@ -319,7 +339,10 @@ def current_payload(*, student: User, exam: Exam, now=None) -> dict:
         return payload
 
     sections = list(exam.sections.select_related('quiz'))
-    entries = timeline(exam, sections)
+    entries = student_timeline(exam, sections, attempt)
+    if entries and now >= entries[-1][2]:  # o'z jadvalini oldinroq tugatgan - qolgan vaqt kutish emas, topshirilgan
+        payload['state'] = 'submitted'
+        return payload
     for index, (section, start, end) in enumerate(entries):
         if start <= now < end:
             item = _item_dict(section, start, end)
@@ -355,7 +378,7 @@ def save_answers(*, student: User, exam: Exam, answers: list, now=None) -> int:
         raise PermissionDenied(_('Siz imtihonni yakunlagansiz.'))
 
     sections = list(exam.sections.filter(kind=Kind.SECTION))
-    window = {s.id: (start, end) for s, start, end in timeline(exam, list(exam.sections.all()))}
+    window = {s.id: (start, end) for s, start, end in student_timeline(exam, list(exam.sections.all()), attempt)}
     by_quiz = {s.quiz_id: s for s in sections if s.quiz_id}
 
     prepared = []
@@ -381,6 +404,29 @@ def save_answers(*, student: User, exam: Exam, answers: list, now=None) -> int:
             },
         )
     return len(prepared)
+
+
+@transaction.atomic
+def next_section(*, student: User, exam: Exam, now=None) -> dict:
+    """O'quvchi joriy bo'limni (yoki tanaffusni) muddatidan oldin tugatib keyingisiga o'tadi. Orqaga qaytib bo'lmaydi;
+    oxirgi bo'limda faqat imtihonni yakunlash mumkin."""
+    now = now or timezone.now()
+    if exam_state(exam, now) != 'running':
+        raise PermissionDenied(_('Imtihon hozir davom etmayapti.'))
+    attempt, _created = ExamAttempt.objects.select_for_update().get_or_create(exam=exam, student=student)
+    if attempt.finished_at:
+        raise PermissionDenied(_('Siz imtihonni yakunlagansiz.'))
+    entries = student_timeline(exam, list(exam.sections.all()), attempt)
+    for index, (section, start, end) in enumerate(entries):
+        if start <= now < end:
+            if index + 1 >= len(entries):
+                raise ValidationError({'detail': _("Bu oxirgi bo'lim - imtihonni yakunlang.")})
+            attempt.advances = {**(attempt.advances or {}), section.key: now.isoformat()}
+            attempt.save(update_fields=['advances', 'updated_at'])
+            break
+    else:
+        raise ValidationError({'detail': _("Hozir o'tish mumkin bo'lgan bo'lim yo'q.")})
+    return current_payload(student=student, exam=exam, now=now)
 
 
 def finish_attempt(*, student: User, exam: Exam, now=None) -> ExamAttempt:

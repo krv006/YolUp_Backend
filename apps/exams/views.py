@@ -133,6 +133,18 @@ class ExamAnswersView(APIView):
         return Response({'saved': saved, 'server_now': timezone.now()})
 
 
+class ExamNextSectionView(APIView):
+    """O'quvchi joriy bo'limni muddatidan oldin tugatib keyingisiga o'tadi (orqaga qaytish yo'q)."""
+
+    permission_classes = [RequirePerm('exam.take')]
+
+    def post(self, request, pk):
+        exam = _get_exam(request.user, pk)
+        return Response(current_response(
+            services.next_section(student=request.user, exam=exam), request=request,
+        ))
+
+
 class ExamFocusView(APIView):
     """Imtihon davomida oynadan chiqish / tashqaridan nusxa qo'yishga urinishni qayd etadi."""
 
