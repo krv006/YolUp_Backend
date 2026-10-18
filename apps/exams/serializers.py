@@ -1,5 +1,6 @@
 """Exams serializerlari — kiruvchi ma'lumotlarni tekshirish va chiqish ko'rinishlari."""
 from django.utils import timezone
+from django.utils.translation import gettext as _
 from rest_framework import serializers
 
 from apps.lessons.models import Course
@@ -24,13 +25,20 @@ class ExamCreateSerializer(serializers.Serializer):
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all())
     template = serializers.CharField(max_length=64)
     title = serializers.CharField(max_length=200)
-    starts_at = serializers.DateTimeField()
+    starts_at = serializers.DateTimeField(required=False)
+    start_now = serializers.BooleanField(required=False, default=False)  # vaqt o'rniga: imtihon hozir boshlanadi
     sections = ExamSectionInputSerializer(many=True)
+
+    def validate(self, attrs):
+        if not attrs.get('start_now') and not attrs.get('starts_at'):
+            raise serializers.ValidationError({'starts_at': _('Boshlanish vaqtini kiriting yoki "hozir boshlash"ni tanlang.')})
+        return attrs
 
 
 class ExamUpdateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200, required=False)
     starts_at = serializers.DateTimeField(required=False)
+    start_now = serializers.BooleanField(required=False, default=False)
 
 
 class TemplateWriteSerializer(serializers.Serializer):

@@ -79,7 +79,8 @@ class ExamListCreateView(APIView):
         data = serializer.validated_data
         exam = services.create_exam(
             teacher=request.user, course=data['course'], template_ref=data['template'],
-            title=data['title'], starts_at=data['starts_at'], sections=data['sections'],
+            title=data['title'], starts_at=data.get('starts_at'), sections=data['sections'],
+            start_now=data.get('start_now', False),
         )
         return Response(exam_detail(exam, request.user), status=status.HTTP_201_CREATED)
 

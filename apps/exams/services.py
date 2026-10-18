@@ -182,10 +182,13 @@ def _notify_exam(exam: Exam) -> None:
 
 
 @transaction.atomic
-def create_exam(*, teacher: User, course, template_ref: str, title: str, starts_at, sections: list) -> Exam:
+def create_exam(*, teacher: User, course, template_ref: str, title: str, starts_at=None, sections: list,
+                start_now: bool = False) -> Exam:
     if course.teacher_id != teacher.id:
         raise PermissionDenied(_('Bu kurs sizga tegishli emas.'))
-    if starts_at <= timezone.now():
+    if start_now:
+        starts_at = timezone.now()
+    elif starts_at is None or starts_at <= timezone.now():
         raise ValidationError({'starts_at': _("Boshlanish vaqti kelajakda bo'lishi kerak.")})
 
     template_key, items, scoring = _resolve_template(teacher, template_ref)
@@ -251,15 +254,17 @@ def _check_quiz(teacher: User, quiz: Quiz, key: str) -> None:
         raise ValidationError({'sections': _("%(key)s: testda savol yo'q.") % {'key': key}})
 
 
-def update_exam(*, teacher: User, exam: Exam, title=None, starts_at=None) -> Exam:
+def update_exam(*, teacher: User, exam: Exam, title=None, starts_at=None, start_now: bool = False) -> Exam:
     if not _is_owner(exam, teacher):
         raise PermissionDenied(_('Bu imtihon sizga tegishli emas.'))
     if exam.starts_at <= timezone.now():
         raise ValidationError({'detail': _("Boshlangan imtihonni o'zgartirib bo'lmaydi.")})
     if title is not None:
         exam.title = title.strip()
+    if start_now:
+        starts_at = timezone.now()
     if starts_at is not None:
-        if starts_at <= timezone.now():
+        if not start_now and starts_at <= timezone.now():
             raise ValidationError({'starts_at': _("Boshlanish vaqti kelajakda bo'lishi kerak.")})
         duration = exam.ends_at - exam.starts_at
         exam.starts_at, exam.ends_at = starts_at, starts_at + duration
