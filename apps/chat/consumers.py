@@ -33,6 +33,11 @@ def group_name(room_id) -> str:
     return f'chat_{room_id}'
 
 
+def user_group_name(user_id) -> str:
+    """Foydalanuvchining hamma ochiq ulanishlari (qurilmalari) — faqat unga tegishli hodisalar uchun."""
+    return f'chat_user_{user_id}'
+
+
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         user = self.scope['user']
@@ -53,7 +58,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             return
         self.room_id = room_id
         self.group = group_name(room_id)
+        self.is_teacher, self.can_pin = await self._room_flags(user, room_id)
+        self.user_group = user_group_name(user.id)
         await self.channel_layer.group_add(self.group, self.channel_name)
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
         await self.accept()
         # Ulanish paytida kurs darsi allaqachon LIVE bo'lsa — darhol xabar
         # beramiz. lesson_live signali BIR MARTA (dars boshlanganda) yuboriladi;
@@ -69,6 +77,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, code):
         if hasattr(self, 'group'):
             await self.channel_layer.group_discard(self.group, self.channel_name)
+            await self.channel_layer.group_discard(self.user_group, self.channel_name)
             await self._presence(self.scope['user'], online=False)
 
     async def receive_json(self, content, **kwargs):
@@ -96,11 +105,30 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({'type': 'error', 'detail': error})
 
     # ── channel layer eventlari ──
+    def _with_capabilities(self, message: dict) -> dict:
+        """Hamma uchun bir xil tarqatilgan xabarga SHU ulanish egasining huquqlari qo'shiladi (HTTP javobidagi `capabilities` bilan bir xil qoida)."""
+        user = self.scope['user']
+        user_message = message.get('kind') == 'user'
+        own = str((message.get('sender') or {}).get('id')) == str(user.id)
+        message_type = message.get('message_type')
+        message['capabilities'] = {
+            'edit': own and user_message and message_type in ('text', 'file', 'image'),
+            'delete': True,
+            'delete_everyone': own or self.is_teacher,
+            'pin': self.can_pin,
+            'react': True,
+            'forward': user_message and message_type != 'assignment',
+        }
+        return message
+
     async def chat_message(self, event):
-        await self.send_json({'type': 'message', 'message': event['message']})
+        await self.send_json({'type': 'message', 'message': self._with_capabilities(dict(event['message']))})
 
     async def chat_event(self, event):
-        await self.send_json(event['event'])
+        payload = dict(event['event'])
+        if payload.get('type') == 'message_updated' and isinstance(payload.get('message'), dict):
+            payload['message'] = self._with_capabilities(dict(payload['message']))
+        await self.send_json(payload)
 
     async def chat_typing(self, event):
         await self.send_json({
@@ -149,6 +177,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if lesson is None:
             return None
         return {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'room_name': lesson.room_name}
+
+    @database_sync_to_async
+    def _room_flags(self, user, room_id):
+        from . import selectors
+        from .models import ChatRoom
+
+        room = ChatRoom.objects.select_related('course').get(pk=room_id)
+        return selectors.is_room_teacher(user, room), selectors.can_pin(user, room)
 
     @database_sync_to_async
     def _presence(self, user, online: bool):

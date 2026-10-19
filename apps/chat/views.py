@@ -15,11 +15,19 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm
 
 from . import attachments, selectors, services
-from .models import ChatRoom, Message, RoomRead
+from .models import ChatRoom, Message, PinnedMessage, RoomRead
 from .serializers import ChatRoomSerializer, MessageSerializer
 
 DEFAULT_PAGE = 30
 MAX_PAGE = 100
+
+
+def _mentions(data):
+    """`mentions`: JSON'da ro'yxat, multipart'da takroriy maydon yoki JSON matn."""
+    if hasattr(data, 'getlist'):
+        values = data.getlist('mentions')
+        return values if len(values) != 1 else values[0]
+    return data.get('mentions')
 
 
 def _waveform(raw):
@@ -44,7 +52,13 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == 'list':
             hidden = selectors.hidden_filter(user).values('room_id')
             qs = qs.exclude(pk__in=hidden)
-        return qs.select_related('course', 'pinned_message', 'pinned_message__sender').prefetch_related(
+        return qs.select_related('course').prefetch_related(
+            Prefetch(
+                'pins',
+                queryset=PinnedMessage.objects.filter(message__deleted_at__isnull=True)
+                .select_related('message', 'message__sender').order_by('-created_at'),
+                to_attr='pin_list',
+            ),
             Prefetch(
                 'messages',
                 queryset=Message.objects.filter(deleted_at__isnull=True).select_related('sender').order_by('-created_at')[:1],
@@ -59,7 +73,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _message_context(self, request, room):
         return {
-            'request': request, 'viewer': request.user,
+            'request': request, 'viewer': request.user, 'room': room,
             'peer_read_at': services.peer_read_at(room, request.user),
         }
 
@@ -117,7 +131,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             user=request.user, room_id=pk, text=data.get('text'),
             reply_to_id=data.get('reply_to_id'), client_message_id=data.get('client_message_id'),
             upload=request.FILES.get('file'), message_type=str(data.get('message_type') or ''),
-            duration=data.get('duration'), waveform=_waveform(data.get('waveform')),
+            duration=data.get('duration'), waveform=_waveform(data.get('waveform')), mentions=_mentions(data),
         )
         room = message.room
         payload = MessageSerializer(message, context=self._message_context(request, room)).data
@@ -127,7 +141,8 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     def read(self, request, pk=None):
         """Xonani `last_message_id` gacha (bo'lmasa hammasini) o'qilgan deb belgilaydi."""
         return Response(services.read_room(
-            user=request.user, room_id=pk, last_message_id=request.data.get('last_message_id'),
+            user=request.user, room_id=pk,
+            last_message_id=request.data.get('last_read_message_id') or request.data.get('last_message_id'),
         ))
 
     @action(detail=True, methods=['post', 'delete'])
@@ -138,6 +153,37 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         else:
             services.pin_message(user=request.user, room_id=pk, message_id=request.data.get('message_id'))
         return self._room_response(pk)
+
+    @action(detail=True, methods=['get', 'post'], url_path='pinned')
+    def pinned(self, request, pk=None):
+        """Qadalgan xabarlar: GET — ro'yxat; POST `{message_id}` — qo'shish (bir nechtasi mumkin) -> yangilangan ro'yxat."""
+        if request.method == 'POST':
+            services.pin_message(user=request.user, room_id=pk, message_id=request.data.get('message_id'))
+        return Response(services.list_pins(user=request.user, room_id=pk))
+
+    @action(detail=True, methods=['delete'], url_path=r'pinned/(?P<message_id>[^/.]+)')
+    def unpin(self, request, pk=None, message_id=None):
+        """Bitta xabarning qadalganini olish -> qolgan qadalganlar ro'yxati."""
+        services.unpin_message(user=request.user, room_id=pk, message_id=message_id)
+        return Response(services.list_pins(user=request.user, room_id=pk))
+
+    @action(detail=True, methods=['post'], url_path='voice')
+    def voice(self, request, pk=None):
+        """Ovozli xabar: multipart `file` (audio/webm, audio/mp4, m4a, ogg…), `duration_ms` (1 soniya … 5 daqiqa, ≤10 MB),
+        ixtiyoriy `waveform`, `reply_to_id`, `client_message_id`. `send/` dagi `message_type=voice` bilan bir xil."""
+        data = request.data
+        try:
+            millis = float(data.get('duration_ms'))
+        except (TypeError, ValueError):
+            millis = float(data.get('duration') or 0) * 1000
+        message, created = services.send_message_ex(
+            user=request.user, room_id=pk, text=data.get('text'), reply_to_id=data.get('reply_to_id'),
+            client_message_id=data.get('client_message_id'), upload=request.FILES.get('file'),
+            message_type='voice', duration=-(-int(millis) // 1000) if millis > 0 else 0,
+            waveform=_waveform(data.get('waveform')),
+        )
+        payload = MessageSerializer(message, context=self._message_context(request, message.room)).data
+        return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @action(detail=True, methods=['post', 'delete'], url_path='pin-room')
     def pin_room(self, request, pk=None):
@@ -172,7 +218,9 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True)
     def members(self, request, pk=None):
         """A'zolar ro'yxati va onlayn holati (guruh ma'lumotlari ekrani)."""
-        return Response(services.room_members(user=request.user, room_id=pk, request=request))
+        return Response(services.room_members(
+            user=request.user, room_id=pk, request=request, query=request.query_params.get('query', ''),
+        ))
 
     def partial_update(self, request, pk=None):
         """Guruh sozlamasi: {"announcement_only": bool} — faqat kurs o'qituvchisi."""
@@ -257,7 +305,7 @@ class MessageBulkDeleteView(APIView):
     permission_classes = [RequirePerm('chat.use')]
 
     def post(self, request):
-        ids = request.data.get('ids')
+        ids = request.data.get('message_ids', request.data.get('ids'))
         if not isinstance(ids, list):
             raise ValidationError({'ids': _("Ro'yxat kerak.")})
         count = services.delete_messages(user=request.user, ids=ids, scope=str(request.data.get('scope') or 'me'))
@@ -270,8 +318,36 @@ class MessageReactionView(APIView):
     permission_classes = [RequirePerm('chat.use')]
 
     def post(self, request, pk):
-        reactions = services.toggle_reaction(user=request.user, message_id=pk, emoji=request.data.get('emoji'))
+        """Reaksiya qo'yadi. Takroriy POST xato emas va bekor qilmaydi (idempotent). Eski xatti-harakat (bosib
+        olib tashlash) kerak bo'lsa `{"toggle": true}` yuboring."""
+        toggle = str(request.data.get('toggle', '')).lower() in ('1', 'true', 'yes')
+        reactions = services.toggle_reaction(
+            user=request.user, message_id=pk, emoji=request.data.get('emoji'), mode='toggle' if toggle else 'add',
+        )
         return Response({'reactions': reactions})
+
+    def delete(self, request, pk):
+        """Reaksiyani olib tashlaydi (yo'q bo'lsa ham xato emas). `emoji` — tanada yoki `?emoji=`."""
+        emoji = request.data.get('emoji') or request.query_params.get('emoji')
+        reactions = services.toggle_reaction(user=request.user, message_id=pk, emoji=emoji, mode='remove')
+        return Response({'reactions': reactions})
+
+
+class MessageForwardView(APIView):
+    """Xabarlarni bir yoki bir nechta chatga uzatish: `{message_ids, target_room_ids}` -> yaratilgan xabarlar ro'yxati."""
+
+    permission_classes = [RequirePerm('chat.use')]
+
+    def post(self, request):
+        created = services.forward_to_rooms(
+            user=request.user, message_ids=request.data.get('message_ids'),
+            room_ids=request.data.get('target_room_ids'),
+        )
+        data = [
+            MessageSerializer(m, context={'request': request, 'viewer': request.user, 'room': m.room}).data
+            for m in created
+        ]
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 def _content_disposition(kind: str, name: str) -> str:

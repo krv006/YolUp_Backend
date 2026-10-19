@@ -54,13 +54,35 @@ def is_room_teacher(user: User, room: ChatRoom) -> bool:
     return room.kind == ChatRoom.Kind.COURSE and room.course.teacher_id == user.id
 
 
+def can_pin(user: User, room: ChatRoom) -> bool:
+    """Qadash huquqi: kurs guruhida faqat o'qituvchi, direct chatda ikkala tomon."""
+    if room.kind == ChatRoom.Kind.COURSE:
+        return is_room_teacher(user, room)
+    return can_read(user, room)
+
+
+def capabilities(user: User, room: ChatRoom, message: Message) -> dict:
+    """Shu foydalanuvchi bu xabar bilan nima qila oladi (frontend tugmalarni shunga qarab yashiradi).
+    `delete` — "men uchun o'chirish" (har doim mumkin), `delete_everyone` — hamma uchun (muallif yoki guruh o'qituvchisi)."""
+    user_message = message.kind == Message.Kind.USER
+    own = message.sender_id == user.id
+    return {
+        'edit': own and user_message and message.message_type in (Message.Type.TEXT, Message.Type.FILE, Message.Type.IMAGE),
+        'delete': True,
+        'delete_everyone': own or is_room_teacher(user, room),
+        'pin': can_pin(user, room),
+        'react': True,
+        'forward': user_message and message.message_type != Message.Type.ASSIGNMENT,
+    }
+
+
 def visible_messages(room: ChatRoom, user: User):
     """Foydalanuvchi ko'radigan xabarlar: hamma uchun o'chirilganlar va "men uchun o'chirilgan"lar chiqarilgan."""
     return (
         room.messages.filter(deleted_at__isnull=True)
         .exclude(hides__user=user)
-        .select_related('sender', 'reply_to', 'reply_to__sender', 'assignment')
-        .prefetch_related(Prefetch('reactions', queryset=MessageReaction.objects.only('message_id', 'user_id', 'emoji')))
+        .select_related('sender', 'reply_to', 'reply_to__sender', 'assignment', 'forwarded_from_author')
+        .prefetch_related('mentions', Prefetch('reactions', queryset=MessageReaction.objects.only('message_id', 'user_id', 'emoji')))
     )
 
 

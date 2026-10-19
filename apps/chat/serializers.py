@@ -40,6 +40,11 @@ class MessageSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     reactions = serializers.SerializerMethodField()
     assignment = serializers.SerializerMethodField()
+    forwarded_from = serializers.SerializerMethodField()
+    mentions = serializers.SerializerMethodField()
+    mentioned_users = serializers.SerializerMethodField()
+    attachment = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -48,7 +53,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'kind', 'system_key', 'system_params',
             'message_type', 'reply_to', 'client_message_id', 'status', 'edited_at', 'forwarded_from_name',
             'file_name', 'file_type', 'file_size', 'page_count', 'duration', 'waveform',
-            'reactions', 'assignment',
+            'reactions', 'assignment', 'forwarded_from', 'mentions', 'mentioned_users', 'attachment', 'capabilities',
         ]
         read_only_fields = ['room', 'sender']
 
@@ -59,6 +64,45 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_reply_to(self, obj):
         return reply_snippet(obj.reply_to)
+
+    def get_forwarded_from(self, obj):
+        """Uzatilgan xabarning asl manbasi (eski xabarlarda faqat ism bo'lishi mumkin)."""
+        if not obj.forwarded_from_name and not obj.forwarded_from_message:
+            return None
+        author = obj.forwarded_from_author
+        return {
+            'message_id': str(obj.forwarded_from_message) if obj.forwarded_from_message else None,
+            'author_id': str(obj.forwarded_from_author_id) if obj.forwarded_from_author_id else None,
+            'author_name': (author.get_full_name() or author.username) if author else obj.forwarded_from_name,
+            'room_id': str(obj.forwarded_from_room) if obj.forwarded_from_room else None,
+        }
+
+    def get_mentions(self, obj) -> list:
+        return [str(user.id) for user in obj.mentions.all()]
+
+    def get_mentioned_users(self, obj) -> list:
+        return [{'id': str(user.id), 'name': _sender_name(user)} for user in obj.mentions.all()]
+
+    def get_attachment(self, obj):
+        """Biriktirilgan fayl bitta obyektda: `{type: voice|image|file, url, name, size, mime, page_count,
+        duration_ms, waveform}`. `file_url`/`file_name`/... eski maydonlari ham joyida."""
+        if not obj.file:
+            return None
+        kind = obj.message_type if obj.message_type in (Message.Type.VOICE, Message.Type.IMAGE) else 'file'
+        data = {
+            'type': kind, 'url': f'/api/v1/chat/files/{obj.id}/', 'name': obj.file_name, 'size': obj.file_size,
+            'mime': obj.file_type, 'page_count': obj.page_count,
+        }
+        if kind == Message.Type.VOICE:
+            data['duration_ms'] = (obj.duration or 0) * 1000
+            data['waveform'] = obj.waveform or []
+        return data
+
+    def get_capabilities(self, obj):
+        viewer = self.context.get('viewer')
+        if viewer is None:
+            return None
+        return selectors.capabilities(viewer, self.context.get('room') or obj.room, obj)
 
     def get_status(self, obj) -> str:
         peer = self.context.get('peer_read_at')
@@ -105,6 +149,9 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     is_pinned = serializers.SerializerMethodField()
     is_muted = serializers.SerializerMethodField()
     pinned_message = serializers.SerializerMethodField()
+    pinned_messages = serializers.SerializerMethodField()
+    last_read_message_id = serializers.SerializerMethodField()
+    has_unread_mention = serializers.SerializerMethodField()
     online_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -112,7 +159,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only',
             'title', 'last_message', 'unread', 'unread_count', 'first_unread_message_id',
-            'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'online_count', 'updated_at',
+            'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'pinned_messages', 'last_read_message_id', 'has_unread_mention',
+            'online_count', 'updated_at',
         ]
         read_only_fields = ['image']
 
@@ -201,14 +249,32 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             return False
         return read.muted_until is None or read.muted_until > timezone.now()
 
+    def _pins(self, obj) -> list:
+        from .services import pin_dict, pin_rows
+
+        cached = getattr(obj, 'pin_list', None)
+        pins = cached if cached is not None else pin_rows(obj)
+        return [pin_dict(pin) for pin in pins]
+
+    def get_pinned_messages(self, obj) -> list:
+        return self._pins(obj)
+
     def get_pinned_message(self, obj):
-        message = obj.pinned_message
-        if message is None or message.deleted_at is not None:
+        """Eng oxirgi qadalgan xabar (eski mijozlar uchun; hammasi — `pinned_messages`)."""
+        pins = self._pins(obj)
+        return pins[0] if pins else None
+
+    def get_last_read_message_id(self, obj):
+        read = self._my_read(obj)
+        if read is None:
             return None
-        return {
-            'id': str(message.id), 'sender_name': _sender_name(message.sender),
-            'text': _preview_text(message), 'message_type': message.message_type,
-        }
+        last = obj.messages.filter(
+            deleted_at__isnull=True, created_at__lte=read.last_read_at,
+        ).order_by('-created_at').values_list('id', flat=True).first()
+        return str(last) if last else None
+
+    def get_has_unread_mention(self, obj) -> bool:
+        return self._unread_qs(obj).filter(mentions=self.context['request'].user).exists()
 
     def get_online_count(self, obj) -> int:
         return len(presence.online_ids(selectors.member_ids(obj)))

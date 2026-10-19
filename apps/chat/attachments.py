@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 from .models import Message
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_VOICE_BYTES = 10 * 1024 * 1024
 
 IMAGES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp'}
 AUDIO = {
@@ -25,6 +26,9 @@ DOCUMENTS = {
     '.csv': 'text/csv',
 }
 ALLOWED = {**IMAGES, **AUDIO, **DOCUMENTS}
+
+# Safari/iOS ovoz yozuvi `audio/mp4` ni ko'pincha `.mp4` nomi bilan beradi — faqat ovozli xabar sifatida qabul qilinadi
+VOICE_ONLY = {'.mp4': 'audio/mp4'}
 
 # Brauzerda sahifa ichida ochilishi xavfsiz turlar; qolganlari yuklab olinadi
 INLINE_TYPES = {'application/pdf', *IMAGES.values(), *AUDIO.values()}
@@ -77,7 +81,7 @@ def inspect_upload(upload, requested_type: str = '') -> dict:
     kengaytmadan aniqlaymiz — soxta turdan himoya."""
     name = os.path.basename(upload.name or '')[:255] or 'fayl'
     ext = os.path.splitext(name)[1].lower()
-    mime = ALLOWED.get(ext)
+    mime = ALLOWED.get(ext) or (VOICE_ONLY.get(ext) if requested_type == Message.Type.VOICE else None)
     if mime is None:
         raise ValidationError({'file': _("Bu turdagi fayl yuborib bo'lmaydi (%(ext)s).") % {'ext': ext or '-'}})
     if upload.size > MAX_FILE_BYTES:
@@ -87,8 +91,10 @@ def inspect_upload(upload, requested_type: str = '') -> dict:
 
     pages = None
     if requested_type == Message.Type.VOICE:
-        if ext not in AUDIO:
+        if ext not in AUDIO and ext not in VOICE_ONLY:
             raise ValidationError({'file': _("Ovozli xabar audio fayl bo'lishi kerak.")})
+        if upload.size > MAX_VOICE_BYTES:
+            raise ValidationError({'file': _('Ovozli xabar 10 MB dan katta.')})
         message_type = Message.Type.VOICE
     elif ext in IMAGES:
         _check_image(upload)

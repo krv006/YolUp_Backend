@@ -1,11 +1,12 @@
 """Chat service layer — yozuvchi biznes-logika."""
+import json
 import logging
 import uuid
 from datetime import datetime, timezone as dt_timezone
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
@@ -16,7 +17,7 @@ from apps.core import audit
 from apps.lessons.models import Course, Enrollment
 
 from . import attachments, presence, realtime, selectors
-from .models import ChatRoom, Message, MessageHide, MessageReaction, RoomRead
+from .models import ChatRoom, Message, MessageHide, MessageReaction, PinnedMessage, RoomRead
 from .serializers import member_row
 
 logger = logging.getLogger('apps')
@@ -27,7 +28,10 @@ MAX_TEXT = 4000
 MAX_FORWARD = 50
 MAX_BULK_DELETE = 100
 MAX_EMOJIS_PER_MESSAGE = 20
-MAX_VOICE_SECONDS = 60 * 60
+MAX_VOICE_SECONDS = 5 * 60
+MAX_MENTIONS = 20
+MAX_PINS = 20
+MAX_TARGET_ROOMS = 10
 SEARCH_LIMIT = 100
 EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
 
@@ -42,7 +46,7 @@ def ensure_course_room(course: Course) -> ChatRoom:
 
 def _get_room(room_id) -> ChatRoom:
     try:
-        return ChatRoom.objects.select_related('course', 'teacher', 'student', 'pinned_message').get(pk=room_id)
+        return ChatRoom.objects.select_related('course', 'teacher', 'student').get(pk=room_id)
     except (ChatRoom.DoesNotExist, *BAD_ID):
         raise NotFound(_('Chat topilmadi.'))
 
@@ -85,7 +89,7 @@ def _find_reply(room: ChatRoom, reply_to_id):
 
 def send_message_ex(
     *, user: User, room_id, text='', reply_to_id=None, client_message_id='', upload=None,
-    message_type='', duration=None, waveform=None,
+    message_type='', duration=None, waveform=None, mentions=None,
 ) -> tuple:
     """Xabar yuboradi. Qaytaradi: (xabar, yangi_yaratildimi). Bir xil `client_message_id` bilan qayta kelsa —
     avval yaratilgan xabar qaytadi (yangi_yaratildimi=False) va qayta tarqatilmaydi."""
@@ -107,6 +111,7 @@ def send_message_ex(
 
     text = _check_text(text)
     reply = _find_reply(room, reply_to_id)
+    mentioned = _find_mentions(room, user, mentions)
     fields = {}
     if upload is not None:
         fields = attachments.inspect_upload(upload, message_type)
@@ -116,7 +121,7 @@ def send_message_ex(
             except (TypeError, ValueError):
                 seconds = 0
             if not 0 < seconds <= MAX_VOICE_SECONDS:
-                raise ValidationError({'duration': _("Ovozli xabar uchun davomiylik (soniyada) shart.")})
+                raise ValidationError({'duration': _("Ovozli xabar uchun davomiylik shart (1 soniyadan 5 daqiqagacha).")})
             fields['duration'] = seconds
             fields['waveform'] = attachments.clean_waveform(waveform)
     elif message_type == Message.Type.VOICE:
@@ -132,9 +137,13 @@ def send_message_ex(
             )
             # xona ro'yxatda tepaga chiqsin
             room.save(update_fields=['updated_at'])
+            if mentioned:
+                message.mentions.set(mentioned)
             # Real-time: tranzaksiya muvaffaqiyatli yopilgandan KEYIN tarqatamiz (aks holda ulangan
             # client hali bazada yo'q xabarni ko'rishi mumkin)
             transaction.on_commit(lambda: realtime.broadcast_message(message))
+            if mentioned:
+                transaction.on_commit(lambda: _notify_mentions(message, mentioned))
     except IntegrityError:
         # bir vaqtda kelgan ikkita bir xil `client_message_id` — g'olibini qaytaramiz
         existing = Message.objects.filter(room=room, sender=user, client_message_id=client_message_id).first()
@@ -142,6 +151,50 @@ def send_message_ex(
             raise
         return existing, False
     return message, True
+
+
+def _find_mentions(room: ChatRoom, sender: User, raw) -> list:
+    """`mentions` — eslatilgan foydalanuvchi id'lari (ro'yxat yoki JSON matn). Faqat chat a'zolari qoladi,
+    o'zini eslatish e'tiborsiz; noto'g'ri id — 400."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise ValidationError({'mentions': _("Ro'yxat bo'lishi kerak.")})
+    ids = []
+    for item in raw:
+        try:
+            ids.append(str(uuid.UUID(str(item))))
+        except (ValueError, TypeError, AttributeError):
+            raise ValidationError({'mentions': _("Noto'g'ri foydalanuvchi id'si.")}) from None
+    ids = list(dict.fromkeys(ids))
+    if len(ids) > MAX_MENTIONS:
+        raise ValidationError({'mentions': _("Bir xabarda ko'pi bilan 20 ta eslatma.")})
+    members = {str(i) for i in selectors.member_ids(room)}
+    return list(User.objects.filter(pk__in=[i for i in ids if i in members]).exclude(pk=sender.pk))
+
+
+def _notify_mentions(message: Message, users: list) -> None:
+    """Eslatilganga bildirishnoma (push ham) — ovozsiz qilingan chatda ham boradi. Xato xabar yuborishni buzmaydi."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    sender = message.sender
+    name = sender.get_full_name() or sender.username
+    snippet = (message.text or message.file_name)[:120]
+    for user in users:
+        try:
+            send_notification(
+                sender=sender, target_type=Notification.Target.USER, user_id=user.id, kind='mention',
+                description=f'{name} sizni «{message.room.title_for(user)}» chatida eslatdi: {snippet}',
+                link_type='chat_room', link_id=str(message.room_id),
+            )
+        except Exception:
+            logger.exception('chat: eslatma bildirishnomasi yuborilmadi (message=%s, user=%s)', message.id, user.id)
 
 
 def send_message(*, user: User, room_id, text='', **kwargs) -> Message:
@@ -207,7 +260,11 @@ def mark_read(*, user: User, room: ChatRoom, up_to: Message | None = None) -> di
         'type': 'read', 'room': str(room.id), 'user_id': str(user.id),
         'last_message_id': str(last) if last else None, 'last_read_at': target,
     }
+    sync = {'type': 'room_read', 'payload': {
+        'room_id': str(room.id), 'user_id': str(user.id), 'last_read_message_id': event['last_message_id'],
+    }}
     transaction.on_commit(lambda: realtime.broadcast_event(room.id, event))
+    transaction.on_commit(lambda: realtime.broadcast_user_event(user.id, sync))  # boshqa qurilmalar uchun
     return event
 
 
@@ -268,43 +325,76 @@ def hide_room(*, user: User, room_id) -> None:
 # Qadalgan xabar, e'lon rejimi, a'zolar
 # ---------------------------------------------------------------------------
 def _can_pin(user: User, room: ChatRoom) -> bool:
-    if room.kind == ChatRoom.Kind.COURSE:
-        return selectors.is_room_teacher(user, room)
-    return selectors.can_read(user, room)
+    return selectors.can_pin(user, room)
 
 
-def _pinned_event(room: ChatRoom, message: Message | None) -> dict:
-    return {'type': 'pinned', 'room': str(room.id), 'message': (
-        {'id': str(message.id), 'sender_name': message.sender.get_full_name() or message.sender.username,
-         'text': (message.text or message.file_name)[:200], 'message_type': message.message_type}
-        if message else None)}
+def pin_dict(pin: PinnedMessage) -> dict:
+    message = pin.message
+    name = message.sender.get_full_name() or message.sender.username
+    return {
+        'message_id': str(message.id), 'id': str(message.id), 'author_name': name, 'sender_name': name,
+        'text': (message.text or message.file_name)[:200], 'message_type': message.message_type,
+        'pinned_at': pin.created_at,
+    }
 
 
+def pin_rows(room: ChatRoom) -> list:
+    return list(
+        PinnedMessage.objects.filter(room=room, message__deleted_at__isnull=True)
+        .select_related('message', 'message__sender').order_by('-created_at')
+    )
+
+
+def _pins_changed(room: ChatRoom) -> None:
+    """Qadalganlar o'zgardi: eski (`pinned`, oxirgi qadalgan) va yangi (`room_pinned_changed`, hammasi) hodisa."""
+    rows = [pin_dict(pin) for pin in pin_rows(room)]
+    legacy = {'type': 'pinned', 'room': str(room.id), 'message': rows[0] if rows else None}
+    new = {'type': 'room_pinned_changed', 'payload': {'room_id': str(room.id), 'pinned_messages': rows}}
+    transaction.on_commit(lambda: realtime.broadcast_events(room.id, legacy, new))
+
+
+def list_pins(*, user: User, room_id) -> list:
+    room = _readable_room(user, room_id)
+    return [pin_dict(pin) for pin in pin_rows(room)]
+
+
+@transaction.atomic
 def pin_message(*, user: User, room_id, message_id) -> ChatRoom:
+    """Xabarni qadaydi (bir nechtasi mumkin, takror qadash xato emas). Guruhda faqat o'qituvchi, direct'da ikkala tomon."""
     room = _readable_room(user, room_id)
     if not _can_pin(user, room):
         raise PermissionDenied(_("Xabarni faqat o'qituvchi qadashi mumkin."))
     try:
-        message = Message.objects.select_related('sender').get(
-            pk=message_id, room=room, deleted_at__isnull=True,
-        )
+        message = Message.objects.get(pk=message_id, room=room, deleted_at__isnull=True)
     except (Message.DoesNotExist, *BAD_ID):
         raise ValidationError({'message_id': _('Xabar bu chatda topilmadi.')}) from None
-    room.pinned_message = message
-    room.save(update_fields=['pinned_message', 'updated_at'])
-    event = _pinned_event(room, message)
-    transaction.on_commit(lambda: realtime.broadcast_event(room.id, event))
+    _pin, created = PinnedMessage.objects.get_or_create(room=room, message=message, defaults={'pinned_by': user})
+    if created:
+        if PinnedMessage.objects.filter(room=room).count() > MAX_PINS:
+            raise ValidationError({'message_id': _("Ko'pi bilan 20 ta xabar qadash mumkin.")})
+        room.save(update_fields=['updated_at'])
+        _pins_changed(room)
     return room
 
 
-def unpin_message(*, user: User, room_id) -> ChatRoom:
+@transaction.atomic
+def unpin_message(*, user: User, room_id, message_id=None) -> ChatRoom:
+    """Qadashni olib tashlaydi. `message_id` berilmasa — eng oxirgi qadalgan (eski `DELETE pin/` shunday ishlaydi)."""
     room = _readable_room(user, room_id)
     if not _can_pin(user, room):
         raise PermissionDenied(_("Qadashni faqat o'qituvchi olib tashlashi mumkin."))
-    room.pinned_message = None
-    room.save(update_fields=['pinned_message', 'updated_at'])
-    event = _pinned_event(room, None)
-    transaction.on_commit(lambda: realtime.broadcast_event(room.id, event))
+    pins = PinnedMessage.objects.filter(room=room)
+    if message_id:
+        try:
+            pins = pins.filter(message_id=message_id)
+        except BAD_ID:
+            raise NotFound(_('Xabar topilmadi.')) from None
+    else:
+        pins = pins.filter(pk__in=PinnedMessage.objects.filter(room=room).order_by('-created_at').values('pk')[:1])
+    deleted, _per_model = pins.delete()
+    if deleted:
+        room.save(update_fields=['updated_at'])
+        _pins_changed(room)
     return room
 
 
@@ -319,11 +409,16 @@ def set_announcement_only(*, teacher: User, room_id, value: bool) -> ChatRoom:
     return room
 
 
-def room_members(*, user: User, room_id, request=None) -> list:
+def room_members(*, user: User, room_id, request=None, query: str = '') -> list:
     room = _readable_room(user, room_id)
     ids = selectors.member_ids(room)
     online = presence.online_ids(ids)
     users = User.objects.filter(pk__in=ids)
+    query = (query or '').strip()
+    if query:  # @eslatish ro'yxati uchun: ism, familiya yoki login bo'yicha
+        users = users.filter(
+            Q(username__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query),
+        )
     rows = [member_row(u, online, request) for u in users]
     # o'qituvchi birinchi, keyin onlayn, keyin ism bo'yicha
     rows.sort(key=lambda r: (r['role'] != User.Role.TEACHER, not r['is_online'], r['name'].lower()))
@@ -345,8 +440,11 @@ def edit_message(*, user: User, message_id, text: str) -> Message:
     message.text = text
     message.edited_at = timezone.now()
     message.save(update_fields=['text', 'edited_at', 'updated_at'])
-    event = {'type': 'message_updated', 'message': realtime.message_payload(message)}
-    transaction.on_commit(lambda: realtime.broadcast_event(message.room_id, event))
+    legacy = {'type': 'message_updated', 'message': realtime.message_payload(message)}
+    new = {'type': 'message_edited', 'payload': {
+        'id': str(message.id), 'room_id': str(message.room_id), 'text': message.text, 'edited_at': message.edited_at,
+    }}
+    transaction.on_commit(lambda: realtime.broadcast_events(message.room_id, legacy, new))
     return message
 
 
@@ -366,33 +464,39 @@ def delete_messages(*, user: User, ids: list, scope: str) -> int:
     if len(ids) > MAX_BULK_DELETE:
         raise ValidationError({'ids': _("Bir martada ko'pi bilan 100 ta xabar.")})
     messages = [_get_message(user, i) for i in ids]
+    by_room: dict = {}
+    for message in messages:
+        by_room.setdefault(message.room, []).append(message)
     if scope == 'everyone':
         for message in messages:
             if not _can_delete_for_everyone(user, message):
                 raise PermissionDenied(_("Bu xabarni hamma uchun o'chirish huquqingiz yo'q."))
         now = timezone.now()
-        by_room: dict = {}
-        for message in messages:
-            message.deleted_at = now
-            message.save(update_fields=['deleted_at', 'updated_at'])
-            by_room.setdefault(message.room, []).append(str(message.id))
-        for room, room_ids in by_room.items():
-            if room.pinned_message_id and str(room.pinned_message_id) in room_ids:
-                room.pinned_message = None
-                room.save(update_fields=['pinned_message', 'updated_at'])
-                pinned = _pinned_event(room, None)
-                transaction.on_commit(lambda r=room.id, e=pinned: realtime.broadcast_event(r, e))
-            event = {'type': 'message_deleted', 'room': str(room.id), 'ids': room_ids}
-            transaction.on_commit(lambda r=room.id, e=event: realtime.broadcast_event(r, e))
+        for room, room_messages in by_room.items():
+            room_ids = [str(m.id) for m in room_messages]
+            for message in room_messages:
+                message.deleted_at = now
+                message.save(update_fields=['deleted_at', 'updated_at'])
+            if PinnedMessage.objects.filter(room=room, message__in=room_messages).delete()[0]:
+                _pins_changed(room)
+            legacy = {'type': 'message_deleted', 'room': str(room.id), 'ids': room_ids}
+            new = {'type': 'messages_removed', 'payload': {'room_id': str(room.id), 'message_ids': room_ids, 'scope': 'everyone'}}
+            transaction.on_commit(lambda r=room.id, a=legacy, b=new: realtime.broadcast_events(r, a, b))
     else:
         for message in messages:
             MessageHide.objects.get_or_create(message=message, user=user)
+        for room, room_messages in by_room.items():  # faqat shu foydalanuvchining boshqa qurilmalariga
+            event = {'type': 'messages_removed', 'payload': {
+                'room_id': str(room.id), 'message_ids': [str(m.id) for m in room_messages], 'scope': 'me',
+            }}
+            transaction.on_commit(lambda e=event: realtime.broadcast_user_event(user.id, e))
     return len(messages)
 
 
 @transaction.atomic
 def forward_messages(*, user: User, room_id, message_ids: list) -> list:
-    """Xabarlarni (o'qiy oladigan chatlardan) `room_id` chatiga uzatadi — tartibi asl vaqt bo'yicha."""
+    """Xabarlarni (o'qiy oladigan chatlardan) `room_id` chatiga uzatadi — tartibi asl vaqt bo'yicha. Asl manba
+    (xabar, muallif, chat) zanjir bo'ylab saqlanadi."""
     room = _get_room(room_id)
     if not selectors.can_write(user, room):
         raise PermissionDenied(_("Bu chatga yozish huquqingiz yo'q."))
@@ -412,6 +516,9 @@ def forward_messages(*, user: User, room_id, message_ids: list) -> list:
             message_type=source.message_type, file_name=source.file_name, file_type=source.file_type,
             file_size=source.file_size, page_count=source.page_count, duration=source.duration,
             waveform=source.waveform, forwarded_from_name=origin[:150],
+            forwarded_from_message=source.forwarded_from_message or source.id,
+            forwarded_from_author_id=source.forwarded_from_author_id or source.sender_id,
+            forwarded_from_room=source.forwarded_from_room or source.room_id,
         ))
     room.save(update_fields=['updated_at'])
     for message in created:
@@ -420,29 +527,58 @@ def forward_messages(*, user: User, room_id, message_ids: list) -> list:
 
 
 @transaction.atomic
-def toggle_reaction(*, user: User, message_id, emoji: str) -> list:
-    """Reaksiya qo'shadi, takror bosilsa olib tashlaydi. Qaytaradi: xabardagi reaksiyalar ro'yxati."""
+def forward_to_rooms(*, user: User, message_ids: list, room_ids: list) -> list:
+    """Xabarlarni bir nechta chatga uzatadi (hammasi yoki hech biri). Qaytaradi: yaratilgan xabarlar."""
+    room_ids = list(dict.fromkeys(str(i) for i in room_ids or []))
+    if not room_ids:
+        raise ValidationError({'target_room_ids': _("Chatlar ro'yxati bo'sh.")})
+    if len(room_ids) > MAX_TARGET_ROOMS:
+        raise ValidationError({'target_room_ids': _("Bir martada ko'pi bilan 10 ta chatga.")})
+    created = []
+    for room_id in room_ids:
+        created.extend(forward_messages(user=user, room_id=room_id, message_ids=message_ids))
+    return created
+
+
+def reactions_with_users(message: Message) -> list:
+    """Hamma uchun bir xil ko'rinish (WebSocket): har emoji uchun soni va kimlar qo'ygani — `reacted`ni mijoz
+    o'z id'si bo'yicha aniqlaydi."""
+    grouped: dict = {}
+    for reaction in MessageReaction.objects.filter(message=message).order_by('created_at'):
+        grouped.setdefault(reaction.emoji, []).append(str(reaction.user_id))
+    return [{'emoji': e, 'count': len(users), 'user_ids': users} for e, users in grouped.items()]
+
+
+@transaction.atomic
+def toggle_reaction(*, user: User, message_id, emoji: str, mode: str = 'toggle') -> list:
+    """Reaksiya. `mode='add'` — qo'yadi (allaqachon bo'lsa o'zgarmaydi), `'remove'` — olib tashlaydi (yo'q bo'lsa
+    o'zgarmaydi), `'toggle'` — bor bo'lsa olib tashlaydi, yo'q bo'lsa qo'yadi. Qaytaradi: reaksiyalar ro'yxati."""
     message = _get_message(user, message_id)
     emoji = (emoji or '').strip()
     if not emoji or len(emoji) > 16 or emoji.isascii():  # emoji kamida bitta ASCII bo'lmagan belgidan iborat
         raise ValidationError({'emoji': _("Emoji noto'g'ri.")})
     existing = MessageReaction.objects.filter(message=message, user=user, emoji=emoji).first()
-    if existing:
+    changed, added = False, False
+    if existing and mode in ('toggle', 'remove'):
         existing.delete()
-        added = False
-    else:
+        changed = True
+    elif existing is None and mode in ('toggle', 'add'):
         distinct = MessageReaction.objects.filter(message=message).values('emoji').distinct().count()
         taken = MessageReaction.objects.filter(message=message, emoji=emoji).exists()
         if distinct >= MAX_EMOJIS_PER_MESSAGE and not taken:
             raise ValidationError({'emoji': _("Bu xabarga yana yangi emoji qo'shib bo'lmaydi.")})
         MessageReaction.objects.create(message=message, user=user, emoji=emoji)
-        added = True
-    count = MessageReaction.objects.filter(message=message, emoji=emoji).count()
-    event = {
-        'type': 'reaction', 'room': str(message.room_id), 'message_id': str(message.id),
-        'emoji': emoji, 'user_id': str(user.id), 'added': added, 'count': count,
-    }
-    transaction.on_commit(lambda: realtime.broadcast_event(message.room_id, event))
+        changed, added = True, True
+    if changed:
+        count = MessageReaction.objects.filter(message=message, emoji=emoji).count()
+        legacy = {
+            'type': 'reaction', 'room': str(message.room_id), 'message_id': str(message.id),
+            'emoji': emoji, 'user_id': str(user.id), 'added': added, 'count': count,
+        }
+        new = {'type': 'message_reaction', 'payload': {
+            'room_id': str(message.room_id), 'message_id': str(message.id), 'reactions': reactions_with_users(message),
+        }}
+        transaction.on_commit(lambda: realtime.broadcast_events(message.room_id, legacy, new))
     return reaction_list(message, user)
 
 

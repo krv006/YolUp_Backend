@@ -18,12 +18,14 @@ from django.db.models import (
     ImageField,
     Index,
     JSONField,
+    ManyToManyField,
     OneToOneField,
     PositiveIntegerField,
     Q,
     TextChoices,
     TextField,
     UniqueConstraint,
+    UUIDField,
 )
 
 from apps.core.models import TimeStampedUUIDModel
@@ -56,8 +58,6 @@ class ChatRoom(TimeStampedUUIDModel):
     )
     # kind=COURSE guruh rasmi — faqat o'qituvchi o'zgartira oladi
     image = ImageField(upload_to='group_images/', null=True, blank=True)
-    # Chat tepasida qadalgan xabar — hamma a'zoga ko'rinadi (guruhda faqat o'qituvchi qadaydi)
-    pinned_message = ForeignKey('chat.Message', SET_NULL, null=True, blank=True, related_name='+')
     # E'lon rejimi: true bo'lsa guruhga faqat o'qituvchi yozadi
     announcement_only = BooleanField(default=False)
 
@@ -129,6 +129,12 @@ class Message(TimeStampedUUIDModel):
     edited_at = DateTimeField(null=True, blank=True)
     deleted_at = DateTimeField(null=True, blank=True)
     forwarded_from_name = CharField(max_length=150, blank=True, default='')
+    # Uzatilgan xabarning ASL manbasi (zanjir bo'ylab ham o'zgarmaydi): `forwarded_from` obyekti shundan yig'iladi
+    forwarded_from_message = UUIDField(null=True, blank=True)
+    forwarded_from_author = ForeignKey('accounts.User', SET_NULL, null=True, blank=True, related_name='+')
+    forwarded_from_room = UUIDField(null=True, blank=True)
+    # Xabarda @eslatilgan a'zolar (chat a'zolari bo'lishi shart); eslatilganga bildirishnoma boradi
+    mentions = ManyToManyField('accounts.User', blank=True, related_name='chat_mentions')
     # Chatdagi vazifa kartasi
     assignment = ForeignKey('homework.Assignment', SET_NULL, null=True, blank=True, related_name='chat_messages')
 
@@ -182,3 +188,16 @@ class MessageReaction(TimeStampedUUIDModel):
 
     class Meta:
         constraints = [UniqueConstraint(fields=['message', 'user', 'emoji'], name='unique_message_reaction')]
+
+
+class PinnedMessage(TimeStampedUUIDModel):
+    """Chat tepasidagi qadalgan xabarlar (bir nechta) — hamma a'zoga ko'rinadi. `created_at` = qadalgan payt.
+    Guruhda faqat o'qituvchi, direct chatda ikkala tomon qadaydi."""
+
+    room = ForeignKey('chat.ChatRoom', CASCADE, related_name='pins')
+    message = ForeignKey('chat.Message', CASCADE, related_name='pins')
+    pinned_by = ForeignKey('accounts.User', SET_NULL, null=True, blank=True, related_name='+')
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [UniqueConstraint(fields=['room', 'message'], name='unique_room_pinned_message')]

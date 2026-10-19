@@ -33,6 +33,26 @@ def broadcast_message(message) -> None:
     })
 
 
+def broadcast_events(room_id, *events: dict) -> None:
+    """Bir o'zgarish uchun bir nechta hodisa (eski nom + yangi `{type, payload}` shakli)."""
+    for event in events:
+        broadcast_event(room_id, event)
+
+
+def broadcast_user_event(user_id, event: dict) -> None:
+    """Faqat bitta foydalanuvchining ochiq ulanishlariga (barcha qurilmalariga) — masalan "men uchun o'chirish" yoki
+    o'qilganlikni qurilmalar o'rtasida sinxronlash."""
+    from channels.layers import get_channel_layer
+
+    from .consumers import user_group_name
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    safe = json.loads(JSONRenderer().render(event))
+    async_to_sync(layer.group_send)(user_group_name(user_id), {'type': 'chat.event', 'event': safe})
+
+
 def broadcast_event(room_id, event: dict) -> None:
     """Xonadagi hammaga umumiy hodisa (`read`, `message_updated`, `message_deleted`, `pinned`, `reaction`,
     `room_updated`) — `event['type']` o'zi mijozga boradi."""

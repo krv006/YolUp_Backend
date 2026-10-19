@@ -392,8 +392,12 @@ class EditDeleteTests(ChatV2Base):
         self.send(self.student2, 'javob', reply_to_id=original['id'])
         with mock.patch('apps.chat.realtime.broadcast_event') as broadcast, self.captureOnCommitCallbacks(execute=True):
             self.api(self.student).delete(f'{self.base}/messages/{original["id"]}/?scope=everyone')
-        event = broadcast.call_args.args[1]
-        self.assertEqual((event['type'], event['ids']), ('message_deleted', [original['id']]))
+        events = {c.args[1]['type']: c.args[1] for c in broadcast.call_args_list}
+        self.assertEqual(events['message_deleted']['ids'], [original['id']])  # eski nom
+        self.assertEqual(
+            events['messages_removed']['payload'],
+            {'room_id': str(self.room.id), 'message_ids': [original['id']], 'scope': 'everyone'},
+        )
         reply = self.messages(self.teacher).json()[0]
         self.assertEqual((reply['reply_to']['is_deleted'], reply['reply_to']['text']), (True, ''))
 
@@ -478,7 +482,7 @@ class ReactionTests(ChatV2Base):
         self.assertEqual(seen_by_student, [{'emoji': '🔥', 'count': 2, 'reacted': False}])
         seen_by_teacher = self.messages(self.teacher, query='?mark_read=0').json()[0]['reactions']
         self.assertEqual(seen_by_teacher, [{'emoji': '🔥', 'count': 2, 'reacted': True}])
-        off = self.api(self.teacher).post(url, {'emoji': '🔥'}, format='json').json()
+        off = self.api(self.teacher).post(url, {'emoji': '🔥', 'toggle': True}, format='json').json()
         self.assertEqual(off['reactions'], [{'emoji': '🔥', 'count': 1, 'reacted': False}])
 
     def test_bad_emoji_and_outsiders_are_refused(self):
@@ -492,8 +496,12 @@ class ReactionTests(ChatV2Base):
         message = self.send(self.student, 'x')
         with mock.patch('apps.chat.realtime.broadcast_event') as broadcast, self.captureOnCommitCallbacks(execute=True):
             self.api(self.teacher).post(f'{self.base}/messages/{message["id"]}/reactions/', {'emoji': '👍'}, format='json')
-        event = broadcast.call_args.args[1]
-        self.assertEqual((event['type'], event['emoji'], event['added'], event['count']), ('reaction', '👍', True, 1))
+        events = {c.args[1]['type']: c.args[1] for c in broadcast.call_args_list}
+        legacy = events['reaction']
+        self.assertEqual((legacy['emoji'], legacy['added'], legacy['count']), ('👍', True, 1))
+        payload = events['message_reaction']['payload']
+        self.assertEqual((payload['room_id'], payload['message_id']), (str(self.room.id), message['id']))
+        self.assertEqual(payload['reactions'], [{'emoji': '👍', 'count': 1, 'user_ids': [str(self.teacher.id)]}])
 
 
 class SearchTests(ChatV2Base):
@@ -632,6 +640,9 @@ class ChatEventsOverWebSocketTests(TransactionTestCase):
         self.assertTrue(connected)
         return comm
 
+    async def frames(self, comm, count):
+        return [await comm.receive_json_from(timeout=3) for _ in range(count)]
+
     async def test_events_reach_the_room_and_presence_follows_the_connection(self):
         from channels.db import database_sync_to_async
 
@@ -652,16 +663,21 @@ class ChatEventsOverWebSocketTests(TransactionTestCase):
         self.assertEqual((event['type'], event['last_message_id']), ('read', str(sent.id)))
 
         await database_sync_to_async(services.pin_message)(user=self.teacher, room_id=self.room.id, message_id=sent.id)
-        event = await student.receive_json_from(timeout=3)
-        self.assertEqual((event['type'], event['message']['text']), ('pinned', 'savol'))
+        legacy, new = await self.frames(student, 2)  # eski nom + yangi `{type, payload}`
+        self.assertEqual((legacy['type'], legacy['message']['text']), ('pinned', 'savol'))
+        self.assertEqual(new['type'], 'room_pinned_changed')
+        self.assertEqual([m['message_id'] for m in new['payload']['pinned_messages']], [str(sent.id)])
 
         await database_sync_to_async(services.toggle_reaction)(user=self.teacher, message_id=sent.id, emoji='🔥')
-        event = await student.receive_json_from(timeout=3)
-        self.assertEqual((event['type'], event['emoji'], event['count']), ('reaction', '🔥', 1))
+        legacy, new = await self.frames(student, 2)
+        self.assertEqual((legacy['type'], legacy['emoji'], legacy['count']), ('reaction', '🔥', 1))
+        self.assertEqual((new['type'], new['payload']['reactions'][0]['count']), ('message_reaction', 1))
 
         await database_sync_to_async(services.delete_messages)(user=self.teacher, ids=[sent.id], scope='everyone')
-        events = [await student.receive_json_from(timeout=3) for _ in range(2)]
-        self.assertEqual({e['type'] for e in events}, {'pinned', 'message_deleted'})
+        events = await self.frames(student, 4)  # qadash olinadi (2) + o'chirish (2)
+        self.assertEqual(
+            {e['type'] for e in events}, {'pinned', 'room_pinned_changed', 'message_deleted', 'messages_removed'},
+        )
 
         await student.disconnect()
         await teacher.disconnect()
