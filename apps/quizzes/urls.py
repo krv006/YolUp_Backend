@@ -15,4 +15,6 @@ urlpatterns = [
     path('<uuid:pk>/publish/', views.QuizPublishView.as_view(), name='quiz-publish'),
     path('<uuid:pk>/export/', views.QuizExportView.as_view(), name='quiz-export'),
     path('<uuid:pk>/attempts/', views.QuizAttemptListCreateView.as_view(), name='quiz-attempts'),
+    path('<uuid:pk>/attempts/export/', views.QuizAttemptsExportView.as_view(), name='quiz-attempts-export'),
+    path('<uuid:pk>/not-attempted/', views.QuizNotAttemptedView.as_view(), name='quiz-not-attempted'),
 ]

@@ -8,15 +8,22 @@ from django.db.models import (
     CASCADE,
     BooleanField,
     CharField,
+    DateField,
     DateTimeField,
     FileField,
     ForeignKey,
+    GenericIPAddressField,
     ImageField,
+    Index,
     PositiveIntegerField,
+    PositiveSmallIntegerField,
     TextChoices,
+    TextField,
     UniqueConstraint,
     UUIDField,
 )
+
+from django.utils import timezone
 
 from apps.core.models import TimeStampedUUIDModel
 from apps.core.uploads import certificate_path
@@ -61,6 +68,18 @@ class User(AbstractUser):
     # qo'yadi, chunki o'qituvchi darsni BOSHLASHI kerak, undan oldinroq
     # ogohlantirilishi tabiiy.
     lesson_reminder_minutes = PositiveIntegerField(default=15)
+    # Profil (faqat o'zi ko'radi va tahrirlaydi): otasining ismi, tug'ilgan sana, shahar, o'zi haqida, tajriba (yil),
+    # o'qituvchining asosiy fani (Course.Subject kodlaridan biri). `email` — AbstractUser'dan; tasdiqlash xati yo'q.
+    middle_name = CharField(max_length=100, blank=True, default='')
+    birth_date = DateField(null=True, blank=True)
+    city = CharField(max_length=100, blank=True, default='')
+    bio = TextField(blank=True, default='')
+    experience_years = PositiveSmallIntegerField(null=True, blank=True)
+    subject = CharField(max_length=100, blank=True, default='')
+    # O'qituvchi o'quvchi hisobini yaratganda kiritadigan ota-ona telefoni (hisob bog'lanishiga ta'sir qilmaydi)
+    parent_phone = CharField(max_length=20, blank=True, default='')
+    # Parol oxirgi marta o'zgartirilgan payt (`POST /auth/password/change/`)
+    password_changed_at = DateTimeField(null=True, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -139,3 +158,22 @@ class TeacherCertificate(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.teacher.username} · {self.title or self.file.name}'
+
+
+class UserSession(TimeStampedUUIDModel):
+    """Faol seans (qurilma) — `auth/sessions/` ro'yxati. Token ichidagi `sid` shu qatorning id'si
+    (qarang `apps.accounts.sessions`). `last_active` token yangilanganda (taxminan soatiga bir) yangilanadi."""
+
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='sessions')
+    device = CharField(max_length=120, blank=True, default='')
+    user_agent = CharField(max_length=300, blank=True, default='')
+    ip = GenericIPAddressField(null=True, blank=True)
+    last_active = DateTimeField(default=timezone.now)
+    revoked_at = DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-last_active']
+        indexes = [Index(fields=['user', 'revoked_at'])]
+
+    def __str__(self):
+        return f'{self.user_id} · {self.device}'

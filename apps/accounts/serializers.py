@@ -1,3 +1,6 @@
+import re
+from datetime import date
+
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.utils.translation import gettext_lazy as _
@@ -6,6 +9,16 @@ from rest_framework.validators import UniqueValidator
 
 from . import selectors
 from .models import Consent, ParentChildLink, TeacherCertificate, User
+
+
+PHONE_RE = re.compile(r'^\+?[0-9][0-9 ()-]{5,18}$')
+
+
+def clean_phone(value: str) -> str:
+    value = (value or '').strip()
+    if value and not PHONE_RE.match(value):
+        raise serializers.ValidationError(_("Telefon raqami noto'g'ri (masalan +998901234567)."))
+    return value
 
 
 def username_validators():
@@ -83,9 +96,39 @@ class MeSerializer(UserSerializer):
     boshqa foydalanuvchining telefon-egalari ro'yxati oshkor bo'lmasligi uchun)."""
 
     linked_accounts = serializers.SerializerMethodField()
+    # Profil maydonlari faqat o'zining profilida (boshqalarga — chat, kurs ro'yxati — chiqmaydi: email/bio oshkor bo'lmasin)
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
+    bio = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+    experience_years = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=80)
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ['linked_accounts']
+        fields = UserSerializer.Meta.fields + [
+            'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
+            'parent_phone', 'password_changed_at',
+        ]
+        read_only_fields = UserSerializer.Meta.read_only_fields + ['parent_phone', 'password_changed_at']
+
+    def validate_email(self, value):
+        return (value or '').strip().lower()
+
+    def validate_birth_date(self, value):
+        if value is not None and not (date(1900, 1, 1) <= value <= date.today()):
+            raise serializers.ValidationError(_("Tug'ilgan sana noto'g'ri."))
+        return value
+
+    def validate_subject(self, value):
+        from apps.lessons.models import Course
+
+        value = (value or '').strip()
+        if value and value not in Course.Subject.values:
+            raise serializers.ValidationError(_("Noma'lum fan."))
+        return value
+
+    def validate_city(self, value):
+        return (value or '').strip()
+
+    def validate_middle_name(self, value):
+        return (value or '').strip()
 
     def get_linked_accounts(self, obj):
         return LinkedAccountSerializer(selectors.linked_accounts(obj), many=True).data
@@ -109,12 +152,23 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class ChildCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
+    parent_phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    # Faqat o'qituvchi yaratganda: shu (o'z) kursiga darhol qo'shiladi
+    course_id = serializers.UUIDField(required=False, write_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'invite_code']
+        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'parent_phone', 'course_id', 'invite_code']
         read_only_fields = ['invite_code']
         extra_kwargs = {'username': {'validators': username_validators()}}
+
+    def validate_parent_phone(self, value):
+        return clean_phone(value)
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
 
 
 class LinkSerializer(serializers.ModelSerializer):

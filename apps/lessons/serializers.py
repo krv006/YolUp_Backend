@@ -21,8 +21,13 @@ class CourseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'teacher', 'title', 'subject', 'subject_label', 'description',
             'is_active', 'student_count', 'my_status', 'is_language_subject', 'created_at',
+            'lessons_per_week', 'monthly_fee',
         ]
         read_only_fields = ['is_active']
+        extra_kwargs = {
+            'lessons_per_week': {'min_value': 1, 'max_value': 14},
+            'monthly_fee': {'min_value': 0, 'max_value': 1_000_000_000},
+        }
 
     def get_student_count(self, obj) -> int:
         return obj.enrollments.filter(status=Enrollment.Status.APPROVED).count()

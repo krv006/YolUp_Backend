@@ -21,7 +21,11 @@ def _user_from_token(raw_token: str):
     from apps.accounts.models import User
 
     try:
+        from apps.accounts import sessions
+
         token = AccessToken(raw_token)
+        if token.get('sid') and sessions.is_revoked(token['sid']):
+            return AnonymousUser()  # chiqarib yuborilgan seans
         return User.objects.get(pk=token['user_id'])
     except Exception:  # yaroqsiz token / user yo'q
         return AnonymousUser()

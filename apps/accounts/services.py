@@ -97,7 +97,8 @@ def approve_teacher(*, admin: User, teacher_id, request=None) -> User:
 
 
 @transaction.atomic
-def create_child(*, creator: User, username: str, password: str, request=None, **extra) -> User:
+@transaction.atomic
+def create_child(*, creator: User, username: str, password: str, request=None, course_id=None, **extra) -> User:
     """O'quvchi hisobini yaratadi — ota-ona yoki o'qituvchi.
 
     Ota-ona yaratsa — ParentChildLink darhol APPROVED (FRD: auth.child_create).
@@ -106,9 +107,26 @@ def create_child(*, creator: User, username: str, password: str, request=None, *
     bog'lanishi mumkin. O'qituvchi bolani alohida enroll/ orqali kursiga
     biriktiradi.
     """
+    course = None
+    if course_id:
+        # `course_id` faqat o'qituvchi uchun: o'z kursiga darhol biriktiradi (xato bo'lsa hisob ham yaratilmaydi)
+        from apps.lessons.models import Course
+
+        if creator.role != User.Role.TEACHER:
+            raise ValidationError({'course_id': _("Kursga faqat o'qituvchi biriktira oladi.")})
+        course = Course.objects.filter(pk=course_id).first()
+        if course is None:
+            raise NotFound(_('Kurs topilmadi.'))
+        if course.teacher_id != creator.id:
+            raise PermissionDenied(_("Faqat o'z kursingizga o'quvchi biriktira olasiz."))
     child = User(username=username, role=User.Role.STUDENT, **extra)
     child.set_password(password)
     child.save()
+    if course is not None:
+        from apps.lessons import services as lesson_services
+
+        lesson_services.enroll(course_id=course.id, by_user=creator, student_id=child.id, request=request)
+        child.enrolled_course_id = course.id
     if creator.role == User.Role.PARENT:
         ParentChildLink.objects.create(
             parent=creator, student=child, status=ParentChildLink.Status.APPROVED,
@@ -116,6 +134,67 @@ def create_child(*, creator: User, username: str, password: str, request=None, *
         )
     audit.record(action='child.create', actor=creator, target=child, request=request)
     return child
+
+
+def change_password(*, user: User, current_password: str, new_password: str, request=None):
+    """Parolni o'zgartiradi. Qaytaradi: `password_changed_at`."""
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    if not user.check_password(current_password or ''):
+        raise ValidationError({'detail': _("Joriy parol noto'g'ri")})
+    if not new_password or new_password == current_password:
+        raise ValidationError({'new_password': _("Yangi parol joriy paroldan farq qilishi kerak.")})
+    try:
+        validate_password(new_password, user)
+    except DjangoValidationError as exc:
+        raise ValidationError({'new_password': list(exc.messages)}) from None
+    user.set_password(new_password)
+    user.password_changed_at = timezone.now()
+    user.save(update_fields=['password', 'password_changed_at'])
+    audit.record(action='auth.password_change', actor=user, request=request)
+    return user.password_changed_at
+
+
+def me_stats(user: User) -> dict:
+    """Profildagi "Guruh / O'quvchi / Tajriba" raqamlari."""
+    from apps.lessons.models import Course, Enrollment
+
+    approved = Enrollment.Status.APPROVED
+    groups = students = 0
+    if user.role == User.Role.TEACHER:
+        groups = Course.objects.filter(teacher=user).count()
+        students = Enrollment.objects.filter(
+            course__teacher=user, status=approved,
+        ).values('student').distinct().count()
+    elif user.role == User.Role.STUDENT:
+        groups = Enrollment.objects.filter(student=user, status=approved).count()
+    return {'groups': groups, 'students': students, 'experience_years': user.experience_years}
+
+
+def deactivate_account(*, user: User, password: str | None = None, request=None) -> None:
+    """Akkauntni o'chirish = FAOLSIZLANTIRISH: kirib bo'lmaydi, hamma seans va tokenlar bekor, ma'lumotlar (kurslar,
+    darslar, xabarlar, natijalar) saqlanadi — admin qayta yoqa oladi. O'qituvchining kurslari arxivlanadi (`is_active=False`).
+    Admin akkauntlari o'zini o'chira olmaydi."""
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    from . import sessions
+
+    if user.role in (User.Role.ADMIN, User.Role.SUPER_ADMIN) or user.is_superuser:
+        raise PermissionDenied(_("Admin akkauntini o'zingiz o'chira olmaysiz."))
+    if password is not None and not user.check_password(password):
+        raise ValidationError({'password': _("Parol noto'g'ri.")})
+    with transaction.atomic():
+        user.is_active = False
+        user.save(update_fields=['is_active'])
+        if user.role == User.Role.TEACHER:
+            from apps.lessons.models import Course
+
+            Course.objects.filter(teacher=user).update(is_active=False)
+        sessions.revoke_all(user)
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+        audit.record(action='account.deactivate', actor=user, target=user, request=request)
 
 
 def _student_by_username(username: str) -> User:
@@ -328,6 +407,8 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     target = User.objects.filter(
         phone=current_user.phone, role=role,
     ).exclude(pk=current_user.pk).first()
+    if target is not None and not target.is_active:
+        raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
 
     auto_provisioned = False
     if target is None:
@@ -363,6 +444,9 @@ def logout(*, user: User, refresh_token: str | None = None, device_id: str | Non
     o'chiriladi (chiqib ketgan foydalanuvchiga push kelib turmasin;
     PUSH-BACKEND.md 2.2 — `push/device/` DELETE'ga qo'shimcha himoya)."""
     if refresh_token:
+        from . import sessions
+
+        sessions.revoke_by_token(refresh_token)
         try:
             from rest_framework_simplejwt.tokens import RefreshToken
             RefreshToken(refresh_token).blacklist()

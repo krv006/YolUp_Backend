@@ -5,17 +5,18 @@ apps.core.permissions registry'sida.
 """
 from django.core.exceptions import ObjectDoesNotExist
 from django.utils.translation import gettext_lazy as _
-from rest_framework import generics, status
+from rest_framework import generics, serializers, status
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken
-from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.core.permissions import RequirePerm
 
-from . import selectors, services
+from . import selectors, services, sessions
+from .models import UserSession
 from .serializers import (
     CertificateSerializer,
     ChildCreateSerializer,
@@ -24,6 +25,7 @@ from .serializers import (
     LinkRespondSerializer,
     LinkSerializer,
     MeSerializer,
+    PasswordChangeSerializer,
     RegisterSerializer,
     UserSerializer,
 )
@@ -42,7 +44,7 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = services.register_user(request=request, **serializer.validated_data)
-        refresh = RefreshToken.for_user(user)
+        refresh = sessions.issue_refresh(user, request)
         services.record_login(user=user, request=request)
         return Response({
             **RegisterSerializer(user).data,
@@ -53,6 +55,7 @@ class RegisterView(APIView):
 
 class LoginView(TokenObtainPairView):
     throttle_scope = 'auth'
+    serializer_class = sessions.SessionTokenObtainPairSerializer
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
@@ -85,6 +88,7 @@ class LoginHistoryView(APIView):
 
 class RefreshView(TokenRefreshView):
     throttle_scope = 'auth'
+    serializer_class = sessions.SessionTokenRefreshSerializer
 
     def post(self, request, *args, **kwargs):
         try:
@@ -120,6 +124,82 @@ class MeView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return self.request.user
 
+    def delete(self, request, *args, **kwargs):
+        """Akkauntni o'chirish = faolsizlantirish (ma'lumot saqlanadi, kirib bo'lmaydi). Ixtiyoriy `{"password": "..."}`
+        berilsa — tekshiriladi."""
+        services.deactivate_account(user=request.user, password=request.data.get('password'), request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SessionListView(APIView):
+    """Faol seanslar: `[{id, device, ip, city, last_active, is_current}]` (`city` — hozircha doim null)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        current = str((request.auth or {}).get('sid') or '')
+        rows = UserSession.objects.filter(user=request.user, revoked_at__isnull=True)
+        return Response([{
+            'id': str(s.id), 'device': s.device, 'ip': s.ip, 'city': None,
+            'last_active': s.last_active, 'is_current': str(s.id) == current,
+        } for s in rows])
+
+
+class SessionDetailView(APIView):
+    """Bitta seansdan chiqarish (o'zingiznikidan ham bo'ladi — bu "chiqish" bilan teng)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        session = UserSession.objects.filter(pk=pk, user=request.user, revoked_at__isnull=True).first()
+        if session is None:
+            raise NotFound(_('Seans topilmadi.'))
+        sessions.revoke(session)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SessionLogoutOthersView(APIView):
+    """Joriy qurilmadan tashqari hamma seanslardan chiqarish. Joriy seans token ichidagi `sid`dan aniqlanadi — eski
+    (yangilanmagan) tokenda u yo'q, shunda avval qayta kirish/yangilash kerak (400)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        current = (request.auth or {}).get('sid')
+        if not current:
+            raise ValidationError({'detail': _('Joriy seans aniqlanmadi — qayta kiring.')})
+        others = UserSession.objects.filter(user=request.user, revoked_at__isnull=True).exclude(pk=current)
+        count = 0
+        for session in others:
+            sessions.revoke(session)
+            count += 1
+        return Response({'revoked': count})
+
+
+class MeStatsView(APIView):
+    """Profil ko'rsatkichlari: `{groups, students, experience_years}`."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(services.me_stats(request.user))
+
+
+class PasswordChangeView(APIView):
+    """Joriy parolni tekshirib yangisini qo'yadi. Javob: `{password_changed_at}`."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        changed_at = services.change_password(
+            user=request.user, request=request, **serializer.validated_data,
+        )
+        # /auth/me/ dagi bilan bir xil ko'rinishda (vaqt mintaqasi)
+        return Response({'password_changed_at': serializers.DateTimeField().to_representation(changed_at)})
+
 
 class SwitchAccountView(APIView):
     """Bir xil telefon raqamidagi boshqa rol-akkauntga parolsiz o'tish
@@ -131,7 +211,7 @@ class SwitchAccountView(APIView):
 
     def post(self, request, pk):
         target = services.switch_account(current_user=request.user, target_id=pk, request=request)
-        refresh = RefreshToken.for_user(target)
+        refresh = sessions.issue_refresh(target, request)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
@@ -150,7 +230,7 @@ class SwitchRoleView(APIView):
     def post(self, request):
         role = (request.data.get('role') or '').strip()
         target = services.switch_or_provision_role(current_user=request.user, role=role, request=request)
-        refresh = RefreshToken.for_user(target)
+        refresh = sessions.issue_refresh(target, request)
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
@@ -165,7 +245,10 @@ class ChildCreateView(APIView):
         serializer = ChildCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         child = services.create_child(creator=request.user, request=request, **serializer.validated_data)
-        return Response(ChildCreateSerializer(child).data, status=status.HTTP_201_CREATED)
+        data = ChildCreateSerializer(child).data
+        if getattr(child, 'enrolled_course_id', None):
+            data['course_id'] = str(child.enrolled_course_id)
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class LinkListView(generics.ListAPIView):

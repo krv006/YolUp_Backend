@@ -13,7 +13,7 @@ from apps.accounts.models import User
 from apps.accounts.serializers import UserSerializer
 from apps.core.permissions import RequirePerm
 
-from . import selectors, services
+from . import attendance_summary, selectors, services
 from .models import Course, Enrollment
 from .serializers import (
     AttendanceSerializer,
@@ -38,6 +38,8 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [RequirePerm('course.edit')()]
         if self.action in ('enroll', 'unenroll', 'catalog'):
             return [RequirePerm('course.enroll')()]
+        if self.action == 'attendance_summary':
+            return [RequirePerm('attendance.view')()]
         if self.action in ('requests', 'respond_request'):
             return [RequirePerm('course.edit')()]  # faqat o'qituvchi (o'z kurslari service'da tekshiriladi)
         if self.action == 'schedule':
@@ -54,6 +56,17 @@ class CourseViewSet(viewsets.ModelViewSet):
         """Yozilish uchun ochiq kurslar — o'quvchi/ota-ona ko'radi (courses_for faqat yozilganlarni beradi)."""
         page = self.paginate_queryset(self.get_queryset())
         return self.get_paginated_response(self.get_serializer(page, many=True).data)
+
+    @action(detail=True, url_path='attendance/summary')
+    def attendance_summary(self, request, pk=None):
+        """Davomat va fokus foizi: `?range=all|30d|month`. O'qituvchi — hamma o'quvchi; o'quvchi — faqat o'zi;
+        ota-ona — tasdiqlangan bolalari."""
+        range_key = request.query_params.get('range', 'all')
+        if range_key not in attendance_summary.RANGES:
+            raise ValidationError({'range': _("all, 30d yoki month bo'lishi kerak.")})
+        return Response(attendance_summary.course_summary(
+            course=self.get_object(), viewer=request.user, range_key=range_key,
+        ))
 
     @action(detail=False)
     def subjects(self, request):

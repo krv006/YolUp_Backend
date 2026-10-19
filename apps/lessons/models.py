@@ -9,6 +9,7 @@ from django.db.models import (
     ForeignKey,
     OneToOneField,
     PositiveIntegerField,
+    PositiveSmallIntegerField,
     TextChoices,
     TextField,
     UniqueConstraint,
@@ -58,6 +59,9 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
     subject = CharField(max_length=100, choices=Subject.choices, default=Subject.OTHER, blank=True)
     description = TextField(blank=True)
     is_active = BooleanField(default=True)
+    # Guruh kartasi va to'lov hisoboti uchun: haftasiga nechta dars va oylik to'lov (so'mda). Ixtiyoriy.
+    lessons_per_week = PositiveSmallIntegerField(null=True, blank=True)
+    monthly_fee = PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

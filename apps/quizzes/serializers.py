@@ -448,11 +448,32 @@ class AttemptResultSerializer(serializers.ModelSerializer):
 
 
 class AttemptListSerializer(serializers.ModelSerializer):
+    """`attempt_no` — shu o'quvchining shu testdagi nechanchi urinishi (sana bo'yicha); view `Window` bilan to'ldiradi."""
+
     student_name = serializers.CharField(source='student.username', read_only=True)
+    student_full_name = serializers.SerializerMethodField()
+    student_avatar_url = serializers.SerializerMethodField()
+    attempt_no = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAttempt
-        fields = ['id', 'quiz', 'student', 'student_name', 'score', 'max_score', 'created_at']
+        fields = [
+            'id', 'quiz', 'student', 'student_name', 'student_full_name', 'student_avatar_url', 'attempt_no',
+            'score', 'max_score', 'created_at',
+        ]
+
+    def get_student_full_name(self, obj) -> str:
+        return obj.student.get_full_name() or obj.student.username
+
+    def get_student_avatar_url(self, obj):
+        avatar = obj.student.avatar
+        if not avatar:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(avatar.url) if request else avatar.url
+
+    def get_attempt_no(self, obj):
+        return getattr(obj, 'attempt_no', None)
 
 
 # ─── AI bilan test yaratish (tashqi Test-creator) ──────────────────────────

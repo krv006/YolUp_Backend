@@ -3,6 +3,8 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
+from django.db.models import F, Prefetch, Window
+from django.db.models.functions import RowNumber
 from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
@@ -14,8 +16,8 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
-from . import ai_jobs, export, selectors, services
-from .models import AiQuizJob, Quiz
+from . import ai_jobs, attempts_export, export, selectors, services
+from .models import AiQuizJob, AnswerResponse, Quiz
 from .serializers import (
     AiQuizCreateSerializer,
     AiQuizJobSerializer,
@@ -233,6 +235,58 @@ class QuizExportView(APIView):
         return response
 
 
+class QuizAttemptsExportView(APIView):
+    """Test natijalari: `?type=xlsx|csv` (standart xlsx) — har o'quvchining har urinishi va savollar bo'yicha javobi.
+    Faqat test egasi (o'qituvchi)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def get(self, request, pk):
+        import re
+
+        quiz = _get_quiz(request.user, pk)
+        fmt = (request.query_params.get('type') or 'xlsx').lower()
+        attempts = selectors.attempts_for(request.user, quiz).select_related('student').prefetch_related(
+            Prefetch('answers', queryset=AnswerResponse.objects.all()),
+        )
+        try:
+            content, content_type = attempts_export.build_attempts_export(quiz, list(attempts), fmt)
+        except ValueError as exc:
+            raise ValidationError({'type': str(exc)})
+        name = re.sub(r'[^A-Za-z0-9._-]+', '_', f"{quiz.title or quiz.topic}_natijalar").strip('_')[:80] or 'natijalar'
+        response = HttpResponse(content, content_type=content_type)
+        response['Content-Disposition'] = f'attachment; filename="{name}.{fmt}"'
+        return response
+
+
+class QuizNotAttemptedView(APIView):
+    """Guruhdagi o'quvchilardan bu testni hali topshirmaganlar (guruhsiz testda bo'sh ro'yxat)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def get(self, request, pk):
+        from apps.lessons.models import Enrollment
+
+        quiz = _get_quiz(request.user, pk)
+        if not quiz.course_id:
+            return Response([])
+        students = (
+            User.objects.filter(enrollments__course_id=quiz.course_id, enrollments__status=Enrollment.Status.APPROVED)
+            .exclude(quiz_attempts__quiz=quiz).distinct()
+        )
+        rows = []
+        for student in sorted(students, key=lambda u: (u.get_full_name() or u.username).lower()):
+            avatar = student.avatar.url if student.avatar else None
+            rows.append({
+                'id': str(student.id), 'name': student.get_full_name() or student.username,
+                'username': student.username,
+                'avatar_url': request.build_absolute_uri(avatar) if avatar else None,
+            })
+        return Response(rows)
+
+
 class QuizDetailView(APIView):
     def get_permissions(self):
         perm = 'quiz.view' if self.request.method == 'GET' else 'quiz.create'
@@ -304,8 +358,10 @@ class QuizAttemptListCreateView(APIView):
 
     def get(self, request, pk):
         quiz = _get_quiz(request.user, pk)
-        attempts = selectors.attempts_for(request.user, quiz)
-        return Response(AttemptListSerializer(attempts, many=True).data)
+        attempts = selectors.attempts_for(request.user, quiz).annotate(
+            attempt_no=Window(RowNumber(), partition_by=[F('student_id')], order_by=F('created_at').asc()),
+        )
+        return Response(AttemptListSerializer(attempts, many=True, context={'request': request}).data)
 
     def post(self, request, pk):
         quiz = _get_quiz(request.user, pk)

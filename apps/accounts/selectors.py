@@ -111,4 +111,4 @@ def linked_accounts(user: User) -> QuerySet[User]:
     `phone` bo'sh bo'lsa — bo'sh natija (bo'sh qiymat bo'yicha "bog'lash" mantiqsiz)."""
     if not user.phone:
         return User.objects.none()
-    return User.objects.filter(phone=user.phone).exclude(pk=user.pk).order_by('role', 'username')
+    return User.objects.filter(phone=user.phone, is_active=True).exclude(pk=user.pk).order_by('role', 'username')
