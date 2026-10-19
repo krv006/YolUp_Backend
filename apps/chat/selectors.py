@@ -82,7 +82,7 @@ def visible_messages(room: ChatRoom, user: User):
         room.messages.filter(deleted_at__isnull=True)
         .exclude(hides__user=user)
         .select_related('sender', 'reply_to', 'reply_to__sender', 'assignment', 'forwarded_from_author')
-        .prefetch_related('mentions', Prefetch('reactions', queryset=MessageReaction.objects.only('message_id', 'user_id', 'emoji')))
+        .prefetch_related('mentions', 'files', Prefetch('reactions', queryset=MessageReaction.objects.only('message_id', 'user_id', 'emoji')))
     )
 
 

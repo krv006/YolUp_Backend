@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm
 
 from . import attachments, selectors, services
-from .models import ChatRoom, Message, PinnedMessage, RoomRead
+from .models import ChatRoom, Message, MessageAttachment, PinnedMessage, RoomRead
 from .serializers import ChatRoomSerializer, MessageSerializer
 
 DEFAULT_PAGE = 30
@@ -77,16 +77,21 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             'peer_read_at': services.peer_read_at(room, request.user),
         }
 
-    @action(detail=True)
+    @action(detail=True, methods=['get', 'post'])
     def messages(self, request, pk=None):
-        """Xabarlar. Polling: `?after=<ISO vaqt>` — faqat yangilari. Eski xabarlarni yuklash:
+        """GET — xabarlar; POST — xabar yuborish (`send/` bilan bir xil, qo'shimcha: `type=homework` + `assignment_id`, `files[]`).
+        Xabarlar. Polling: `?after=<ISO vaqt>` — faqat yangilari. Eski xabarlarni yuklash:
         `?before=<xabar id>&limit=30` (yoki faqat `?limit=`) -> {"items": [...], "has_more": bool}.
         Odatiy holda xonani o'qilgan deb belgilaydi (`?mark_read=0` — belgilamaydi)."""
+        if request.method == 'POST':
+            return self._post_message(request, pk)
         room = self.get_object()
         if not selectors.can_read(request.user, room):
             self.permission_denied(request)
         qs = selectors.visible_messages(room, request.user)
         params = request.query_params
+        if params.get('around'):
+            return self._messages_around(request, room, qs, params)
         after, before, limit = params.get('after'), params.get('before'), params.get('limit')
         paginated = bool(before or limit)
         if after:
@@ -117,25 +122,80 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'items': data, 'has_more': has_more})
         return Response(data)
 
+    def _messages_around(self, request, room, qs, params):
+        """`?around=<xabar id>&limit=30` — shu xabar va uning atrofidagilar (qidiruv natijasiga o'tish uchun).
+        `{"items": [...eskidan yangiga...], "has_more_before": bool, "has_more_after": bool}`. Xonani o'qilgan deb belgilamaydi."""
+        try:
+            half = max(1, min(int(params.get('limit') or DEFAULT_PAGE), MAX_PAGE) // 2)
+        except ValueError:
+            raise ValidationError({'limit': _("Son bo'lishi kerak.")}) from None
+        try:
+            target = qs.get(pk=params['around'])
+        except (Message.DoesNotExist, *services.BAD_ID):
+            raise ValidationError({'around': _('Xabar bu chatda topilmadi.')}) from None
+        older = list(qs.filter(created_at__lt=target.created_at).order_by('-created_at')[:half + 1])
+        newer = list(qs.filter(created_at__gt=target.created_at).order_by('created_at')[:half + 1])
+        items = [*reversed(older[:half]), target, *newer[:half]]
+        return Response({
+            'items': MessageSerializer(items, many=True, context=self._message_context(request, room)).data,
+            'has_more_before': len(older) > half, 'has_more_after': len(newer) > half,
+        })
+
     @action(detail=True, url_path='messages/search')
     def search(self, request, pk=None):
-        """Xabarlar ichidan qidirish: {"total": n, "items": [{id, text, created_at}]} (yangilari birinchi)."""
-        return Response(services.search_messages(user=request.user, room_id=pk, q=request.query_params.get('q')))
+        """Xabarlar ichidan qidirish: `?q=&limit=&cursor=` -> `{total, items:[{id, message_id, cursor, text, created_at,
+        sender_name}], next_cursor}` (yangilari birinchi)."""
+        params = request.query_params
+        return Response(services.search_messages(
+            user=request.user, room_id=pk, q=params.get('q'), limit=params.get('limit'), cursor=params.get('cursor'),
+        ))
 
-    @action(detail=True, methods=['post'])
-    def send(self, request, pk=None):
-        """Xabar yuborish — JSON yoki multipart. Maydonlar: `text`, `file`, `reply_to_id`, `client_message_id`,
-        ovozli xabar uchun `message_type=voice` + `duration` (+ `waveform`)."""
+    @action(detail=True)
+    def attachments(self, request, pk=None):
+        """Guruh ma'lumotlaridagi "Fayllar" / "Media": `?kind=file|media&page=` (sahifalangan).
+        `media` — rasmlar, `file` — hujjatlar (ovozli xabarlar kirmaydi). Yangilari birinchi."""
+        room = self.get_object()
+        if not selectors.can_read(request.user, room):
+            self.permission_denied(request)
+        kind = request.query_params.get('kind', 'file')
+        if kind not in ('file', 'media'):
+            raise ValidationError({'kind': _("file yoki media bo'lishi kerak.")})
+        rows = (
+            MessageAttachment.objects.filter(message__room=room, message__deleted_at__isnull=True)
+            .exclude(message__hides__user=request.user).exclude(message__message_type=Message.Type.VOICE)
+            .select_related('message', 'message__sender').order_by('-message__created_at', 'order')
+        )
+        rows = rows.filter(mime__startswith='image/') if kind == 'media' else rows.exclude(mime__startswith='image/')
+        page = self.paginate_queryset(rows)
+        data = [_attachment_row(row) for row in page]
+        return self.get_paginated_response(data)
+
+    def _send(self, request, pk):
         data = request.data
+        uploads = [*request.FILES.getlist('files'), *request.FILES.getlist('files[]')]
         message, created = services.send_message_ex(
             user=request.user, room_id=pk, text=data.get('text'),
             reply_to_id=data.get('reply_to_id'), client_message_id=data.get('client_message_id'),
-            upload=request.FILES.get('file'), message_type=str(data.get('message_type') or ''),
+            upload=request.FILES.get('file'), uploads=uploads, message_type=str(data.get('message_type') or ''),
             duration=data.get('duration'), waveform=_waveform(data.get('waveform')), mentions=_mentions(data),
         )
-        room = message.room
-        payload = MessageSerializer(message, context=self._message_context(request, room)).data
+        payload = MessageSerializer(message, context=self._message_context(request, message.room)).data
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    def _post_message(self, request, pk):
+        if str(request.data.get('type') or '') == 'homework':
+            message = services.post_homework_message(
+                user=request.user, room_id=pk, assignment_id=request.data.get('assignment_id'),
+            )
+            payload = MessageSerializer(message, context=self._message_context(request, message.room)).data
+            return Response(payload, status=status.HTTP_201_CREATED)
+        return self._send(request, pk)
+
+    @action(detail=True, methods=['post'])
+    def send(self, request, pk=None):
+        """Xabar yuborish — JSON yoki multipart. Maydonlar: `text`, `file` yoki `files[]` (10 tagacha), `reply_to_id`,
+        `client_message_id`, `mentions`, ovozli xabar uchun `message_type=voice` + `duration` (+ `waveform`)."""
+        return self._send(request, pk)
 
     @action(detail=True, methods=['post'])
     def read(self, request, pk=None):
@@ -223,10 +283,11 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         ))
 
     def partial_update(self, request, pk=None):
-        """Guruh sozlamasi: {"announcement_only": bool} — faqat kurs o'qituvchisi."""
-        if 'announcement_only' not in request.data:
-            raise ValidationError({'announcement_only': _('Maydon kerak.')})
-        value = request.data.get('announcement_only')
+        """Guruh sozlamasi: {"announcement_mode": bool} (eski nomi `announcement_only`) — faqat kurs o'qituvchisi."""
+        key = 'announcement_mode' if 'announcement_mode' in request.data else 'announcement_only'
+        if key not in request.data:
+            raise ValidationError({'announcement_mode': _('Maydon kerak.')})
+        value = request.data.get(key)
         flag = value if isinstance(value, bool) else str(value).lower() in ('1', 'true', 'yes')
         services.set_announcement_only(teacher=request.user, room_id=pk, value=flag)
         return self._room_response(pk)
@@ -355,8 +416,81 @@ def _content_disposition(kind: str, name: str) -> str:
     return f"{kind}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
+def _attachment_row(row) -> dict:
+    message = row.message
+    url = f'/api/v1/chat/attachments/{row.id}/'
+    is_image = row.mime.startswith('image/')
+    return {
+        'id': str(row.id), 'message_id': str(message.id), 'name': row.name, 'mime_type': row.mime, 'size': row.size,
+        'url': url, 'thumbnail_url': f'{url}?thumb=1' if is_image else None, 'page_count': row.page_count,
+        'created_at': message.created_at,
+        'sender': {'id': str(message.sender_id), 'name': message.sender.get_full_name() or message.sender.username},
+    }
+
+
+def _thumbnail(field_file):
+    """Rasm eskizi (320 px, JPEG) — Media ro'yxati va xabar ichida tez ochilishi uchun."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    with field_file.open('rb') as handle:
+        image = Image.open(handle)
+        image.thumbnail((320, 320))
+        buffer = BytesIO()
+        image.convert('RGB').save(buffer, format='JPEG', quality=80)
+    return buffer.getvalue()
+
+
+def _ranged(request, field_file, content_type):
+    match = re.match(r'bytes=(\d*)-(\d*)$', request.headers.get('Range', ''))
+    size = field_file.size
+    if not match or not size or match.groups() == ('', ''):
+        return None
+    first, last = match.groups()
+    if first == '':
+        start, end = max(size - int(last), 0), size - 1
+    else:
+        start, end = int(first), int(last) if last else size - 1
+    end = min(end, size - 1)
+    if start > end or start >= size:
+        response = HttpResponse(status=416)
+        response['Content-Range'] = f'bytes */{size}'
+        return response
+    with field_file.open('rb') as handle:
+        handle.seek(start)
+        chunk = handle.read(end - start + 1)
+    response = HttpResponse(chunk, status=206, content_type=content_type)
+    response['Content-Range'] = f'bytes {start}-{end}/{size}'
+    return response
+
+
+def _serve(request, message, field_file, content_type, name):
+    """Faylni himoyalangan holda beradi (audio uchun Range, rasm uchun `?thumb=1` eskiz)."""
+    if not selectors.can_read(request.user, message.room):
+        raise PermissionDenied(_('Ruxsat yo\'q.'))
+    if not field_file or message.deleted_at is not None or message.hides.filter(user=request.user).exists():
+        raise NotFound(_('Fayl yo\'q.'))
+    if request.query_params.get('thumb') and content_type.startswith('image/'):
+        try:
+            response = HttpResponse(_thumbnail(field_file), content_type='image/jpeg')
+            disposition = _content_disposition('inline', name)
+        except Exception:  # noqa: BLE001 — eskiz chiqmasa asl rasm beriladi
+            response = None
+    else:
+        response = None
+    if response is None:
+        disposition = _content_disposition('inline' if content_type in attachments.INLINE_TYPES else 'attachment', name)
+        response = _ranged(request, field_file, content_type) or FileResponse(field_file.open('rb'), content_type=content_type)
+    response['Content-Disposition'] = disposition
+    response['Cache-Control'] = 'no-store'
+    response['X-Content-Type-Options'] = 'nosniff'
+    response['Accept-Ranges'] = 'bytes'
+    return response
+
+
 class ChatFileView(APIView):
-    """Chat xabariga biriktirilgan faylni himoyalangan holatda beradi (audio uchun Range qo'llab-quvvatlanadi)."""
+    """Xabarning (birinchi) faylini beradi — eski manzil. Hamma biriktirmalar: `attachments/{id}/`."""
 
     permission_classes = [RequirePerm('chat.use')]
 
@@ -365,40 +499,19 @@ class ChatFileView(APIView):
             msg = Message.objects.select_related('room').get(pk=message_id)
         except (Message.DoesNotExist, *services.BAD_ID):
             raise NotFound(_('Xabar topilmadi.'))
-        if not selectors.can_read(request.user, msg.room):
-            raise PermissionDenied(_('Ruxsat yo\'q.'))
-        if not msg.file or msg.deleted_at is not None or msg.hides.filter(user=request.user).exists():
-            raise NotFound(_('Fayl yo\'q.'))
         # eski xabarlarda tur saqlanmagan edi — avvalgidek PDF deb beriladi
         content_type = msg.file_type or 'application/pdf'
-        name = msg.file_name or msg.file.name.split('/')[-1]
-        disposition = _content_disposition('inline' if content_type in attachments.INLINE_TYPES else 'attachment', name)
-        response = self._ranged(request, msg, content_type) or FileResponse(msg.file.open('rb'), content_type=content_type)
-        response['Content-Disposition'] = disposition
-        response['Cache-Control'] = 'no-store'
-        response['X-Content-Type-Options'] = 'nosniff'
-        response['Accept-Ranges'] = 'bytes'
-        return response
+        return _serve(request, msg, msg.file, content_type, msg.file_name or msg.file.name.split('/')[-1])
 
-    @staticmethod
-    def _ranged(request, msg, content_type):
-        match = re.match(r'bytes=(\d*)-(\d*)$', request.headers.get('Range', ''))
-        size = msg.file.size
-        if not match or not size or match.groups() == ('', ''):
-            return None
-        first, last = match.groups()
-        if first == '':
-            start, end = max(size - int(last), 0), size - 1
-        else:
-            start, end = int(first), int(last) if last else size - 1
-        end = min(end, size - 1)
-        if start > end or start >= size:
-            response = HttpResponse(status=416)
-            response['Content-Range'] = f'bytes */{size}'
-            return response
-        with msg.file.open('rb') as handle:
-            handle.seek(start)
-            chunk = handle.read(end - start + 1)
-        response = HttpResponse(chunk, status=206, content_type=content_type)
-        response['Content-Range'] = f'bytes {start}-{end}/{size}'
-        return response
+
+class ChatAttachmentView(APIView):
+    """Bitta biriktirmani beradi (`GET attachments/{id}/`, rasm uchun `?thumb=1`)."""
+
+    permission_classes = [RequirePerm('chat.use')]
+
+    def get(self, request, attachment_id):
+        try:
+            row = MessageAttachment.objects.select_related('message', 'message__room').get(pk=attachment_id)
+        except (MessageAttachment.DoesNotExist, *services.BAD_ID):
+            raise NotFound(_('Fayl topilmadi.'))
+        return _serve(request, row.message, row.file, row.mime or 'application/octet-stream', row.name or row.file.name.split('/')[-1])

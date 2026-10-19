@@ -21,6 +21,7 @@ from django.db.models import (
     ManyToManyField,
     OneToOneField,
     PositiveIntegerField,
+    PositiveSmallIntegerField,
     Q,
     TextChoices,
     TextField,
@@ -201,3 +202,19 @@ class PinnedMessage(TimeStampedUUIDModel):
     class Meta:
         ordering = ['-created_at']
         constraints = [UniqueConstraint(fields=['room', 'message'], name='unique_room_pinned_message')]
+
+
+class MessageAttachment(TimeStampedUUIDModel):
+    """Xabarga biriktirilgan fayl (bitta xabarda bir nechta bo'lishi mumkin). `Message.file*` maydonlari eski mijozlar
+    uchun BIRINCHI biriktirmani aks ettirishda davom etadi."""
+
+    message = ForeignKey('chat.Message', CASCADE, related_name='files')
+    file = FileField(upload_to='chat_files/')
+    name = CharField(max_length=255, blank=True, default='')
+    mime = CharField(max_length=100, blank=True, default='')
+    size = BigIntegerField(default=0)
+    page_count = PositiveIntegerField(null=True, blank=True)
+    order = PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order', 'created_at']

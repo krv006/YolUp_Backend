@@ -17,7 +17,7 @@ from apps.core import audit
 from apps.lessons.models import Course, Enrollment
 
 from . import attachments, presence, realtime, selectors
-from .models import ChatRoom, Message, MessageHide, MessageReaction, PinnedMessage, RoomRead
+from .models import ChatRoom, Message, MessageAttachment, MessageHide, MessageReaction, PinnedMessage, RoomRead
 from .serializers import member_row
 
 logger = logging.getLogger('apps')
@@ -30,6 +30,7 @@ MAX_BULK_DELETE = 100
 MAX_EMOJIS_PER_MESSAGE = 20
 MAX_VOICE_SECONDS = 5 * 60
 MAX_MENTIONS = 20
+MAX_FILES = 10
 MAX_PINS = 20
 MAX_TARGET_ROOMS = 10
 SEARCH_LIMIT = 100
@@ -88,11 +89,11 @@ def _find_reply(room: ChatRoom, reply_to_id):
 
 
 def send_message_ex(
-    *, user: User, room_id, text='', reply_to_id=None, client_message_id='', upload=None,
+    *, user: User, room_id, text='', reply_to_id=None, client_message_id='', upload=None, uploads=None,
     message_type='', duration=None, waveform=None, mentions=None,
 ) -> tuple:
-    """Xabar yuboradi. Qaytaradi: (xabar, yangi_yaratildimi). Bir xil `client_message_id` bilan qayta kelsa —
-    avval yaratilgan xabar qaytadi (yangi_yaratildimi=False) va qayta tarqatilmaydi."""
+    """Xabar yuboradi (matn, bir yoki bir nechta fayl/rasm, ovoz). Qaytaradi: (xabar, yangi_yaratildimi). Bir xil
+    `client_message_id` bilan qayta kelsa — avval yaratilgan xabar qaytadi (yangi_yaratildimi=False) va qayta tarqatilmaydi."""
     room = _get_room(room_id)
     if not selectors.can_write(user, room):
         if room.kind == ChatRoom.Kind.DIRECT and room.direct_status != ChatRoom.DirectStatus.ACTIVE:
@@ -112,29 +113,44 @@ def send_message_ex(
     text = _check_text(text)
     reply = _find_reply(room, reply_to_id)
     mentioned = _find_mentions(room, user, mentions)
-    fields = {}
-    if upload is not None:
-        fields = attachments.inspect_upload(upload, message_type)
-        if fields['message_type'] == Message.Type.VOICE:
-            try:
-                seconds = int(duration)
-            except (TypeError, ValueError):
-                seconds = 0
-            if not 0 < seconds <= MAX_VOICE_SECONDS:
-                raise ValidationError({'duration': _("Ovozli xabar uchun davomiylik shart (1 soniyadan 5 daqiqagacha).")})
-            fields['duration'] = seconds
-            fields['waveform'] = attachments.clean_waveform(waveform)
-    elif message_type == Message.Type.VOICE:
+    files = ([upload] if upload is not None else []) + list(uploads or [])
+    if len(files) > MAX_FILES:
+        raise ValidationError({'files': _("Bir xabarda ko'pi bilan 10 ta fayl.")})
+    if message_type == Message.Type.VOICE and len(files) > 1:
+        raise ValidationError({'file': _('Ovozli xabarga bitta audio fayl biriktiriladi.')})
+    infos = [attachments.inspect_upload(f, message_type if len(files) == 1 else '') for f in files]
+    fields = dict(infos[0]) if infos else {}
+    if infos and infos[0]['message_type'] == Message.Type.VOICE:
+        try:
+            seconds = int(duration)
+        except (TypeError, ValueError):
+            seconds = 0
+        if not 0 < seconds <= MAX_VOICE_SECONDS:
+            raise ValidationError({'duration': _("Ovozli xabar uchun davomiylik shart (1 soniyadan 5 daqiqagacha).")})
+        fields['duration'] = seconds
+        fields['waveform'] = attachments.clean_waveform(waveform)
+    elif len(infos) > 1:  # hammasi rasm bo'lsa — rasm xabari, aks holda fayl xabari
+        all_images = all(info['message_type'] == Message.Type.IMAGE for info in infos)
+        fields['message_type'] = Message.Type.IMAGE if all_images else Message.Type.FILE
+    if not infos and message_type == Message.Type.VOICE:
         raise ValidationError({'file': _('Ovozli xabar uchun audio fayl kerak.')})
-    if not text and upload is None:
+    if not text and not files:
         raise ValidationError({'text': _("Xabar bo'sh bo'lishi mumkin emas.")})
 
     try:
         with transaction.atomic():
             message = Message.objects.create(
                 room=room, sender=user, text=text, reply_to=reply, client_message_id=client_message_id,
-                file=upload if upload is not None else '', **fields,
+                file=files[0] if files else '', **fields,
             )
+            for index, (upload_file, info) in enumerate(zip(files, infos)):
+                MessageAttachment.objects.create(
+                    message=message,
+                    # birinchi fayl allaqachon saqlangan — qayta yuklamaymiz, faqat nomiga ishora qilamiz
+                    file=message.file.name if index == 0 else upload_file,
+                    name=info['file_name'], mime=info['file_type'], size=info['file_size'],
+                    page_count=info['page_count'], order=index,
+                )
             # xona ro'yxatda tepaga chiqsin
             room.save(update_fields=['updated_at'])
             if mentioned:
@@ -201,21 +217,40 @@ def send_message(*, user: User, room_id, text='', **kwargs) -> Message:
     return send_message_ex(user=user, room_id=room_id, text=text, **kwargs)[0]
 
 
+def _create_assignment_card(assignment, sender: User | None = None) -> Message:
+    room = ensure_course_room(assignment.course)
+    message = Message.objects.create(
+        room=room, sender=sender or assignment.course.teacher, text=assignment.title,
+        message_type=Message.Type.ASSIGNMENT, assignment=assignment,
+    )
+    room.save(update_fields=['updated_at'])
+    transaction.on_commit(lambda: realtime.broadcast_message(message))
+    return message
+
+
 def post_assignment_card(assignment) -> Message | None:
     """Vazifa berilganda kurs guruhiga vazifa kartasi (`message_type=assignment`) tushadi. Xato bo'lsa vazifa
     berishni to'xtatmaydi."""
     try:
-        room = ensure_course_room(assignment.course)
-        message = Message.objects.create(
-            room=room, sender=assignment.course.teacher, text=assignment.title,
-            message_type=Message.Type.ASSIGNMENT, assignment=assignment,
-        )
-        room.save(update_fields=['updated_at'])
-        transaction.on_commit(lambda: realtime.broadcast_message(message))
-        return message
+        return _create_assignment_card(assignment)
     except Exception:
         logger.exception('chat: vazifa kartasini yaratib bo\'lmadi (assignment=%s)', getattr(assignment, 'id', None))
         return None
+
+
+@transaction.atomic
+def post_homework_message(*, user: User, room_id, assignment_id) -> Message:
+    """O'qituvchi mavjud vazifani kurs chatiga qo'lda yuboradi (`type=homework`) — masalan eslatma sifatida qayta."""
+    from apps.homework.models import Assignment
+
+    room = _readable_room(user, room_id)
+    if not selectors.is_room_teacher(user, room):
+        raise PermissionDenied(_("Vazifa kartasini faqat kurs o'qituvchisi yuboradi."))
+    try:
+        assignment = Assignment.objects.select_related('course').get(pk=assignment_id, course_id=room.course_id)
+    except (Assignment.DoesNotExist, *BAD_ID):
+        raise ValidationError({'assignment_id': _('Vazifa bu guruhga tegishli emas yoki topilmadi.')}) from None
+    return _create_assignment_card(assignment, sender=user)
 
 
 @transaction.atomic
@@ -398,14 +433,29 @@ def unpin_message(*, user: User, room_id, message_id=None) -> ChatRoom:
     return room
 
 
+@transaction.atomic
 def set_announcement_only(*, teacher: User, room_id, value: bool) -> ChatRoom:
+    """E'lon rejimi (faqat o'qituvchi yozadi). O'zgarsa chatga tizim xabari tushadi."""
     room = _get_room(room_id)
     if not selectors.is_room_teacher(teacher, room):
         raise PermissionDenied(_("Faqat kurs o'qituvchisi e'lon rejimini o'zgartira oladi."))
-    room.announcement_only = bool(value)
+    value = bool(value)
+    changed = room.announcement_only != value
+    room.announcement_only = value
     room.save(update_fields=['announcement_only', 'updated_at'])
-    event = {'type': 'room_updated', 'room': str(room.id), 'announcement_only': room.announcement_only}
+    event = {
+        'type': 'room_updated', 'room': str(room.id), 'announcement_only': value, 'announcement_mode': value,
+        'payload': {'room_id': str(room.id), 'announcement_mode': value, 'announcement_only': value},
+    }
     transaction.on_commit(lambda: realtime.broadcast_event(room.id, event))
+    if changed:
+        notice = Message.objects.create(
+            room=room, sender=teacher, kind=Message.Kind.SYSTEM,
+            system_key='announcement_mode_on' if value else 'announcement_mode_off',
+            text=_("Endi bu guruhda faqat o'qituvchilar yozishi mumkin.") if value
+            else _('Endi bu guruhda hamma yozishi mumkin.'),
+        )
+        transaction.on_commit(lambda: realtime.broadcast_message(notice))
     return room
 
 
@@ -520,6 +570,11 @@ def forward_messages(*, user: User, room_id, message_ids: list) -> list:
             forwarded_from_author_id=source.forwarded_from_author_id or source.sender_id,
             forwarded_from_room=source.forwarded_from_room or source.room_id,
         ))
+        for row in source.files.all():
+            MessageAttachment.objects.create(
+                message=created[-1], file=row.file.name, name=row.name, mime=row.mime, size=row.size,
+                page_count=row.page_count, order=row.order,
+            )
     room.save(update_fields=['updated_at'])
     for message in created:
         transaction.on_commit(lambda m=message: realtime.broadcast_message(m))
@@ -592,17 +647,35 @@ def reaction_list(message: Message, user: User) -> list:
     return [{'emoji': e, 'count': c, 'reacted': e in mine} for e, c in counts.items()]
 
 
-def search_messages(*, user: User, room_id, q: str) -> dict:
+def search_messages(*, user: User, room_id, q: str, limit=None, cursor=None) -> dict:
+    """Qidiruv: `{total, items, next_cursor}`. Yangilari birinchi; `cursor` — oldingi sahifadagi oxirgi xabar id'si
+    (undan eskilari qaytadi). Har natijaning `cursor`i — `?around=` bilan shu xabar atrofini ochish uchun."""
     room = _readable_room(user, room_id)
     q = (q or '').strip()
     if not q:
         raise ValidationError({'q': _("Qidiruv so'zi kerak.")})
+    try:
+        size = max(1, min(int(limit or SEARCH_LIMIT), SEARCH_LIMIT))
+    except (TypeError, ValueError):
+        raise ValidationError({'limit': _("Son bo'lishi kerak.")}) from None
     qs = selectors.visible_messages(room, user).filter(text__icontains=q)
     total = qs.count()
-    rows = qs.order_by('-created_at')[:SEARCH_LIMIT]
+    if cursor:
+        try:
+            anchor = Message.objects.get(pk=cursor, room=room)
+        except (Message.DoesNotExist, *BAD_ID):
+            raise ValidationError({'cursor': _('Xabar bu chatda topilmadi.')}) from None
+        qs = qs.filter(created_at__lt=anchor.created_at)
+    rows = list(qs.order_by('-created_at')[:size + 1])
+    more = len(rows) > size
+    rows = rows[:size]
     return {
         'total': total,
-        'items': [{'id': str(m.id), 'text': m.text, 'created_at': m.created_at} for m in rows],
+        'items': [{
+            'id': str(m.id), 'message_id': str(m.id), 'cursor': str(m.id), 'text': m.text,
+            'created_at': m.created_at, 'sender_name': m.sender.get_full_name() or m.sender.username,
+        } for m in rows],
+        'next_cursor': str(rows[-1].id) if more and rows else None,
     }
 
 

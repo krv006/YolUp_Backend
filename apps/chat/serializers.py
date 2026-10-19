@@ -44,7 +44,10 @@ class MessageSerializer(serializers.ModelSerializer):
     mentions = serializers.SerializerMethodField()
     mentioned_users = serializers.SerializerMethodField()
     attachment = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
     capabilities = serializers.SerializerMethodField()
+    type = serializers.SerializerMethodField()
+    my_submission = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -53,7 +56,8 @@ class MessageSerializer(serializers.ModelSerializer):
             'kind', 'system_key', 'system_params',
             'message_type', 'reply_to', 'client_message_id', 'status', 'edited_at', 'forwarded_from_name',
             'file_name', 'file_type', 'file_size', 'page_count', 'duration', 'waveform',
-            'reactions', 'assignment', 'forwarded_from', 'mentions', 'mentioned_users', 'attachment', 'capabilities',
+            'reactions', 'assignment', 'forwarded_from', 'mentions', 'mentioned_users', 'attachment', 'attachments', 'capabilities',
+            'type', 'my_submission',
         ]
         read_only_fields = ['room', 'sender']
 
@@ -98,6 +102,46 @@ class MessageSerializer(serializers.ModelSerializer):
             data['waveform'] = obj.waveform or []
         return data
 
+    def get_attachments(self, obj) -> list:
+        """Hamma biriktirmalar: `[{id, type, name, mime_type, size, url, thumbnail_url, page_count, (ovoz: duration_ms, waveform)}]`.
+        Eski bitta-fayl xabarlari ham shu shaklda (bitta element) chiqadi."""
+        rows = list(obj.files.all())
+        if not rows:
+            if not obj.file:
+                return []
+            items = [(str(obj.id), obj.file_name or obj.file.name.split('/')[-1], obj.file_type or 'application/pdf',
+                      obj.file_size, f'/api/v1/chat/files/{obj.id}/', obj.page_count)]
+        else:
+            items = [(str(r.id), r.name, r.mime, r.size, f'/api/v1/chat/attachments/{r.id}/', r.page_count) for r in rows]
+        result = []
+        for index, (ident, name, mime, size, url, pages) in enumerate(items):
+            kind = 'image' if mime.startswith('image/') else 'voice' if obj.message_type == Message.Type.VOICE else 'file'
+            data = {
+                'id': ident, 'type': kind, 'name': name, 'mime_type': mime, 'size': size, 'url': url,
+                'thumbnail_url': f'{url}?thumb=1' if kind == 'image' else None, 'page_count': pages,
+            }
+            if kind == 'voice' and index == 0:
+                data['duration_ms'] = (obj.duration or 0) * 1000
+                data['waveform'] = obj.waveform or []
+            result.append(data)
+        return result
+
+    def get_type(self, obj) -> str:
+        """Frontend uchun yagona tur: `text|file|image|voice|homework|system`."""
+        if obj.kind == Message.Kind.SYSTEM:
+            return 'system'
+        return 'homework' if obj.message_type == Message.Type.ASSIGNMENT else obj.message_type
+
+    def get_my_submission(self, obj):
+        """O'quvchi uchun vazifa kartasida: o'zining oxirgi topshirig'i (karta "Topshirildi · sana" ga o'tishi uchun)."""
+        viewer = self.context.get('viewer')
+        if obj.assignment_id is None or viewer is None or viewer.role != 'student':
+            return None
+        from apps.homework.models import Submission
+
+        row = Submission.objects.filter(assignment_id=obj.assignment_id, student=viewer).order_by('-created_at').first()
+        return {'id': str(row.id), 'created_at': row.created_at, 'status': row.status} if row else None
+
     def get_capabilities(self, obj):
         viewer = self.context.get('viewer')
         if viewer is None:
@@ -127,8 +171,12 @@ class MessageSerializer(serializers.ModelSerializer):
         from apps.homework.models import Submission
         from apps.lessons.models import Enrollment
 
+        lesson = assignment.lesson
         return {
-            'id': str(assignment.id), 'title': assignment.title, 'due_at': assignment.due_at,
+            'id': str(assignment.id), 'title': assignment.title, 'description': assignment.description,
+            'due_at': assignment.due_at, 'files_count': 1 if assignment.attachment else 0,
+            'lesson_id': str(lesson.id) if lesson else None,
+            'lesson_title': (lesson.title or lesson.course.title) if lesson else None,
             'submitted_count': Submission.objects.filter(assignment=assignment).values('student').distinct().count(),
             'total_count': Enrollment.objects.filter(
                 course_id=assignment.course_id, status=Enrollment.Status.APPROVED,
@@ -153,11 +201,14 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     last_read_message_id = serializers.SerializerMethodField()
     has_unread_mention = serializers.SerializerMethodField()
     online_count = serializers.SerializerMethodField()
+    announcement_mode = serializers.BooleanField(source='announcement_only', read_only=True)
+    can_write = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
         fields = [
-            'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only',
+            'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only', 'announcement_mode', 'can_write', 'capabilities',
             'title', 'last_message', 'unread', 'unread_count', 'first_unread_message_id',
             'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'pinned_messages', 'last_read_message_id', 'has_unread_mention',
             'online_count', 'updated_at',
@@ -276,6 +327,18 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def get_has_unread_mention(self, obj) -> bool:
         return self._unread_qs(obj).filter(mentions=self.context['request'].user).exists()
 
+    def get_can_write(self, obj) -> bool:
+        return selectors.can_write(self.context['request'].user, obj)
+
+    def get_capabilities(self, obj) -> dict:
+        """Xona darajasidagi huquqlar: yozish, qadash, e'lon rejimini o'zgartirish va boshqalarning xabarini hamma uchun o'chirish."""
+        user = self.context['request'].user
+        teacher = selectors.is_room_teacher(user, obj)
+        return {
+            'write': selectors.can_write(user, obj), 'pin': selectors.can_pin(user, obj),
+            'announcement': teacher, 'delete': teacher,
+        }
+
     def get_online_count(self, obj) -> int:
         return len(presence.online_ids(selectors.member_ids(obj)))
 
@@ -286,6 +349,7 @@ def member_row(user, online: set, request=None) -> dict:
     if user.avatar:
         avatar = request.build_absolute_uri(user.avatar.url) if request else user.avatar.url
     return {
-        'id': str(user.id), 'name': _sender_name(user), 'role': user.role,
-        'is_online': str(user.id) in online, 'avatar_url': avatar,
+        'id': str(user.id), 'name': _sender_name(user), 'username': user.username, 'role': user.role,
+        'is_online': str(user.id) in online, 'avatar_url': avatar, 'avatar': avatar,
+        'last_seen_at': user.last_seen_at,
     }

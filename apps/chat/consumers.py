@@ -190,7 +190,11 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     def _presence(self, user, online: bool):
         from . import presence
 
-        (presence.mark_online if online else presence.mark_offline)(user.id)
+        if online:
+            presence.mark_online(user.id)
+        else:
+            presence.mark_offline(user.id)
+            presence.touch_last_seen(user.id, force=True)
 
     @database_sync_to_async
     def _send_message(self, user, text, reply_to_id=None, client_message_id=''):

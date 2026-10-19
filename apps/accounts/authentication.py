@@ -10,8 +10,11 @@ class SessionJWTAuthentication(JWTAuthentication):
         result = super().authenticate(request)
         if result is None:
             return None
-        _user, token = result
+        user, token = result
         sid = token.get('sid')
         if sid and sessions.is_revoked(sid):
             raise InvalidToken('Seans yopilgan.')
+        from apps.chat import presence
+
+        presence.touch_last_seen(user.id)  # chat a'zolari ro'yxatidagi "oxirgi faollik"
         return result

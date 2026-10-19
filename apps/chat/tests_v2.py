@@ -551,7 +551,8 @@ class GroupScreenTests(ChatV2Base):
         denied = self.api(self.student).post(f'{url}send/', {'text': 'savol'}, format='json')
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(self.api(self.teacher).post(f'{url}send/', {'text': 'E\'lon'}, format='json').status_code, 201)
-        self.assertEqual(len(self.messages(self.student).json()), 1)  # o'qish mumkin
+        # o'qish mumkin: e'lon rejimi yoqilgani haqida tizim xabari + o'qituvchining e'loni
+        self.assertEqual([m['type'] for m in self.messages(self.student).json()], ['system', 'text'])
         self.api(self.teacher).patch(url, {'announcement_only': False}, format='json')
         self.assertEqual(self.api(self.student).post(f'{url}send/', {'text': 'savol'}, format='json').status_code, 201)
 

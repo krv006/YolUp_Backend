@@ -80,6 +80,8 @@ class User(AbstractUser):
     parent_phone = CharField(max_length=20, blank=True, default='')
     # Parol oxirgi marta o'zgartirilgan payt (`POST /auth/password/change/`)
     password_changed_at = DateTimeField(null=True, blank=True)
+    # Oxirgi faollik (autentifikatsiyalangan so'rov yoki chat ulanishi yopilishi) — chat a'zolari ro'yxatida "5 daqiqa oldin"
+    last_seen_at = DateTimeField(null=True, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
