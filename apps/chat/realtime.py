@@ -10,24 +10,41 @@ from asgiref.sync import async_to_sync
 from rest_framework.renderers import JSONRenderer
 
 
+def message_payload(message) -> dict:
+    """Xabarni toza JSON'ga aylantiradi (UUID/datetime) — channel layer payload'i serializable bo'lishi shart."""
+    from .serializers import MessageSerializer
+
+    return json.loads(JSONRenderer().render(MessageSerializer(message).data))
+
+
 def broadcast_message(message) -> None:
     from channels.layers import get_channel_layer
 
     from .consumers import group_name
-    from .serializers import MessageSerializer
 
     layer = get_channel_layer()
     if layer is None:
         return
-    # UUID/datetime kabi qiymatlarni toza JSON'ga aylantiramiz —
-    # channel layer payload'i serializable bo'lishi shart.
     # Chaqiruvchi doim sync kontekstda (view yoki database_sync_to_async
     # worker thread'i) — async_to_sync xavfsiz.
-    payload = json.loads(JSONRenderer().render(MessageSerializer(message).data))
     async_to_sync(layer.group_send)(group_name(message.room_id), {
         'type': 'chat.message',
-        'message': payload,
+        'message': message_payload(message),
     })
+
+
+def broadcast_event(room_id, event: dict) -> None:
+    """Xonadagi hammaga umumiy hodisa (`read`, `message_updated`, `message_deleted`, `pinned`, `reaction`,
+    `room_updated`) — `event['type']` o'zi mijozga boradi."""
+    from channels.layers import get_channel_layer
+
+    from .consumers import group_name
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    safe = json.loads(JSONRenderer().render(event))
+    async_to_sync(layer.group_send)(group_name(room_id), {'type': 'chat.event', 'event': safe})
 
 
 def _course_room_group(course_id):

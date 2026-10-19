@@ -104,6 +104,11 @@ def mark_read(*, user: User, notification_id) -> NotificationRecipient:
     return recipient
 
 
+def mark_all_read(*, user: User) -> int:
+    """Foydalanuvchining hamma o'qilmagan bildirishnomasini o'qilgan deb belgilaydi. Qaytaradi: nechtasi."""
+    return NotificationRecipient.objects.filter(user=user, read_at__isnull=True).update(read_at=timezone.now())
+
+
 # ── Web Push — ilova/tab yopiq bo'lganda ham bildirishnoma ─────────────────
 
 def save_push_subscription(*, user: User, endpoint: str, p256dh: str, auth: str) -> PushSubscription:

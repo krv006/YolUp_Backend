@@ -8,6 +8,9 @@ Qoidalar:
 """
 from django.db.models import (
     CASCADE,
+    SET_NULL,
+    BigIntegerField,
+    BooleanField,
     CharField,
     DateTimeField,
     FileField,
@@ -16,6 +19,7 @@ from django.db.models import (
     Index,
     JSONField,
     OneToOneField,
+    PositiveIntegerField,
     Q,
     TextChoices,
     TextField,
@@ -52,6 +56,10 @@ class ChatRoom(TimeStampedUUIDModel):
     )
     # kind=COURSE guruh rasmi — faqat o'qituvchi o'zgartira oladi
     image = ImageField(upload_to='group_images/', null=True, blank=True)
+    # Chat tepasida qadalgan xabar — hamma a'zoga ko'rinadi (guruhda faqat o'qituvchi qadaydi)
+    pinned_message = ForeignKey('chat.Message', SET_NULL, null=True, blank=True, related_name='+')
+    # E'lon rejimi: true bo'lsa guruhga faqat o'qituvchi yozadi
+    announcement_only = BooleanField(default=False)
 
     class Meta:
         ordering = ['-updated_at']
@@ -96,9 +104,44 @@ class Message(TimeStampedUUIDModel):
     system_key = CharField(max_length=64, blank=True, default='')
     system_params = JSONField(blank=True, default=dict)
 
+    class Type(TextChoices):
+        TEXT = 'text', 'Matn'
+        FILE = 'file', 'Fayl'
+        IMAGE = 'image', 'Rasm'
+        VOICE = 'voice', 'Ovozli xabar'
+        ASSIGNMENT = 'assignment', 'Vazifa kartasi'
+
+    # Ko'rinishi (kind = kim yozgan: foydalanuvchi/tizim; message_type = ichi nima)
+    message_type = CharField(max_length=12, choices=Type.choices, default=Type.TEXT)
+    # Javob berilgan xabar (matn ichiga yozilgan `↪` hack'i o'rniga)
+    reply_to = ForeignKey('self', SET_NULL, null=True, blank=True, related_name='replies')
+    # Qayta yuborishda (internet uzilsa) xabar ikki marta tushmasligi uchun client UUID'si
+    client_message_id = CharField(max_length=64, blank=True, default='')
+    # Fayl haqida (hajm va sahifalar soni dizaynda ko'rsatiladi)
+    file_name = CharField(max_length=255, blank=True, default='')
+    file_type = CharField(max_length=100, blank=True, default='')
+    file_size = BigIntegerField(default=0)
+    page_count = PositiveIntegerField(null=True, blank=True)
+    # Ovozli xabar
+    duration = PositiveIntegerField(null=True, blank=True)
+    waveform = JSONField(blank=True, default=list)
+    # Tahrirlash / hamma uchun o'chirish / uzatish
+    edited_at = DateTimeField(null=True, blank=True)
+    deleted_at = DateTimeField(null=True, blank=True)
+    forwarded_from_name = CharField(max_length=150, blank=True, default='')
+    # Chatdagi vazifa kartasi
+    assignment = ForeignKey('homework.Assignment', SET_NULL, null=True, blank=True, related_name='chat_messages')
+
     class Meta:
         ordering = ['created_at']
         indexes = [Index(fields=['room', 'created_at'])]
+        constraints = [
+            UniqueConstraint(
+                fields=['room', 'sender', 'client_message_id'],
+                condition=~Q(client_message_id=''),
+                name='unique_message_client_id',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.sender.username}: {self.text[:40]}'
@@ -110,8 +153,32 @@ class RoomRead(TimeStampedUUIDModel):
     room = ForeignKey('chat.ChatRoom', CASCADE, related_name='reads')
     user = ForeignKey('accounts.User', CASCADE, related_name='chat_reads')
     last_read_at = DateTimeField()
+    # Foydalanuvchining shu suhbatga nisbatan shaxsiy holati (faqat o'zi ko'radi)
+    is_pinned = BooleanField(default=False)
+    muted = BooleanField(default=False)
+    muted_until = DateTimeField(null=True, blank=True)  # muted va bu bo'sh = doim ovozsiz
+    hidden_at = DateTimeField(null=True, blank=True)  # "suhbatni o'chirish": yangi xabar kelguncha ro'yxatda yo'q
 
     class Meta:
         constraints = [
             UniqueConstraint(fields=['room', 'user'], name='unique_room_user_read'),
         ]
+
+
+class MessageHide(TimeStampedUUIDModel):
+    """"Men uchun o'chirish" — xabar faqat shu foydalanuvchiga ko'rinmaydi."""
+
+    message = ForeignKey('chat.Message', CASCADE, related_name='hides')
+    user = ForeignKey('accounts.User', CASCADE, related_name='hidden_chat_messages')
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['message', 'user'], name='unique_message_hide')]
+
+
+class MessageReaction(TimeStampedUUIDModel):
+    message = ForeignKey('chat.Message', CASCADE, related_name='reactions')
+    user = ForeignKey('accounts.User', CASCADE, related_name='chat_reactions')
+    emoji = CharField(max_length=16)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['message', 'user', 'emoji'], name='unique_message_reaction')]

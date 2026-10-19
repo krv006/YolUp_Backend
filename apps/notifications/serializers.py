@@ -5,14 +5,40 @@ from apps.accounts.serializers import UserSerializer
 from .models import Notification, NotificationRecipient, PushDevice
 
 
+CATEGORIES = (
+    'assignment', 'submission', 'lesson_reminder', 'member_joined', 'mention', 'payment', 'announcement',
+)
+
+
+def category_of(kind: str, link_type: str = '') -> str:
+    """Frontend ikonka tanlashi uchun barqaror tur: `kind` ichki va ko'p (yangilari qo'shilaveradi),
+    `category` esa doim yuqoridagi 7 tadan biri."""
+    kind = kind or ''
+    if kind in CATEGORIES:
+        return kind
+    if kind.startswith(('new_assignment', 'deadline')) or link_type == 'assignment':
+        return 'assignment'
+    if kind.startswith('homework_') or link_type == 'submission':
+        return 'submission'
+    if kind.startswith('payment'):
+        return 'payment'
+    return 'announcement'
+
+
 class NotificationSerializer(serializers.ModelSerializer):
     """Xabarning o'zi — sender + matn (inbox va WS push uchun ham ishlatiladi)."""
 
     sender = UserSerializer(read_only=True)
+    category = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
-        fields = ['id', 'sender', 'description', 'target_type', 'kind', 'link_type', 'link_id', 'created_at']
+        fields = [
+            'id', 'sender', 'description', 'target_type', 'kind', 'category', 'link_type', 'link_id', 'created_at',
+        ]
+
+    def get_category(self, obj) -> str:
+        return category_of(obj.kind, obj.link_type)
 
 
 class InboxItemSerializer(serializers.ModelSerializer):

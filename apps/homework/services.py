@@ -244,6 +244,9 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
         extra_instructions=(extra_instructions or '').strip(),
     )
     _notify_new_assignment(assignment)
+    from apps.chat.services import post_assignment_card
+
+    post_assignment_card(assignment)  # kurs chatida vazifa kartasi
     return _assignment_dict(assignment)
 
 

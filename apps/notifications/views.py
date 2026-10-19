@@ -73,6 +73,11 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         services.mark_read(user=request.user, notification_id=pk)
         return Response({'ok': True})
 
+    @action(detail=False, methods=['post'], url_path='read-all')
+    def read_all(self, request):
+        """Hamma o'qilmagan bildirishnomani bitta so'rovda o'qilgan deb belgilaydi."""
+        return Response({'updated': services.mark_all_read(user=request.user)})
+
     @action(detail=False, url_path='unread-count')
     def unread_count(self, request):
         return Response({'count': selectors.unread_count(request.user)})
