@@ -2,6 +2,7 @@
 import logging
 import uuid
 from datetime import timedelta
+from datetime import timezone as dt_timezone
 
 from django.conf import settings
 from django.db import transaction
@@ -896,42 +897,75 @@ AUDIO_CHUNK_MAX_MB = 10  # 30-60s audio uchun me'yordan ancha katta — xato/sui
 VIDEO_CHUNK_MAX_MB = 50  # 30-60s ekran video uchun me'yordan ancha katta
 
 
-def upload_recording_audio_chunk(*, teacher: User, lesson: Lesson, chunk, started_at: str | None = None) -> None:
-    """Brauzerdan kelgan audio bo'lagini yozuv fayliga qo'shib boradi.
+def _append_chunk(*, kind: str, teacher: User, lesson: Lesson, chunk, started_at, session, index) -> bool:
+    """Audio/video bo'lagini yozuv fayliga qo'shib boradi. `kind` — 'audio' | 'video'.
 
-    Format brauzer tomonidan belgilanadi (masalan webm/opus) — server hech
-    narsani qayta kodlamaydi, faqat bo'laklarni ketma-ket qo'shadi
-    (MediaRecorder'ning bir xil sessiyadagi ondataavailable bo'laklari shu
-    tartibda qo'shilsa, yaroqli yagona oqim hosil bo'ladi)."""
+    Takror yuborishdan himoya: brauzer `session` (yozuv sessiyasi id'si) va `index` (shu sessiyadagi 0 dan boshlanuvchi
+    tartib raqami) yuborsa, allaqachon yozilgan raqam (`index < kutilgan`) qayta YOZILMAYDI — javob yo'qolib qayta
+    yuborilgan bo'lak faylni buzmaydi. Yangi `session` (sahifa qayta ochilgan, yozuv qayta boshlangan) — yangi hisob.
+    Ikkalasi ham berilmasa (eski mijoz) — avvalgidek shunchaki qo'shiladi. Qator qulflanadi: bir vaqtda kelgan ikki so'rov
+    fayl ichida aralashib ketmaydi. Qaytaradi: bo'lak yozildimi (False — takror edi)."""
     from django.conf import settings
+    from django.db import transaction
     from django.utils.dateparse import parse_datetime
 
     from .models import LessonRecording
 
+    label = {'audio': 'audio', 'video': 'video'}[kind]
+    max_mb = AUDIO_CHUNK_MAX_MB if kind == 'audio' else VIDEO_CHUNK_MAX_MB
     if lesson.course.teacher_id != teacher.id:
-        raise PermissionDenied(_("Faqat kurs o'qituvchisi audio yuklashi mumkin."))
-    if chunk.size > AUDIO_CHUNK_MAX_MB * 1024 * 1024:
-        raise ValidationError({
-            'chunk': _("Bo'lak %(max_mb)s MB dan katta.") % {'max_mb': AUDIO_CHUNK_MAX_MB},
-        })
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi %(what)s yuklashi mumkin.") % {'what': label})
+    if chunk.size > max_mb * 1024 * 1024:
+        raise ValidationError({'chunk': _("Bo'lak %(max_mb)s MB dan katta.") % {'max_mb': max_mb}})
+    session = (session or '').strip()[:64]
+    if index is not None:
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            raise ValidationError({'index': _("Butun son bo'lishi kerak.")}) from None
+        if index < 0:
+            raise ValidationError({'index': _("Manfiy bo'lishi mumkin emas.")})
 
-    recording, _created = LessonRecording.objects.get_or_create(lesson=lesson)
-    if not recording.audio_file_name:
-        parsed = parse_datetime(started_at) if started_at else None
-        if parsed and timezone.is_naive(parsed):
-            parsed = timezone.make_aware(parsed, timezone.utc)
-        recording.audio_file_name = f'{lesson.room_name}-audio.webm'
-        recording.audio_started_at = parsed or timezone.now()
-        fields = ['audio_file_name', 'audio_started_at', 'updated_at']
-        if recording.status == LessonRecording.Status.PENDING:
-            recording.status = LessonRecording.Status.RECORDING
-            fields.append('status')
-        recording.save(update_fields=fields)
+    file_field, started_field = f'{kind}_file_name', f'{kind}_started_at'
+    session_field, next_field = f'{kind}_session', f'{kind}_next_index'
+    with transaction.atomic():
+        recording, _created = LessonRecording.objects.select_for_update().get_or_create(lesson=lesson)
+        fields = []
+        if not getattr(recording, file_field):
+            parsed = parse_datetime(started_at) if started_at else None
+            if parsed and timezone.is_naive(parsed):
+                parsed = timezone.make_aware(parsed, dt_timezone.utc)
+            setattr(recording, file_field, f'{lesson.room_name}-{kind}.webm')
+            setattr(recording, started_field, parsed or timezone.now())
+            fields += [file_field, started_field]
+            if recording.status == LessonRecording.Status.PENDING:
+                recording.status = LessonRecording.Status.RECORDING
+                fields.append('status')
+        if session and index is not None:
+            if getattr(recording, session_field) == session:
+                if index < getattr(recording, next_field):
+                    return False  # allaqachon yozilgan bo'lak qayta kelgan — jim o'tkazamiz
+            else:
+                setattr(recording, session_field, session)
+                fields.append(session_field)
+            setattr(recording, next_field, index + 1)
+            fields.append(next_field)
+        if fields:
+            recording.save(update_fields=[*fields, 'updated_at'])
+        path = settings.RECORDINGS_DIR / getattr(recording, file_field)
+        with open(path, 'ab') as handle:
+            for part in chunk.chunks():
+                handle.write(part)
+    return True
 
-    path = settings.RECORDINGS_DIR / recording.audio_file_name
-    with open(path, 'ab') as f:
-        for part in chunk.chunks():
-            f.write(part)
+
+def upload_recording_audio_chunk(*, teacher: User, lesson: Lesson, chunk, started_at: str | None = None,
+                                 session=None, index=None) -> bool:
+    """Brauzerdan kelgan audio bo'lagini yozuv fayliga qo'shib boradi (format brauzer tomonidan belgilanadi, server
+    hech narsani qayta kodlamaydi). `session`/`index` — takrorlanishdan himoya (qarang `_append_chunk`)."""
+    return _append_chunk(
+        kind='audio', teacher=teacher, lesson=lesson, chunk=chunk, started_at=started_at, session=session, index=index,
+    )
 
 
 def finalize_recording_audio(*, teacher: User, lesson: Lesson) -> None:
@@ -951,39 +985,13 @@ def finalize_recording_audio(*, teacher: User, lesson: Lesson) -> None:
     live_services.maybe_start_merge(lesson.id)
 
 
-def upload_recording_video_chunk(*, teacher: User, lesson: Lesson, chunk, started_at: str | None = None) -> None:
-    """Brauzerdan (ekran/`getDisplayMedia`) kelgan video bo'lagini yozuv
-    fayliga qo'shib boradi — `upload_recording_audio_chunk` bilan bir xil
-    naqsh."""
-    from django.conf import settings
-    from django.utils.dateparse import parse_datetime
-
-    from .models import LessonRecording
-
-    if lesson.course.teacher_id != teacher.id:
-        raise PermissionDenied(_("Faqat kurs o'qituvchisi video yuklashi mumkin."))
-    if chunk.size > VIDEO_CHUNK_MAX_MB * 1024 * 1024:
-        raise ValidationError({
-            'chunk': _("Bo'lak %(max_mb)s MB dan katta.") % {'max_mb': VIDEO_CHUNK_MAX_MB},
-        })
-
-    recording, _created = LessonRecording.objects.get_or_create(lesson=lesson)
-    if not recording.video_file_name:
-        parsed = parse_datetime(started_at) if started_at else None
-        if parsed and timezone.is_naive(parsed):
-            parsed = timezone.make_aware(parsed, timezone.utc)
-        recording.video_file_name = f'{lesson.room_name}-video.webm'
-        recording.video_started_at = parsed or timezone.now()
-        fields = ['video_file_name', 'video_started_at', 'updated_at']
-        if recording.status == LessonRecording.Status.PENDING:
-            recording.status = LessonRecording.Status.RECORDING
-            fields.append('status')
-        recording.save(update_fields=fields)
-
-    path = settings.RECORDINGS_DIR / recording.video_file_name
-    with open(path, 'ab') as f:
-        for part in chunk.chunks():
-            f.write(part)
+def upload_recording_video_chunk(*, teacher: User, lesson: Lesson, chunk, started_at: str | None = None,
+                                 session=None, index=None) -> bool:
+    """Brauzerdan (ekran/`getDisplayMedia`) kelgan video bo'lagini yozuv fayliga qo'shib boradi —
+    `upload_recording_audio_chunk` bilan bir xil naqsh va himoya."""
+    return _append_chunk(
+        kind='video', teacher=teacher, lesson=lesson, chunk=chunk, started_at=started_at, session=session, index=index,
+    )
 
 
 def finalize_recording_video(*, teacher: User, lesson: Lesson) -> None:

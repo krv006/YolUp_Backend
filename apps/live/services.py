@@ -893,6 +893,86 @@ def maybe_start_merge(lesson_id) -> None:
     _merge_executor.submit(_run_merge_in_pool, recording.pk)
 
 
+MERGE_MAX_ATTEMPTS = 3
+MERGE_STUCK_AFTER = timedelta(minutes=20)  # `MERGING` shundan uzoq tursa — merge jarayoni o'lgan (masalan deploy)
+FILE_IDLE_AFTER = timedelta(minutes=5)     # fayl shuncha vaqt o'zgarmagan bo'lsa — yuklash tugagan
+
+
+def _usable(path) -> bool:
+    return bool(path) and path.exists() and path.stat().st_size > 0
+
+
+def recover_recordings(*, now=None, limit: int = 3) -> dict:
+    """Qotib qolgan yoki xato bilan tugagan yozuvlarni (xom fayllari diskda bo'lsa) qayta birlashtiradi.
+
+    Sabablar: merge jarayoni deploy/qayta ishga tushish paytida o'ldi (`MERGING`da qolib, keyin `FAILED` bo'ldi);
+    o'qituvchi brauzeri "tugadi" demasdan yopilib qoldi. Qoidalar: faqat YAKUNLANGAN dars, har yozuvga ko'pi bilan
+    `MERGE_MAX_ATTEMPTS` urinish, fayllar `FILE_IDLE_AFTER` dan beri o'zgarmagan bo'lishi kerak, har ishga tushishda ko'pi
+    bilan `limit` ta yozuv (server yuklanmasligi uchun). Birlashtirish odatdagidek `-c copy` (qayta kodlashsiz — yengil).
+    Qaytaradi: `{merged, single, repaired, skipped}`."""
+    import logging
+
+    from django.db.models import F, Q
+
+    from apps.lessons.models import LessonRecording
+
+    now = now or timezone.now()
+    report = {'merged': 0, 'single': 0, 'repaired': 0, 'skipped': 0}
+    candidates = (
+        LessonRecording.objects.select_related('lesson')
+        .filter(lesson__status=Lesson.Status.FINISHED, merge_attempts__lt=MERGE_MAX_ATTEMPTS)
+        .filter(
+            Q(status=LessonRecording.Status.MERGING, updated_at__lt=now - MERGE_STUCK_AFTER)
+            | Q(status=LessonRecording.Status.FAILED)
+        )
+        .order_by('updated_at')[:limit * 4]
+    )
+    for recording in candidates:
+        if sum(report[k] for k in ('merged', 'single', 'repaired')) >= limit:
+            break
+        root = settings.RECORDINGS_DIR
+        video = root / recording.video_file_name if recording.video_file_name else None
+        audio = root / recording.audio_file_name if recording.audio_file_name else None
+        final = root / recording.file_name if recording.file_name else None
+        # Yakuniy fayl bor, faqat holat noto'g'ri qolgan — shunchaki to'g'rilaymiz
+        if _usable(final):
+            LessonRecording.objects.filter(pk=recording.pk).update(status=LessonRecording.Status.COMPLETED, error='')
+            report['repaired'] += 1
+            continue
+        has_video, has_audio = _usable(video), _usable(audio)
+        if not (has_video or has_audio):
+            report['skipped'] += 1
+            continue
+        idle_cutoff = now.timestamp() - FILE_IDLE_AFTER.total_seconds()
+        if any(p.stat().st_mtime > idle_cutoff for p in (video, audio) if _usable(p)):
+            report['skipped'] += 1  # fayl hali yangilanyapti — o'qituvchi hamon yuklayotgan bo'lishi mumkin
+            continue
+        claimed = LessonRecording.objects.filter(pk=recording.pk, status=recording.status, merge_attempts=recording.merge_attempts).update(
+            merge_attempts=F('merge_attempts') + 1, error='',
+        )
+        if not claimed:
+            continue  # boshqa jarayon allaqachon oldi
+        logging.getLogger('apps').warning(
+            'recording %s qayta tiklanmoqda (urinish %d, holat %s)', recording.pk, recording.merge_attempts + 1, recording.status,
+        )
+        if has_video and has_audio:
+            LessonRecording.objects.filter(pk=recording.pk).update(
+                status=LessonRecording.Status.MERGING,
+                video_ready_at=recording.video_ready_at or now, audio_finalized_at=recording.audio_finalized_at or now,
+            )
+            _merge_recording(recording.pk)
+            report['merged'] += 1
+        else:
+            # Faqat bitta tomon fayli bor: yo'q tomonning nomini tozalab, mavjudi bilan yakunlaymiz
+            LessonRecording.objects.filter(pk=recording.pk).update(
+                status=LessonRecording.Status.RECORDING,
+                **({'audio_file_name': ''} if not has_audio else {'video_file_name': ''}),
+            )
+            finalize_single_side(recording.lesson_id)
+            report['single'] += 1
+    return report
+
+
 def finalize_single_side(lesson_id) -> None:
     """Video YOKI audiodan faqat BITTASI keladi, ikkinchisi HECH QACHON
     kelmaydi (brauzer qulab qolgan, ruxsat berilmagan va h.k.) — mavjud

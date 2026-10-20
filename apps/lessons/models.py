@@ -251,6 +251,15 @@ class LessonRecording(TimeStampedUUIDModel):
     audio_started_at = DateTimeField(null=True, blank=True)  # brauzer yuborgan, birinchi chunk'da
     audio_finalized_at = DateTimeField(null=True, blank=True)  # o'qituvchi "tugadi" deb belgiladi
 
+    # ── Bo'laklar tartibi (takror yuborishdan himoya): brauzer yozuv sessiyasi (`session`) va bo'lak raqami (`index`)
+    # yuboradi; server har sessiyada keyingi kutilgan raqamni saqlaydi. Eski mijoz ularni yubormasa — oddiy qo'shish.
+    audio_session = CharField(max_length=64, blank=True)
+    audio_next_index = PositiveIntegerField(default=0)
+    video_session = CharField(max_length=64, blank=True)
+    video_next_index = PositiveIntegerField(default=0)
+    # `recover_recordings` (cron) shu yozuvni necha marta qayta birlashtirishga urindi (cheksiz takrorlamaslik uchun)
+    merge_attempts = PositiveSmallIntegerField(default=0)
+
     class Meta:
         ordering = ['-created_at']
 

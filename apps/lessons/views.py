@@ -377,6 +377,7 @@ class LessonViewSet(viewsets.ModelViewSet):
         services.upload_recording_audio_chunk(
             teacher=request.user, lesson=lesson, chunk=chunk,
             started_at=request.data.get('started_at') or None,
+            session=request.data.get('session'), index=request.data.get('index'),
         )
         return Response(status=204)
 
@@ -402,6 +403,7 @@ class LessonViewSet(viewsets.ModelViewSet):
         services.upload_recording_video_chunk(
             teacher=request.user, lesson=lesson, chunk=chunk,
             started_at=request.data.get('started_at') or None,
+            session=request.data.get('session'), index=request.data.get('index'),
         )
         return Response(status=204)
 

@@ -114,6 +114,7 @@ services:
       sh -c "sleep 30 &&
              (while true; do
                python manage.py auto_finish_expired_lessons;
+               python manage.py recover_recordings;
                python manage.py send_deadline_reminders;
                python manage.py close_stale_voice_rooms;
                sleep 300;
