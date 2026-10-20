@@ -7,12 +7,14 @@ from django.db.models import (
     CharField,
     DateTimeField,
     ForeignKey,
+    JSONField,
     OneToOneField,
     PositiveIntegerField,
     PositiveSmallIntegerField,
     TextChoices,
     TextField,
     UniqueConstraint,
+    UUIDField,
 )
 from django.utils.translation import gettext_lazy as _
 
@@ -61,6 +63,10 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
     is_active = BooleanField(default=True)
     # Guruh kartasi va to'lov hisoboti uchun: haftasiga nechta dars va oylik to'lov (so'mda). Ixtiyoriy.
     lessons_per_week = PositiveSmallIntegerField(null=True, blank=True)
+    # Taklif havolasi (`/courses/{id}/invite-link/`): kod, muddat va qo'shilish tasdiq talab qiladimi
+    invite_code = CharField(max_length=12, unique=True, null=True, blank=True)
+    invite_expires_at = DateTimeField(null=True, blank=True)
+    invite_requires_approval = BooleanField(default=False)
     monthly_fee = PositiveIntegerField(null=True, blank=True)
 
     class Meta:
@@ -113,6 +119,12 @@ class Lesson(TimeStampedUUIDModel, SoftDeleteModel):
     # shundan hisoblaydi, aks holda kech boshlangan dars darhol "tugagan"
     # deb topilib, hali davom etayotgan safar o'rtada uzilib qolardi.
     live_started_at = DateTimeField(null=True, blank=True)
+    # O'qituvchining dars haqidagi izohi (mavzu `title`dan alohida)
+    note = TextField(blank=True, default='')
+    # Takrorlanuvchi dars: `{freq: 'weekly', weeks: 8, weekdays: [0, 2]}` (hafta kunlari 0=dushanba … 6=yakshanba) va
+    # bitta seriyadagi hamma darsni bog'laydigan `recurrence_id`
+    recurrence = JSONField(null=True, blank=True)
+    recurrence_id = UUIDField(null=True, blank=True, db_index=True)
     # LiveKit room name — unique per lesson, generated once.
     room_name = CharField(max_length=64, unique=True, editable=False)
 

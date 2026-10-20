@@ -104,9 +104,9 @@ class MeSerializer(UserSerializer):
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
             'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
-            'parent_phone', 'password_changed_at',
+            'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
         ]
-        read_only_fields = UserSerializer.Meta.read_only_fields + ['parent_phone', 'password_changed_at']
+        read_only_fields = UserSerializer.Meta.read_only_fields + ['parent_phone', 'password_changed_at', 'two_factor_enabled']
 
     def validate_email(self, value):
         return (value or '').strip().lower()
@@ -164,6 +164,20 @@ class ChildCreateSerializer(serializers.ModelSerializer):
 
     def validate_parent_phone(self, value):
         return clean_phone(value)
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=32)
+
+
+class PasswordResetVerifySerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=32)
+    code = serializers.CharField(max_length=10)
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    reset_token = serializers.CharField(max_length=200)
+    password = serializers.CharField(write_only=True)
 
 
 class PasswordChangeSerializer(serializers.Serializer):

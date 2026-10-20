@@ -24,11 +24,13 @@ class Notification(TimeStampedUUIDModel):
     class Target(TextChoices):
         USER = 'user', 'Bitta foydalanuvchi'
         ALL = 'all', 'Hammaga'
+        USERS = 'users', 'Bir nechta foydalanuvchi'  # `user_ids` ro'yxati
+        PARENTS_OF = 'parents_of', "O'quvchilarning ota-onalari"  # `user_ids` — o'quvchilar
 
     sender = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='sent_notifications')
     # Admin CKEditor'da yozgan matn — server tomonda tozalangan (sanitize) HTML
     description = TextField()
-    target_type = CharField(max_length=8, choices=Target.choices)
+    target_type = CharField(max_length=12, choices=Target.choices)
     # Xabar turi — frontend matnni tahlil qilmasdan, shunga qarab alohida
     # ikonka/rang ko'rsatishi uchun (masalan "lesson_reminder",
     # "new_assignment", "deadline_halfway", "deadline_1h"). Ataylab qattiq

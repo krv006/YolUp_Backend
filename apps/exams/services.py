@@ -569,6 +569,42 @@ def list_results(*, user: User, exam: Exam) -> dict:
     }
 
 
+SHARE_LIMIT = 3900
+
+
+def share_results(*, teacher: User, exam: Exam, to: str = 'group_chat') -> dict:
+    """Imtihon natijalari jadvalini guruh chatiga o'qituvchi xabari sifatida yuboradi. Imtihon tugagan bo'lishi shart."""
+    from apps.chat import services as chat_services
+
+    if not _is_owner(exam, teacher):
+        raise PermissionDenied(_('Bu imtihon sizga tegishli emas.'))
+    if to != 'group_chat':
+        raise ValidationError({'to': _("Hozircha faqat 'group_chat'.")})
+    if exam_state(exam) != 'finished':
+        raise ValidationError({'detail': _("Natijalar imtihon tugagach ulashiladi.")})
+    listing = list_results(user=teacher, exam=exam)
+    rows = []
+    for item in listing['results']:
+        student = item['student']
+        name = student['name']
+        if not item.get('participated'):
+            score = _('qatnashmadi')
+        elif item.get('total'):
+            score = f"{item['total']['score']:g}/{item['total']['max']:g}"
+        else:
+            score = _('hisoblanmoqda')
+        rows.append((name, str(score)))
+    rows.sort(key=lambda row: row[0].lower())
+    lines = [f'📊 «{exam.title}» natijalari']
+    lines += [f'{index}. {name} — {score}' for index, (name, score) in enumerate(rows, 1)]
+    text = '\n'.join(lines)
+    if len(text) > SHARE_LIMIT:
+        text = text[:SHARE_LIMIT].rsplit('\n', 1)[0] + '\n…'
+    room = chat_services.ensure_course_room(exam.course)
+    message = chat_services.send_message(user=teacher, room_id=room.id, text=text)
+    return {'ok': True, 'message_id': str(message.id), 'students': len(rows)}
+
+
 def student_detail(*, user: User, exam: Exam, student_id) -> dict:
     listing = list_results(user=user, exam=exam)
     for item in listing['results']:

@@ -26,6 +26,9 @@ from .serializers import (
     LinkSerializer,
     MeSerializer,
     PasswordChangeSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetVerifySerializer,
     RegisterSerializer,
     UserSerializer,
 )
@@ -59,8 +62,8 @@ class LoginView(TokenObtainPairView):
 
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        if response.status_code != 200:
-            return response
+        if response.status_code != 200 or 'access' not in response.data:
+            return response  # 2FA yoqilgan bo'lsa bu yerda hali token yo'q — `two_factor_required`
 
         from .models import User
 
@@ -199,6 +202,97 @@ class PasswordChangeView(APIView):
         )
         # /auth/me/ dagi bilan bir xil ko'rinishda (vaqt mintaqasi)
         return Response({'password_changed_at': serializers.DateTimeField().to_representation(changed_at)})
+
+
+class PasswordResetRequestView(APIView):
+    """Parolni tiklash, 1-qadam: `{phone}` -> SMS kod. Javob `{sent, expires_in, retry_after}`; raqam topilmasa 404;
+    juda tez qayta so'ralsa 429 (`retry_after`); SMS provayder ulanmagan bo'lsa 503."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(services.password_reset_request(phone=serializer.validated_data['phone'], request=request))
+
+
+class PasswordResetVerifyView(APIView):
+    """2-qadam: `{phone, code}` -> `{reset_token, expires_in}` (bir martalik token)."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordResetVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(services.password_reset_verify(**serializer.validated_data))
+
+
+class PasswordResetConfirmView(APIView):
+    """3-qadam: `{reset_token, password}` -> `{ok: true}`. Shu telefondagi akkauntlar paroli yangilanadi, hamma seans yopiladi."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(services.password_reset_confirm(request=request, **serializer.validated_data))
+
+
+class TwoFactorView(APIView):
+    """`GET /auth/2fa/` -> `{enabled}`."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({'enabled': request.user.two_factor_enabled})
+
+
+class TwoFactorEnableView(APIView):
+    """`{password}` -> SMS kod yuboriladi (`{sent, expires_in, retry_after}`)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.two_factor_enable(user=request.user, password=request.data.get('password')))
+
+
+class TwoFactorConfirmView(APIView):
+    """`{code}` -> `{enabled: true}`."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.two_factor_confirm(user=request.user, code=request.data.get('code'), request=request))
+
+
+class TwoFactorDisableView(APIView):
+    """`{password}` -> `{enabled: false}`."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.two_factor_disable(user=request.user, password=request.data.get('password'), request=request))
+
+
+class TwoFactorLoginView(APIView):
+    """Loginning 2-bosqichi: `{challenge_token, code}` -> `{access, refresh}` (odatiy login javobi bilan bir xil)."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        user = services.two_factor_login(
+            challenge_token=request.data.get('challenge_token') or '', code=request.data.get('code'), request=request,
+        )
+        refresh = sessions.issue_refresh(user, request)
+        services.record_login(user=user, request=request)
+        return Response({'access': str(refresh.access_token), 'refresh': str(refresh)})
 
 
 class SwitchAccountView(APIView):

@@ -83,6 +83,29 @@ class RequestMicView(APIView):
         return Response({'ok': True})
 
 
+class MuteAllView(APIView):
+    """O'qituvchi: hammani ovozsiz qiladi — `{lesson_id, except?: [user_id]}` -> `{muted: n}`."""
+
+    permission_classes = [RequirePerm('room.moderate')]
+
+    def post(self, request):
+        except_ids = request.data.get('except') or []
+        muted = services.mute_all(
+            teacher=request.user, lesson_id=request.data.get('lesson_id'),
+            except_ids=except_ids if isinstance(except_ids, list) else [], request=request,
+        )
+        return Response({'muted': muted})
+
+
+class LessonPresenceView(APIView):
+    """Pre-join ekrani: `{count, avatars}` — hozir darsda nechta kishi bor."""
+
+    permission_classes = [RequirePerm('room.token')]
+
+    def get(self, request, lesson_id):
+        return Response(services.lesson_presence(user=request.user, lesson_id=lesson_id))
+
+
 class GrantMicView(APIView):
     """O'qituvchi: o'quvchiga mikrofon ruxsatini beradi."""
 

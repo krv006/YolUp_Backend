@@ -66,11 +66,40 @@ class GrantView(APIView):
     permission_classes = [RequirePerm('room.moderate')]
 
     def post(self, request, lesson_id):
+        student_ids, mode = request.data.get('student_ids'), request.data.get('mode') or ''
+        if student_ids is not None or mode:
+            # ommaviy: `student_ids` ro'yxati yoki `mode: all | none`
+            return Response({'ok': True, **services.grant_many(
+                teacher=request.user, lesson_id=lesson_id,
+                student_ids=student_ids if isinstance(student_ids, list) else None, mode=mode,
+            )})
         services.grant_draw(
             teacher=request.user, lesson_id=lesson_id,
             student_id=request.data.get('student_id'),
         )
         return Response({'ok': True})
+
+
+class RevokeView(APIView):
+    """O'qituvchi: bitta o'quvchidan doskaga chizish ruxsatini qaytarib oladi — `{student_id}`."""
+
+    permission_classes = [RequirePerm('room.moderate')]
+
+    def post(self, request, lesson_id):
+        revoked = services.revoke_draw(
+            teacher=request.user, lesson_id=lesson_id, student_id=request.data.get('student_id'),
+        )
+        return Response({'ok': True, 'revoked': revoked})
+
+
+class SendToChatView(APIView):
+    """O'qituvchi: doskani guruh chatiga PDF sifatida yuboradi -> `{message_id}`."""
+
+    permission_classes = [RequirePerm('room.moderate')]
+
+    def post(self, request, lesson_id):
+        message = services.send_to_chat(teacher=request.user, lesson_id=lesson_id)
+        return Response({'message_id': str(message.id)}, status=201)
 
 
 class SolveView(APIView):

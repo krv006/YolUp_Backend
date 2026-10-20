@@ -28,6 +28,11 @@ from .serializers import (
 
 class CourseViewSet(viewsets.ModelViewSet):
     serializer_class = CourseSerializer
+
+    @property
+    def throttle_scope(self):
+        """Taklif kodini taxmin qilib ko'rishdan himoya: `join` auth chegarasi (30/daq) bilan."""
+        return 'auth' if getattr(self, 'action', None) == 'join' else None
     search_fields = ['title', 'subject']
     ordering_fields = ['created_at', 'title']
 
@@ -40,6 +45,10 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [RequirePerm('course.enroll')()]
         if self.action == 'attendance_summary':
             return [RequirePerm('attendance.view')()]
+        if self.action in ('invite_link',):
+            return [RequirePerm('course.edit')()]  # faqat o'qituvchi (kurs egaligi service'da tekshiriladi)
+        if self.action == 'join':
+            return [RequirePerm('course.enroll')()]
         if self.action in ('requests', 'respond_request'):
             return [RequirePerm('course.edit')()]  # faqat o'qituvchi (o'z kurslari service'da tekshiriladi)
         if self.action == 'schedule':
@@ -67,6 +76,30 @@ class CourseViewSet(viewsets.ModelViewSet):
         return Response(attendance_summary.course_summary(
             course=self.get_object(), viewer=request.user, range_key=range_key,
         ))
+
+    @action(detail=True, methods=['get', 'post', 'delete'], url_path='invite-link')
+    def invite_link(self, request, pk=None):
+        """Taklif havolasi. GET — mavjudi (yo'q bo'lsa maydonlar `null`); POST — yangisini yaratadi (eskisi bekor)
+        `{require_approval?, expires_in_days?}`; DELETE — bekor qiladi."""
+        course = self.get_object()
+        if request.method == 'DELETE':
+            services.revoke_invite_link(teacher=request.user, course=course, request=request)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        if request.method == 'POST':
+            approval = request.data.get('require_approval')
+            if isinstance(approval, str):
+                approval = approval.lower() in ('1', 'true', 'yes')
+            data = services.create_invite_link(
+                teacher=request.user, course=course, require_approval=approval,
+                expires_in_days=request.data.get('expires_in_days'), request=request,
+            )
+            return Response(data, status=status.HTTP_201_CREATED)
+        return Response(services.get_invite_link(teacher=request.user, course=course))
+
+    @action(detail=False, methods=['post'])
+    def join(self, request):
+        """O'quvchi taklif kodi bilan guruhga qo'shiladi: `{code}` -> `{course_id, status: joined | pending}`."""
+        return Response(services.join_by_code(student=request.user, code=request.data.get('code'), request=request))
 
     @action(detail=False)
     def subjects(self, request):
@@ -173,9 +206,32 @@ class CourseViewSet(viewsets.ModelViewSet):
         course = self.get_object()
         if course.teacher_id != request.user.id and request.user.role not in ('admin', 'super_admin'):
             self.permission_denied(request, message="Faqat kurs o'qituvchisi o'quvchilar ro'yxatini ko'radi.")
+        if request.query_params.get('with_presence'):
+            return Response(_students_with_presence_rows(request, course))
         qs = course.enrollments.select_related('student').order_by('student__first_name')
         page = self.paginate_queryset(qs)
         return self.get_paginated_response(EnrollmentSerializer(page, many=True).data)
+
+
+def _students_with_presence_rows(request, course) -> list:
+    """Tasdiqlangan o'quvchilar + onlayn holati va oxirgi faolligi ("Onlayn", "10 daqiqa oldin")."""
+    from apps.chat import presence
+
+    students = list(
+        User.objects.filter(
+            enrollments__course=course, enrollments__status=Enrollment.Status.APPROVED,
+        ).distinct().order_by('first_name', 'last_name', 'username')[:500]
+    )
+    online = presence.online_ids([s.id for s in students])
+    rows = []
+    for student in students:
+        avatar = request.build_absolute_uri(student.avatar.url) if student.avatar else None
+        rows.append({
+            'id': str(student.id), 'name': student.get_full_name() or student.username,
+            'username': student.username, 'avatar': avatar,
+            'is_online': str(student.id) in online, 'last_seen': student.last_seen_at,
+        })
+    return rows
 
 
 class LessonViewSet(viewsets.ModelViewSet):
@@ -190,6 +246,8 @@ class LessonViewSet(viewsets.ModelViewSet):
             return [RequirePerm('lesson.edit')()]
         if self.action == 'finish':
             return [RequirePerm('lesson.finish')()]
+        if self.action == 'cancel':
+            return [RequirePerm('lesson.cancel')()]
         if self.action == 'rate':
             return [RequirePerm('lesson.rate')()]
         if self.action == 'recording_stream':
@@ -204,6 +262,19 @@ class LessonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         data = dict(serializer.validated_data)
         course = data.pop('course')
+        recurrence = data.pop('recurrence', None)
+        if recurrence:
+            # `recurrence` bilan: shu dars va uning haftalik takrorlari bitta seriya sifatida yaratiladi
+            lessons = services.schedule_series_from(
+                teacher=self.request.user, course=course, starts_at=data['starts_at'],
+                duration_min=data.get('duration_min') or 45, recurrence=recurrence,
+                title=data.get('title', ''), note=data.get('note', ''), request=self.request,
+            )
+            quiz = data.get('quiz')
+            if quiz is not None:
+                services.update_lesson_quiz(teacher=self.request.user, lesson=lessons[0], quiz=quiz, request=self.request)
+            serializer.instance = lessons[0]
+            return
         serializer.instance = services.schedule_lesson(
             teacher=self.request.user, course=course, request=self.request, **data,
         )
@@ -214,7 +285,17 @@ class LessonViewSet(viewsets.ModelViewSet):
         # OLDIN chiqarib olib, alohida service orqali qo'llaymiz.
         has_quiz = 'quiz' in serializer.validated_data
         quiz = serializer.validated_data.pop('quiz', None)
+        scope = self.request.query_params.get('scope', 'one')
+        if scope not in ('one', 'series'):
+            raise ValidationError({'scope': _("'one' yoki 'series' bo'lishi kerak.")})
+        old_start = serializer.instance.starts_at
         lesson = serializer.save()
+        if scope == 'series' and lesson.recurrence_id:
+            changes = {
+                field: getattr(lesson, field) for field in ('title', 'note', 'duration_min')
+                if field in serializer.validated_data
+            }
+            services.apply_to_series(lesson=lesson, changes=changes, shift=lesson.starts_at - old_start)
         if has_quiz:
             services.update_lesson_quiz(
                 teacher=self.request.user, lesson=lesson, quiz=quiz, request=self.request,
@@ -231,6 +312,17 @@ class LessonViewSet(viewsets.ModelViewSet):
             request=request,
         )
         return Response(LessonSerializer(lesson).data)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Darsni bekor qilish (o'chirmasdan): `?scope=one|series`. Jadvalda `cancelled` holatida qoladi, o'quvchilarga
+        bildirishnoma boradi."""
+        lesson = self.get_object()
+        targets = services.cancel_lesson(
+            teacher=request.user, lesson=lesson, scope=request.query_params.get('scope', 'one'), request=request,
+        )
+        lesson.refresh_from_db()
+        return Response({**LessonSerializer(lesson).data, 'cancelled_count': len(targets)})
 
     @action(detail=True, methods=['post'])
     def rate(self, request, pk=None):

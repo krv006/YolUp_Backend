@@ -272,6 +272,75 @@ def grant_draw(*, teacher: User, lesson_id, student_id) -> bool:
     return True
 
 
+@transaction.atomic
+def revoke_draw(*, teacher: User, lesson_id, student_id) -> bool:
+    """Bitta o'quvchidan doskaga chizish ruxsatini qaytarib oladi (ruxsat yo'q bo'lsa ham xato emas)."""
+    lesson = _get_lesson(lesson_id)
+    if not _is_teacher(teacher, lesson):
+        raise PermissionDenied(_("Ruxsatni faqat kurs o'qituvchisi qaytarib oladi."))
+    try:
+        student = User.objects.get(pk=student_id, role=User.Role.STUDENT)
+    except (User.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_("O'quvchi topilmadi."))
+    deleted, _per_model = BoardGrant.objects.filter(lesson=lesson, student=student).delete()
+    if deleted:
+        audit.record(action='board.revoke', actor=teacher, target=lesson, meta={'student_id': str(student.id)})
+        transaction.on_commit(lambda: realtime.broadcast_board_revoked(lesson.id, str(student.id)))
+    return bool(deleted)
+
+
+@transaction.atomic
+def grant_many(*, teacher: User, lesson_id, student_ids=None, mode: str = '') -> dict:
+    """Ommaviy ruxsat. `student_ids` — ro'yxatdagilarga beradi; `mode='all'` — kursdagi hamma o'quvchiga;
+    `mode='none'` — hammasidan qaytarib oladi ("faqat men"). Qaytaradi: `{granted, revoked}`."""
+    lesson = _get_lesson(lesson_id)
+    if not _is_teacher(teacher, lesson):
+        raise PermissionDenied(_("Ruxsatni faqat kurs o'qituvchisi beradi."))
+    if mode not in ('', 'all', 'none'):
+        raise ValidationError({'mode': _("'all' yoki 'none' bo'lishi kerak.")})
+    enrolled = list(User.objects.filter(
+        enrollments__course=lesson.course, enrollments__status=Enrollment.Status.APPROVED, role=User.Role.STUDENT,
+    ).distinct())
+    granted = revoked = 0
+    if mode == 'none':
+        for grant in list(BoardGrant.objects.filter(lesson=lesson)):
+            student_id = str(grant.student_id)
+            grant.delete()
+            transaction.on_commit(lambda s=student_id: realtime.broadcast_board_revoked(lesson.id, s))
+            revoked += 1
+        audit.record(action='board.revoke_all', actor=teacher, target=lesson, meta={'revoked': revoked})
+        return {'granted': 0, 'revoked': revoked}
+    if mode == 'all':
+        targets = enrolled
+    else:
+        allowed = {str(student.id): student for student in enrolled}
+        wanted = [str(i) for i in (student_ids or [])]
+        if not wanted:
+            raise ValidationError({'student_ids': _("O'quvchilar ro'yxati yoki mode kerak.")})
+        unknown = [i for i in wanted if i not in allowed]
+        if unknown:
+            raise NotFound(_("O'quvchi topilmadi yoki bu kursda emas."))
+        targets = [allowed[i] for i in wanted]
+    for student in targets:
+        _grant, created = BoardGrant.objects.get_or_create(lesson=lesson, student=student)
+        if created:
+            granted += 1
+            transaction.on_commit(lambda s=str(student.id): realtime.broadcast_board_granted(lesson.id, s))
+    audit.record(action='board.grant_many', actor=teacher, target=lesson, meta={'granted': granted, 'mode': mode})
+    return {'granted': granted, 'revoked': 0}
+
+
+def send_to_chat(*, teacher: User, lesson_id):
+    """Doskani qo'lda guruh chatiga PDF fayl sifatida yuboradi. Qaytaradi: yaratilgan xabar."""
+    lesson = _get_lesson(lesson_id)
+    if not _is_teacher(teacher, lesson):
+        raise PermissionDenied(_("Doskani chatga faqat kurs o'qituvchisi yuboradi."))
+    message = publish_board_pdf(lesson)
+    if message is None:
+        raise ValidationError({'detail': _("Doska bo'sh — yuboradigan narsa yo'q.")})
+    return message
+
+
 # ── PDF: dars tugagach doska lentasi PDF bo'lib guruh chatga tushadi ──────
 
 def _pdf_path(lesson: Lesson):
@@ -415,13 +484,13 @@ def publish_board_pdf(lesson: Lesson):
     """
     path = generate_pdf(lesson)
     if path is None:
-        return
+        return None
     from django.core.files import File
     from django.db import transaction
 
     from apps.chat import realtime
     from apps.chat import services as chat_services
-    from apps.chat.models import Message
+    from apps.chat.models import Message, MessageAttachment
 
     room = chat_services.ensure_course_room(lesson.course)
     msg = Message(
@@ -434,10 +503,19 @@ def publish_board_pdf(lesson: Lesson):
     )
     with open(path, 'rb') as f:
         msg.file.save(f'doska_{lesson.id}.pdf', File(f), save=False)
+    msg.message_type = Message.Type.FILE
+    msg.file_name = f'doska_{lesson.id}.pdf'
+    msg.file_type = 'application/pdf'
+    msg.file_size = msg.file.size
     msg.save()
+    # Chatdagi "Fayllar" ro'yxatida ham ko'rinishi uchun biriktirma qatori
+    MessageAttachment.objects.create(
+        message=msg, file=msg.file.name, name=msg.file_name, mime='application/pdf', size=msg.file_size, order=0,
+    )
     room.save(update_fields=['updated_at'])
     # send_message bilan bir xil: WebSocket'ga darhol tarqatamiz.
     transaction.on_commit(lambda: realtime.broadcast_message(msg))
+    return msg
 
 
 def solve_formula(*, user: User, lesson_id, expr: str) -> dict:

@@ -1,6 +1,7 @@
 """Live service layer — LiveKit token berish, davomat, diqqat tekshiruvi, share ruxsati."""
 import asyncio
 import os
+import uuid
 import random
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -626,6 +627,77 @@ def deny_mic(*, teacher: User, lesson_id, student_id, request=None) -> bool:
 
 
 # ── Taklif va chetlashtirish (Zoom uslubidagi invite/ban) ──────────────────
+
+def mute_all(*, teacher: User, lesson_id, except_ids=None, request=None) -> int:
+    """O'qituvchi hamma ishtirokchining (o'zi va `except_ids` dan tashqari) mikrofonini o'chiradi (LiveKit server API).
+    Mikrofon ruxsati olinmaydi — o'quvchi xohlasa qayta yoqa oladi. Qaytaradi: ovozi o'chirilgan ishtirokchilar soni."""
+    lesson = _get_owned_lesson(teacher=teacher, lesson_id=lesson_id)
+    skip = {f'user-{teacher.id}'} | {f'user-{i}' for i in (except_ids or [])}
+
+    async def _mute() -> int:
+        from livekit.protocol.models import TrackType
+        from livekit.protocol.room import ListParticipantsRequest, MuteRoomTrackRequest
+
+        client = LiveKitAPI(
+            url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET,
+        )
+        muted = set()
+        try:
+            listing = await client.room.list_participants(ListParticipantsRequest(room=lesson.room_name))
+            for participant in listing.participants:
+                if participant.identity in skip:
+                    continue
+                for track in participant.tracks:
+                    if track.type == TrackType.AUDIO and not track.muted:
+                        await client.room.mute_published_track(MuteRoomTrackRequest(
+                            room=lesson.room_name, identity=participant.identity, track_sid=track.sid, muted=True,
+                        ))
+                        muted.add(participant.identity)
+        finally:
+            await client.aclose()
+        return len(muted)
+
+    try:
+        count = asyncio.run(_mute())
+    except Exception as exc:  # noqa: BLE001 — LiveKit xatosi (xona yo'q, server javob bermadi) mijozga tafsilotsiz
+        import logging
+
+        logging.getLogger('apps').warning('mute_all LiveKit xatosi: %s', exc)
+        if lesson.status != Lesson.Status.LIVE:
+            return 0  # dars jonli emas — ovozi o'chiradigan hech kim yo'q
+        raise ValidationError({'detail': _("Jonli dars serveriga ulanib bo'lmadi. Birozdan keyin urinib ko'ring.")}) from None
+    audit.record(
+        action='room.mute_all', actor=teacher, target=lesson, meta={'muted': count}, request=request,
+    )
+    return count
+
+
+def lesson_presence(*, user: User, lesson_id) -> dict:
+    """"N kishi darsda": hozir xonada bo'lganlar (kirgan va hali chiqmagan o'quvchilar + dars jonli bo'lsa o'qituvchi)
+    va ularning avatarlari (ko'pi bilan 5 ta)."""
+    from apps.lessons import selectors as lesson_selectors
+
+    lesson = lesson_selectors.lessons_for(user).select_related('course', 'course__teacher').filter(pk=lesson_id).first() \
+        if _is_uuid(lesson_id) else None
+    if lesson is None:
+        raise NotFound(_('Dars topilmadi.'))
+    people = [
+        row.student for row in
+        lesson.attendances.filter(joined_at__isnull=False, left_at__isnull=True).select_related('student')
+    ]
+    if lesson.status == Lesson.Status.LIVE:
+        people.insert(0, lesson.course.teacher)
+    avatars = [person.avatar.url for person in people if person.avatar][:5]
+    return {'count': len(people), 'avatars': avatars}
+
+
+def _is_uuid(value) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError):
+        return False
+
 
 def _get_owned_lesson(*, teacher: User, lesson_id) -> Lesson:
     try:

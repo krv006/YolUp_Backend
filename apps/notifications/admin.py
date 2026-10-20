@@ -22,7 +22,8 @@ from .models import Notification, NotificationRecipient
 
 class SendNotificationForm(forms.Form):
     target_type = forms.ChoiceField(
-        choices=Notification.Target.choices, widget=forms.RadioSelect, label='Kimga',
+        choices=[(value, label) for value, label in Notification.Target.choices if value in ('user', 'all')],
+        widget=forms.RadioSelect, label='Kimga',
     )
     user = forms.ModelChoiceField(
         queryset=User.objects.order_by('username'), required=False, label='Foydalanuvchi',

@@ -1,7 +1,9 @@
 """Lessons service layer — kurs/dars/yozilish bo'yicha yozuvchi biznes-logika."""
+import logging
 import uuid
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -49,6 +51,90 @@ def schedule_lesson(*, teacher: User, course: Course, request=None, quiz=None, *
         _set_lesson_quiz(lesson=lesson, quiz=quiz)
     audit.record(action='lesson.schedule', actor=teacher, target=lesson, request=request)
     return lesson
+
+
+def schedule_series_from(*, teacher: User, course: Course, starts_at, duration_min: int, recurrence: dict,
+                         title: str = '', note: str = '', request=None) -> list:
+    """`POST /lessons/` ga `recurrence` berilganda: shu dars (starts_at) hafta kuni va soatida `weeks` hafta davomida
+    `weekdays` kunlari takrorlanadi (birinchisi — shu darsning o'zi). Qaytaradi: yaratilgan darslar."""
+    from datetime import timedelta
+
+    local = timezone.localtime(starts_at)
+    end = local + timedelta(minutes=duration_min)
+    if end.date() != local.date():
+        raise ValidationError({'recurrence': _("Takrorlanuvchi dars yarim tundan o'tib ketmasligi kerak.")})
+    days = sorted(set(recurrence['weekdays']) | {local.weekday()})  # shu darsning o'z kuni seriyaga doim kiradi
+    return schedule_recurring(
+        teacher=teacher, course=course, days=days, start_time=local.time(), end_time=end.time(),
+        weeks=recurrence['weeks'], start_date=local.date(), title=title, note=note, request=request,
+    )
+
+
+def apply_to_series(*, lesson: Lesson, changes: dict, shift) -> int:
+    """`PATCH ?scope=series`: shu darsdan keyingi (hali o'tmagan, rejalashtirilgan) seriya darslariga ham o'zgarish
+    qo'llanadi; `shift` — shu darsning boshlanish vaqti qancha siljigani (hamma darsga bir xil qo'shiladi)."""
+    others = Lesson.objects.filter(
+        recurrence_id=lesson.recurrence_id, status=Lesson.Status.SCHEDULED, starts_at__gt=timezone.now(),
+    ).exclude(pk=lesson.pk)
+    count = 0
+    for other in others:
+        for field, value in changes.items():
+            setattr(other, field, value)
+        if shift:
+            other.starts_at = other.starts_at + shift
+        other.save()
+        count += 1
+    return count
+
+
+@transaction.atomic
+def cancel_lesson(*, teacher: User, lesson: Lesson, scope: str = 'one', request=None) -> list:
+    """Darsni bekor qiladi (o'chirmaydi): `status=cancelled`, jadvalda chizilgan holda qoladi, o'quvchilarga bildirishnoma
+    boradi. `scope=series` — shu seriyadagi hamma rejalashtirilgan dars. Faqat rejalashtirilgan dars bekor qilinadi."""
+    if lesson.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi darsni bekor qila oladi."))
+    if scope not in ('one', 'series'):
+        raise ValidationError({'scope': _("'one' yoki 'series' bo'lishi kerak.")})
+    if lesson.status != Lesson.Status.SCHEDULED:
+        raise ValidationError({'detail': _("Faqat rejalashtirilgan darsni bekor qilish mumkin.")})
+    if scope == 'series' and lesson.recurrence_id:
+        targets = list(Lesson.objects.filter(
+            recurrence_id=lesson.recurrence_id, course=lesson.course, status=Lesson.Status.SCHEDULED,
+        ))
+    else:
+        targets = [lesson]
+    for target in targets:
+        target.status = Lesson.Status.CANCELLED
+        target.save(update_fields=['status', 'updated_at'])
+    audit.record(
+        action='lesson.cancel', actor=teacher, target=lesson,
+        meta={'scope': scope, 'count': len(targets)}, request=request,
+    )
+    _notify_cancelled(teacher, lesson, targets)
+    return targets
+
+
+def _notify_cancelled(teacher: User, lesson: Lesson, targets: list) -> None:
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    title = lesson.title or lesson.course.title
+    when = timezone.localtime(lesson.starts_at).strftime('%d.%m.%Y %H:%M')
+    text = (
+        f'«{lesson.course.title}»: {when} dagi «{title}» darsi bekor qilindi.' if len(targets) == 1
+        else f'«{lesson.course.title}»: {when} dan boshlab {len(targets)} ta dars bekor qilindi.'
+    )
+    students = User.objects.filter(
+        enrollments__course=lesson.course, enrollments__status=Enrollment.Status.APPROVED,
+    ).distinct()
+    for student in students:
+        try:
+            send_notification(
+                sender=teacher, description=text, target_type=Notification.Target.USER, user_id=student.id,
+                kind='lesson_cancelled', link_type='lesson', link_id=str(lesson.id),
+            )
+        except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy
+            logging.getLogger('apps').warning('lesson_cancelled bildirishnomasi yuborilmadi', exc_info=True)
 
 
 @transaction.atomic
@@ -118,10 +204,12 @@ def schedule_recurring(*, teacher: User, course: Course, days: list[int],
     if conflicts:
         raise ValidationError({'conflicts': conflicts})
 
+    series_id = uuid.uuid4()  # bitta seriyadagi darslarni bog'laydi: butun seriyani tahrirlash/bekor qilish uchun
+    recurrence = {'freq': 'weekly', 'weeks': weeks, 'weekdays': sorted(set(days))}
     lessons = Lesson.objects.bulk_create([
         Lesson(
-            course=course, title=title, starts_at=s, duration_min=duration_min,
-            room_name=f'lesson-{uuid.uuid4().hex[:12]}',
+            course=course, title=title, note=note or '', starts_at=s, duration_min=duration_min,
+            room_name=f'lesson-{uuid.uuid4().hex[:12]}', recurrence=recurrence, recurrence_id=series_id,
         )
         for s in slots
     ])
@@ -131,6 +219,114 @@ def schedule_recurring(*, teacher: User, course: Course, days: list[int],
         request=request,
     )
     return lessons
+
+
+# ---------------------------------------------------------------------------
+# Taklif havolasi: o'qituvchi havola yaratadi, o'quvchi kod bilan qo'shiladi
+# ---------------------------------------------------------------------------
+INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'  # chalkash belgilar (0/O, 1/I) yo'q
+
+
+def _invite_dict(course: Course) -> dict:
+    if not course.invite_code:
+        return {'code': None, 'url': None, 'expires_at': None, 'require_approval': course.invite_requires_approval}
+    base = getattr(settings, 'INVITE_BASE_URL', '').rstrip('/')
+    return {
+        'code': course.invite_code, 'url': f'{base}/j/{course.invite_code}',
+        'expires_at': course.invite_expires_at, 'require_approval': course.invite_requires_approval,
+    }
+
+
+def _owned_course(user: User, course: Course) -> Course:
+    if course.teacher_id != user.id:
+        raise PermissionDenied(_("Taklif havolasini faqat kurs o'qituvchisi boshqaradi."))
+    return course
+
+
+def get_invite_link(*, teacher: User, course: Course) -> dict:
+    return _invite_dict(_owned_course(teacher, course))
+
+
+def create_invite_link(*, teacher: User, course: Course, require_approval=None, expires_in_days=None, request=None) -> dict:
+    """Yangi havola yaratadi (eskisi bekor bo'ladi). `require_approval` — qo'shilganlar o'qituvchi tasdig'ini kutadi;
+    `expires_in_days` — muddat (bo'sh = muddatsiz)."""
+    import secrets
+    from datetime import timedelta
+
+    _owned_course(teacher, course)
+    if expires_in_days not in (None, ''):
+        try:
+            days = int(expires_in_days)
+        except (TypeError, ValueError):
+            raise ValidationError({'expires_in_days': _("Son bo'lishi kerak.")}) from None
+        if not 1 <= days <= 365:
+            raise ValidationError({'expires_in_days': _('1 dan 365 kungacha.')})
+        course.invite_expires_at = timezone.now() + timedelta(days=days)
+    else:
+        course.invite_expires_at = None
+    if require_approval is not None:
+        course.invite_requires_approval = bool(require_approval)
+    while True:
+        code = ''.join(secrets.choice(INVITE_ALPHABET) for _unused in range(6))
+        if not Course.objects.filter(invite_code=code).exists():
+            break
+    course.invite_code = code
+    course.save(update_fields=['invite_code', 'invite_expires_at', 'invite_requires_approval', 'updated_at'])
+    audit.record(action='course.invite_link_create', actor=teacher, target=course, request=request)
+    return _invite_dict(course)
+
+
+def revoke_invite_link(*, teacher: User, course: Course, request=None) -> None:
+    _owned_course(teacher, course)
+    if course.invite_code:
+        course.invite_code = None
+        course.invite_expires_at = None
+        course.save(update_fields=['invite_code', 'invite_expires_at', 'updated_at'])
+        audit.record(action='course.invite_link_revoke', actor=teacher, target=course, request=request)
+
+
+@transaction.atomic
+def join_by_code(*, student: User, code: str, request=None) -> dict:
+    """O'quvchi kod bilan guruhga qo'shiladi: `{course_id, status: joined | pending}`."""
+    if student.role != User.Role.STUDENT:
+        raise PermissionDenied(_("Havola orqali faqat o'quvchi qo'shiladi."))
+    code = (code or '').strip().upper()
+    course = Course.objects.filter(invite_code=code, is_active=True).select_related('teacher').first() if code else None
+    if course is None:
+        raise NotFound(_('Taklif havolasi topilmadi yoki bekor qilingan.'))
+    if course.invite_expires_at and course.invite_expires_at < timezone.now():
+        raise ValidationError({'detail': _('Taklif havolasining muddati tugagan.')})
+    target = Enrollment.Status.PENDING if course.invite_requires_approval else Enrollment.Status.APPROVED
+    enrollment, created = Enrollment.objects.get_or_create(course=course, student=student, defaults={'status': target})
+    if enrollment.status == Enrollment.Status.DECLINED:
+        raise PermissionDenied(_("Bu guruhga qo'shilish so'rovingiz rad etilgan."))
+    if created:
+        audit.record(
+            action='course.join_by_link', actor=student, target=course,
+            meta={'status': enrollment.status}, request=request,
+        )
+        _notify_joined(course, student, enrollment.status)
+    return {
+        'course_id': str(course.id),
+        'status': 'joined' if enrollment.status == Enrollment.Status.APPROVED else 'pending',
+    }
+
+
+def _notify_joined(course: Course, student: User, status: str) -> None:
+    """O'qituvchiga: "X guruhga qo'shildi" (yoki so'rov yubordi)."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    name = student.get_full_name() or student.username
+    verb = "qo'shildi" if status == Enrollment.Status.APPROVED else "qo'shilish so'rovini yubordi"
+    try:
+        send_notification(
+            sender=student, target_type=Notification.Target.USER, user_id=course.teacher_id, kind='member_joined',
+            description=f'{name} «{course.title}» guruhiga havola orqali {verb}.',
+            link_type='course', link_id=str(course.id),
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy
+        logging.getLogger('apps').warning('member_joined bildirishnomasi yuborilmadi', exc_info=True)
 
 
 def _get_course(course_id) -> Course:
@@ -555,6 +751,18 @@ def _one_side_stale(recording, *, wait=timedelta(minutes=2)) -> bool:
     return False
 
 
+def _recording_stats(lesson: Lesson) -> dict:
+    """Dars yozuvi ekranidagi kartalar: ishtirokchilar (qatnashgan o'quvchilar), davomat foizi, doska sahifalari."""
+    attended = Attendance.objects.filter(lesson=lesson, joined_at__isnull=False).count()
+    enrolled = Enrollment.objects.filter(course=lesson.course, status=Enrollment.Status.APPROVED).count()
+    pages = sum(1 for sheet in lesson.board_sheets.all() if sheet.strokes)
+    return {
+        'participants_count': attended,
+        'attendance_rate': round(attended * 100 / enrolled) if enrolled else 0,
+        'board_pages': pages,
+    }
+
+
 def recording_info(*, user: User, lesson: Lesson) -> dict:
     """Yozuv holati + tayyor bo'lsa muddatli stream havolasi."""
     from django.core import signing
@@ -613,6 +821,7 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
         'ended_at': recording.ended_at,
         'error': recording.error,
         'stream_url': None,
+        **_recording_stats(lesson),
     }
     if file_ready:
         # Imzolangan, muddatli havola — <video src> uchun (headerlarsiz),

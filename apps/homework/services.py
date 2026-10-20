@@ -4,6 +4,7 @@ O'quvchi fayl yuklaydi -> topshiriq darhol `pending_review` holatida o'qituvchig
 tushadi -> o'qituvchi ballni o'zi qo'yib tasdiqlaydi (`review_submission`) -> shundan
 keyin natija o'quvchiga ochiladi. (AI/Gemini tekshiruv olib tashlangan.)
 """
+import json
 import logging
 import math
 import re
@@ -12,11 +13,12 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import ParentChildLink, User
 from apps.lessons.models import Course, Enrollment, Lesson
@@ -27,6 +29,12 @@ from . import ai_client, ai_grader, rules
 from .models import Assignment, AssignmentFocusEvent, Submission
 
 logger = logging.getLogger('apps')
+
+
+class ServiceUnavailable(APIException):
+    status_code = 503
+    default_code = 'service_unavailable'
+    default_detail = _('Xizmat vaqtincha mavjud emas.')
 
 # Suiiste'moldan himoya (fayl yuklash/xotira): soatiga topshirish chegarasi
 MAX_SUBMITS_PER_ASSIGNMENT_HOUR = 5
@@ -107,6 +115,58 @@ def _is_parent_of(parent: User, student: User) -> bool:
     ).exists()
 
 
+def _ensure_visible(user: User, a: Assignment) -> None:
+    """Qoralama vazifa faqat o'z o'qituvchisiga ko'rinadi; boshqalar uchun u yo'q."""
+    if a.status == Assignment.Status.DRAFT and a.course.teacher_id != user.id:
+        raise NotFound(_('Topshiriq topilmadi.'))
+
+
+def _bool(value, default=None):
+    if value is None or value == '':
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _clean_status(value) -> str:
+    value = str(value or Assignment.Status.ACTIVE).strip().lower()
+    if value == 'published':  # ikkinchi frontend hujjatidagi nom
+        value = Assignment.Status.ACTIVE
+    if value not in Assignment.Status.values:
+        raise ValidationError({'status': _("draft yoki active (published) bo'lishi kerak.")})
+    return value
+
+
+def _clean_grading(grading, max_score):
+    """Baholash turi va maksimal ball: five -> 5, none -> 0, hundred -> 1..1000 (standart 100)."""
+    grading = str(grading or Assignment.Grading.FIVE).strip().lower()
+    if grading not in Assignment.Grading.values:
+        raise ValidationError({'grading': _("five, hundred yoki none bo'lishi kerak.")})
+    if grading == Assignment.Grading.FIVE:
+        return grading, 5
+    if grading == Assignment.Grading.NONE:
+        return grading, 0
+    try:
+        top = int(max_score) if max_score not in (None, '') else 100
+    except (TypeError, ValueError):
+        raise ValidationError({'max_score': _("Son bo'lishi kerak.")}) from None
+    if not 1 <= top <= 1000:
+        raise ValidationError({'max_score': _('1 dan 1000 gacha.')})
+    return grading, top
+
+
+def _publish(assignment: Assignment) -> None:
+    """Vazifa e'lon qilinadi: o'quvchilarga bildirishnoma va (yoqilgan bo'lsa) chatga vazifa kartasi."""
+    assignment.published_at = timezone.now()
+    assignment.save(update_fields=['published_at'])
+    _notify_new_assignment(assignment)
+    if assignment.announce_in_chat:
+        from apps.chat.services import post_assignment_card
+
+        post_assignment_card(assignment)  # kurs chatida vazifa kartasi
+
+
 def _can_view_course(user: User, course: Course) -> bool:
     if course.teacher_id == user.id or _is_enrolled(user, course):
         return True
@@ -121,6 +181,12 @@ def _can_view_course(user: User, course: Course) -> bool:
 
 def _assignment_dict(a: Assignment) -> dict:
     return {
+        'status': a.status,
+        'published': a.status == Assignment.Status.ACTIVE,
+        'announce_in_chat': a.announce_in_chat,
+        'allow_late': a.allow_late,
+        'grading': a.grading,
+        'max_score': a.max_score,
         'id': str(a.id),
         'course_id': str(a.course_id),
         'course_title': a.course.title,
@@ -138,13 +204,14 @@ def _assignment_dict(a: Assignment) -> dict:
     }
 
 
-def _submission_dict(s: Submission, include_result: bool = True, is_teacher: bool = False) -> dict:
+def _submission_dict(s: Submission, include_result: bool = True, is_teacher: bool = False, for_parent: bool = False) -> dict:
     due = s.assignment.due_at
     # O'qituvchi tasdiqlamaguncha (PENDING_REVIEW) AI'ning taklif qilgan
     # ball/bahosi o'quvchi/ota-onaga ko'rsatilmaydi — faqat o'qituvchiga.
     # AI ishlayotgan paytda (CHECKING) o'quvchi uchun ham "o'qituvchi kutilmoqda" ko'rinadi.
     waiting = s.status in (Submission.Status.PENDING_REVIEW, Submission.Status.CHECKING)
-    hide_result = waiting and not is_teacher
+    # Ota-onaga natija faqat o'qituvchi "ota-onaga ko'rsatish"ni o'chirmagan bo'lsa ko'rinadi
+    hide_result = (waiting and not is_teacher) or (for_parent and not s.share_with_parent)
     shown_status = (
         Submission.Status.PENDING_REVIEW if (s.status == Submission.Status.CHECKING and not is_teacher) else s.status
     )
@@ -157,6 +224,11 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         'status': shown_status,
         'overall_score': None if hide_result else s.overall_score,
         'grade': '' if hide_result else s.grade,
+        'grade_value': None if hide_result else s.grade_value,
+        'grading': s.assignment.grading,
+        'max_score': s.assignment.max_score,
+        'share_with_parent': s.share_with_parent,
+        'resubmit_comment': s.resubmit_comment if s.status == Submission.Status.RESUBMIT_REQUESTED else '',
         'error': s.error,
         'is_late': bool(due and s.created_at and s.created_at > due),
         'created_at': s.created_at,
@@ -205,7 +277,8 @@ def _resolve_lesson(*, course: Course, lesson_id) -> Lesson | None:
 
 def create_assignment(*, teacher: User, course_id, title: str, description: str = '',
                       body: str = '', due_at=None, skill_key: str = '', lesson_id=None,
-                      extra_instructions: str = '', attachment=None) -> dict:
+                      extra_instructions: str = '', attachment=None, status='active', announce_in_chat=True,
+                      allow_late=True, grading='five', max_score=None) -> dict:
     course = _get_course(course_id)
     if course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifa bera oladi."))
@@ -217,6 +290,8 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
                 'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(rules.SKILL_KEYS)},
             })
     lesson = _resolve_lesson(course=course, lesson_id=lesson_id)
+    status = _clean_status(status)
+    grading, top = _clean_grading(grading, max_score)
 
     attachment_name = ''
     if attachment is not None:
@@ -242,11 +317,14 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
         due_at=_parse_due(due_at),
         skill_key=skill_key,
         extra_instructions=(extra_instructions or '').strip(),
+        status=status,
+        announce_in_chat=_bool(announce_in_chat, True),
+        allow_late=_bool(allow_late, True),
+        grading=grading,
+        max_score=top,
     )
-    _notify_new_assignment(assignment)
-    from apps.chat.services import post_assignment_card
-
-    post_assignment_card(assignment)  # kurs chatida vazifa kartasi
+    if status == Assignment.Status.ACTIVE:
+        _publish(assignment)
     return _assignment_dict(assignment)
 
 
@@ -290,7 +368,7 @@ def send_deadline_reminders(*, now=None) -> dict:
     from django.db.models import Q
 
     assignments = (
-        Assignment.objects.filter(due_at__isnull=False, due_at__gt=now)
+        Assignment.objects.filter(due_at__isnull=False, due_at__gt=now, status=Assignment.Status.ACTIVE)
         .filter(Q(reminder_halfway_sent_at__isnull=True) | Q(reminder_1h_sent_at__isnull=True))
         .select_related('course', 'course__teacher')
     )
@@ -345,7 +423,7 @@ _UNSET = object()  # "maydon umuman yuborilmadi" — bo'sh qiymatdan (o'chirish)
 def update_assignment(
     *, teacher: User, assignment_id, title=_UNSET, description=_UNSET, body=_UNSET,
     due_at=_UNSET, skill_key=_UNSET, lesson_id=_UNSET, extra_instructions=_UNSET,
-    attachment=_UNSET,
+    attachment=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
 ) -> dict:
     """Vazifani qisman yangilaydi (PATCH) — faqat yuborilgan maydonlar
     o'zgaradi, `create_assignment` bilan bir xil validatsiya."""
@@ -396,8 +474,33 @@ def update_assignment(
         a.attachment_name = (attachment.name or 'vazifa')[:255]
         fields += ['attachment', 'attachment_name']
 
+    if announce_in_chat is not _UNSET:
+        a.announce_in_chat = _bool(announce_in_chat, True)
+        fields.append('announce_in_chat')
+    if allow_late is not _UNSET:
+        a.allow_late = _bool(allow_late, True)
+        fields.append('allow_late')
+    if grading is not _UNSET or max_score is not _UNSET:
+        new_grading, top = _clean_grading(a.grading if grading is _UNSET else grading, a.max_score if max_score is _UNSET else max_score)
+        if (new_grading, top) != (a.grading, a.max_score):
+            if a.submissions.filter(status=Submission.Status.DONE).exists():
+                raise ValidationError({'grading': _("Baholangan topshiriqlar bor — baholash turini o'zgartirib bo'lmaydi.")})
+            a.grading, a.max_score = new_grading, top
+            fields += ['grading', 'max_score']
+    publish_now = False
+    if status is not _UNSET:
+        new_status = _clean_status(status)
+        if new_status != a.status:
+            if new_status == Assignment.Status.DRAFT:
+                raise ValidationError({'status': _("E'lon qilingan vazifani qoralamaga qaytarib bo'lmaydi.")})
+            a.status = new_status
+            fields.append('status')
+            publish_now = True
+
     if fields:
         a.save(update_fields=fields)
+    if publish_now:
+        _publish(a)  # qoralama e'lon qilindi: bildirishnoma va chat kartasi endi tushadi
     return _assignment_dict(a)
 
 
@@ -405,17 +508,23 @@ def assignment_file(*, user: User, assignment_id) -> tuple:
     a = _get_assignment(assignment_id)
     if not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu faylni ko'rish huquqingiz yo'q."))
+    _ensure_visible(user, a)
     if not a.attachment:
         raise NotFound(_("Bu vazifada biriktirilgan fayl yo'q."))
     return a.attachment.path, a.attachment_name or 'vazifa'
 
 
-def list_assignments(*, user: User, course_id) -> list:
+def list_assignments(*, user: User, course_id, status=None) -> list:
     course = _get_course(course_id)
     if not _can_view_course(user, course):
         raise PermissionDenied(_("Bu kurs vazifalarini ko'rish huquqingiz yo'q."))
     result = []
-    for a in course.assignments.select_related('lesson').all():
+    queryset = course.assignments.select_related('lesson').all()
+    if course.teacher_id != user.id:
+        queryset = queryset.filter(status=Assignment.Status.ACTIVE)  # qoralamalar faqat o'qituvchiga
+    elif status in ('draft', 'active', 'published'):
+        queryset = queryset.filter(status=_clean_status(status))
+    for a in queryset:
         item = _assignment_dict(a)
         if course.teacher_id == user.id:
             item['submissions_count'] = a.submissions.count()
@@ -427,7 +536,9 @@ def list_assignments(*, user: User, course_id) -> list:
                     parent=user, status=ParentChildLink.Status.APPROVED,
                 ).values_list('student_id', flat=True))
             last = a.submissions.filter(student_id__in=student_ids).first()
-            item['my_submission'] = _submission_dict(last, include_result=False) if last else None
+            item['my_submission'] = (
+                _submission_dict(last, include_result=False, for_parent=user.role == 'parent') if last else None
+            )
         result.append(item)
     return result
 
@@ -436,6 +547,7 @@ def get_assignment(*, user: User, assignment_id) -> dict:
     a = _get_assignment(assignment_id)
     if not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu vazifani ko'rish huquqingiz yo'q."))
+    _ensure_visible(user, a)
     data = _assignment_dict(a)
     if a.course.teacher_id == user.id:
         subs = list(a.submissions.select_related('student', 'assignment'))
@@ -458,7 +570,7 @@ def get_assignment(*, user: User, assignment_id) -> dict:
                 parent=user, status=ParentChildLink.Status.APPROVED,
             ).values_list('student_id', flat=True))
         data['submissions'] = [
-            _submission_dict(s, include_result=False)
+            _submission_dict(s, include_result=False, for_parent=user.role == 'parent')
             for s in a.submissions.filter(student_id__in=student_ids).select_related('student')
         ]
     return data
@@ -469,6 +581,9 @@ def submit(*, student: User, assignment_id, upload) -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz — vazifa topshira olmaysiz."))
+    _ensure_visible(student, a)
+    if a.due_at and not a.allow_late and timezone.now() > a.due_at:
+        raise ValidationError({'detail': _("Topshirish muddati tugagan — bu vazifaga endi topshirib bo'lmaydi.")})
     if upload is None:
         raise ValidationError({'file': _('Fayl majburiy.')})
 
@@ -593,7 +708,7 @@ def get_submission(*, user: User, submission_id) -> dict:
     allowed = is_teacher or s.student_id == user.id or _is_parent_of(user, s.student)
     if not allowed:
         raise PermissionDenied(_("Bu topshiriqni ko'rish huquqingiz yo'q."))
-    return _submission_dict(s, is_teacher=is_teacher)
+    return _submission_dict(s, is_teacher=is_teacher, for_parent=not is_teacher and s.student_id != user.id)
 
 
 def submission_file(*, user: User, submission_id) -> tuple:
@@ -736,12 +851,15 @@ def sync_ai_results(*, now=None, batch: int = 50) -> dict:
 
 # ── o'qituvchi baholashi/tasdiqlashi ────────────────────────────────────────
 def review_submission(*, teacher: User, submission_id, overall_score=None,
-                      grade: str = '', result=None) -> dict:
-    """O'qituvchi topshiriqni baholaydi: ball (0-100), ixtiyoriy baho yorlig'i va
-    izoh (`result`) — shundan keyingina o'quvchi natijani ko'radi. Tasdiqlangan
-    (DONE) natijani ham tuzatish mumkin (o'qituvchi xatosini to'g'rilash uchun) —
-    o'quvchiga "natija yangilandi" deb xabar boradi. Baho yorlig'i berilmasa
-    ballga qarab qo'yiladi (A'lo, Yaxshi, ...)."""
+                      grade: str = '', result=None, grade_value=None, share_with_parent=None) -> dict:
+    """O'qituvchi topshiriqni baholaydi. Vazifa baholash turiga qarab:
+
+      - `five`: `grade_value` 1-5 (yoki eski `overall_score` 0-100); `overall_score` = baho*20.
+      - `hundred`: `grade_value` 0..max_score (yoki eski `overall_score` 0-100); `overall_score` foizga keltiriladi.
+      - `none`: baho yo'q — faqat izoh (`result`) bilan tasdiqlanadi.
+
+    `overall_score` har doim 0-100 (hisobotlar uchun), xom baho — `grade_value`. `share_with_parent=false` bo'lsa ota-ona
+    natijani ko'rmaydi. Tasdiqlangan (DONE) natijani ham tuzatish mumkin — o'quvchiga "natija yangilandi" deb xabar boradi."""
     s = _get_submission(submission_id)
     if s.assignment.course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi baholaydi."))
@@ -749,25 +867,52 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
         raise ValidationError(
             _("Faqat baholashni kutayotgan yoki baholangan topshiriqni baholash mumkin.")
         )
-    if overall_score is not None:
+    a = s.assignment
+
+    def number(value, field):
         try:
-            value = float(overall_score)
+            number_value = float(value)
         except (TypeError, ValueError):
-            raise ValidationError({'overall_score': _("Ball raqam bo'lishi kerak.")})
-        if not math.isfinite(value) or not 0 <= value <= 100:
-            raise ValidationError({'overall_score': _("Ball 0 dan 100 gacha bo'lishi kerak.")})
-        s.overall_score = value
-    if s.overall_score is None:
-        raise ValidationError({'overall_score': _("Ball kiritilishi shart (0 dan 100 gacha).")})
+            raise ValidationError({field: _("Raqam bo'lishi kerak.")}) from None
+        if not math.isfinite(number_value):
+            raise ValidationError({field: _("Raqam bo'lishi kerak.")})
+        return number_value
+
+    if a.grading == Assignment.Grading.NONE:
+        s.overall_score, s.grade_value, grade = None, None, ''
+        s.grade = ''
+    else:
+        if grade_value is not None and grade_value != '':
+            raw = number(grade_value, 'grade')
+            if a.grading == Assignment.Grading.FIVE:
+                if not 1 <= raw <= 5:
+                    raise ValidationError({'grade': _("Baho 1 dan 5 gacha bo'lishi kerak.")})
+                s.overall_score = raw * 20
+            else:
+                if not 0 <= raw <= a.max_score:
+                    raise ValidationError({'grade': _("Baho 0 dan %(max)s gacha bo'lishi kerak.") % {'max': a.max_score}})
+                s.overall_score = raw * 100 / a.max_score
+            s.grade_value = raw
+        elif overall_score is not None:
+            percent = number(overall_score, 'overall_score')
+            if not 0 <= percent <= 100:
+                raise ValidationError({'overall_score': _("Ball 0 dan 100 gacha bo'lishi kerak.")})
+            s.overall_score = percent
+            s.grade_value = round(percent / 20, 1) if a.grading == Assignment.Grading.FIVE else round(percent * a.max_score / 100, 1)
+        if s.overall_score is None:
+            raise ValidationError({'overall_score': _("Baho kiritilishi shart.")})
     if result is not None and not isinstance(result, dict):
         raise ValidationError({'result': _("Natija obyekt (JSON) shaklida bo'lishi kerak.")})
     was_done = s.status == Submission.Status.DONE
-    if grade:
-        s.grade = grade.strip()[:40]
-    elif overall_score is not None or not s.grade:
-        s.grade = rules.grade_label(s.overall_score)
+    if a.grading != Assignment.Grading.NONE:
+        if grade:
+            s.grade = grade.strip()[:40]
+        elif grade_value not in (None, '') or overall_score is not None or not s.grade:
+            s.grade = rules.grade_label(s.overall_score)
     if result is not None:
         s.result = result
+    if share_with_parent is not None:
+        s.share_with_parent = bool(_bool(share_with_parent, True))
     s.status = Submission.Status.DONE
     s.reviewed_by = teacher
     s.reviewed_at = timezone.now()
@@ -776,11 +921,126 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
     return _submission_dict(s, is_teacher=True)
 
 
+@transaction.atomic
+def request_resubmit(*, teacher: User, submission_id, comment: str = '') -> dict:
+    """O'qituvchi topshiriqni qayta topshirishga qaytaradi: holat `resubmit_requested`, o'quvchiga bildirishnoma boradi
+    va u yangi fayl yuklay oladi (eskisi tarix sifatida qoladi)."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    s = _get_submission(submission_id)
+    if s.assignment.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi qayta topshirishni so'rashi mumkin."))
+    if s.status in (Submission.Status.CHECKING, Submission.Status.RESUBMIT_REQUESTED):
+        raise ValidationError({'detail': _("Bu topshiriq hozir qayta topshirishga qaytarib bo'lmaydigan holatda.")})
+    s.status = Submission.Status.RESUBMIT_REQUESTED
+    s.resubmit_comment = (comment or '').strip()[:2000]
+    s.resubmit_requested_at = timezone.now()
+    s.save(update_fields=['status', 'resubmit_comment', 'resubmit_requested_at', 'updated_at'])
+    note = f' Izoh: {s.resubmit_comment}' if s.resubmit_comment else ''
+    try:
+        send_notification(
+            sender=teacher, target_type=Notification.Target.USER, user_id=s.student_id, kind='homework_resubmit',
+            description=f'«{s.assignment.course.title}»: «{s.assignment.title}» vazifasini qayta topshirishingiz so\'raldi.{note}',
+            link_type='assignment', link_id=str(s.assignment_id),
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy
+        logger.warning('homework_resubmit bildirishnomasi yuborilmadi', exc_info=True)
+    return _submission_dict(s, is_teacher=True)
+
+
+REMIND_COOLDOWN = 10 * 60
+
+
+def remind_missing(*, teacher: User, assignment_id) -> dict:
+    """Hali topshirmagan (tasdiqlangan) o'quvchilarga eslatma: `{notified: n}`. Bir vazifaga 10 daqiqada bir marta."""
+    from django.core.cache import cache
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    a = _get_assignment(assignment_id)
+    if a.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi eslatma yuboradi."))
+    if a.status != Assignment.Status.ACTIVE:
+        raise ValidationError({'detail': _("Qoralama vazifaga eslatma yuborib bo'lmaydi.")})
+    if not cache.add(f'hw:remind:{a.id}', 1, REMIND_COOLDOWN):
+        raise ValidationError({'detail': _("Eslatma yaqinda yuborilgan. Birozdan keyin qayta urinib ko'ring."), 'retry_after': REMIND_COOLDOWN})
+    submitted = set(Submission.objects.filter(assignment=a).values_list('student_id', flat=True))
+    description = f'«{a.course.title}»: «{a.title}» vazifasini hali topshirmadingiz.'
+    notified = 0
+    for student in _enrolled_students(a.course):
+        if student.id in submitted:
+            continue
+        send_notification(
+            sender=teacher, description=description, target_type=Notification.Target.USER, user_id=student.id,
+            kind='homework_reminder', link_type='assignment', link_id=str(a.id),
+        )
+        notified += 1
+    return {'notified': notified}
+
+
+AI_SUMMARY_TTL = 10 * 60
+AI_SUMMARY_SYSTEM = (
+    "Sen o'qituvchi yordamchisisan. Berilgan uy vazifasi natijalari (o'quvchilar anonim) asosida guruh bo'yicha qisqa "
+    "xulosa va keyingi darsga tavsiyalar yoz. Faqat JSON qaytar: "
+    '{"summary": "2-4 gapli umumiy xulosa", "topics": ["qiynalgan mavzular"], '
+    '"recommendations": ["aniq tavsiyalar"]}. '
+    "O'zbek tilida yoz. Natijalarda yo'q narsani o'ylab topma."
+)
+
+
+def ai_summary(*, teacher: User, assignment_id) -> dict:
+    """Guruhga AI xulosa va tavsiya: `{summary, topics, recommendations}`. AI kaliti yo'q bo'lsa 503; topshiriq yo'q bo'lsa 400."""
+    from django.core.cache import cache
+
+    a = _get_assignment(assignment_id)
+    if a.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi guruh xulosasini ko'radi."))
+    if not llm.enabled():
+        raise ServiceUnavailable(_("AI xizmati ulanmagan (OPENAI_API_KEY)."))
+    latest: dict = {}
+    for submission in a.submissions.order_by('-created_at'):
+        latest.setdefault(submission.student_id, submission)  # har o'quvchining oxirgisi
+    if not latest:
+        raise ValidationError({'detail': _("Hali birorta topshiriq yo'q.")})
+    digest = []
+    for index, submission in enumerate(list(latest.values())[:40], 1):
+        digest.append({
+            "o'quvchi": index, 'holat': submission.status, 'ball': submission.overall_score, 'baho': submission.grade,
+            'on_vaqt': not (a.due_at and submission.created_at > a.due_at),
+            'natija': json.dumps(submission.result or {}, ensure_ascii=False)[:500],
+        })
+    key = f'hw:aisum:{a.id}:{len(latest)}:{max(s.updated_at for s in latest.values()).timestamp()}'
+    cached = cache.get(key)
+    if cached:
+        return cached
+    user_prompt = (
+        f'Vazifa: «{a.title}» ({a.course.title}). {a.description}\n'
+        f'Natijalar ({len(digest)} ta topshiriq):\n{json.dumps(digest, ensure_ascii=False)[:12000]}'
+    )
+    try:
+        data = llm.chat_json(AI_SUMMARY_SYSTEM, user_prompt)
+    except llm.LLMError as exc:
+        raise ServiceUnavailable(str(exc)) from None
+
+    def texts(value):
+        return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+
+    result = {
+        'summary': str(data.get('summary') or '').strip(), 'topics': texts(data.get('topics')),
+        'recommendations': texts(data.get('recommendations')), 'submissions_count': len(latest),
+    }
+    cache.set(key, result, AI_SUMMARY_TTL)
+    return result
+
+
 # ── vazifa sahifasida vaqt kuzatuvi ─────────────────────────────────────────
 def record_focus(*, student: User, assignment_id, kind: str) -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz."))
+    _ensure_visible(student, a)
     if kind not in AssignmentFocusEvent.Kind.values:
         raise ValidationError({'kind': _('exit yoki return.')})
     AssignmentFocusEvent.objects.create(assignment=a, student=student, kind=kind)

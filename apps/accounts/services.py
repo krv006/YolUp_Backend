@@ -156,6 +156,156 @@ def change_password(*, user: User, current_password: str, new_password: str, req
     return user.password_changed_at
 
 
+# ---------------------------------------------------------------------------
+# Parolni tiklash (telefon + SMS kod)
+# ---------------------------------------------------------------------------
+RESET_TOKEN_TTL = 600
+
+
+def _accounts_by_phone(raw_phone: str):
+    from apps.core import sms
+
+    users = User.objects.filter(phone__in=sms.phone_variants(raw_phone), is_active=True)
+    digits = sms.normalize_phone(raw_phone)
+    return [u for u in users if sms.normalize_phone(u.phone) == digits]
+
+
+def password_reset_request(*, phone: str, request=None) -> dict:
+    """1-qadam: shu telefonli akkaunt bor bo'lsa SMS kod yuboradi. Yo'q — 404 (frontend talabi)."""
+    from . import otp
+
+    if not _accounts_by_phone(phone):
+        raise NotFound(_('Bunday raqam topilmadi'))
+    result = otp.issue(scope='pwreset', phone=phone)
+    audit.record(action='auth.password_reset_request', actor=None, meta={'phone': otp.sms.mask_phone(phone)}, request=request)
+    return result
+
+
+def password_reset_verify(*, phone: str, code: str) -> dict:
+    """2-qadam: kod to'g'ri bo'lsa bir martalik `reset_token` (10 daqiqa)."""
+    import hashlib
+    import secrets
+
+    from django.core.cache import cache
+
+    from . import otp
+
+    otp.check(scope='pwreset', phone=phone, code=code)
+    token = secrets.token_urlsafe(32)
+    cache.set(
+        f'pwreset:token:{hashlib.sha256(token.encode()).hexdigest()}', otp.sms.normalize_phone(phone), RESET_TOKEN_TTL,
+    )
+    return {'reset_token': token, 'expires_in': RESET_TOKEN_TTL}
+
+
+def password_reset_confirm(*, reset_token: str, password: str, request=None) -> dict:
+    """3-qadam: yangi parol. Shu telefondagi hamma faol akkaunt (bitta odamning rol-akkauntlari) parolini yangilaydi,
+    hamma seans va tokenlar bekor qilinadi."""
+    import hashlib
+
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.cache import cache
+    from django.core.exceptions import ValidationError as DjangoValidationError
+    from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+    from . import sessions
+
+    key = f'pwreset:token:{hashlib.sha256((reset_token or "").encode()).hexdigest()}'
+    phone = cache.get(key)
+    if not phone:
+        raise ValidationError({'detail': _('Tiklash havolasi yaroqsiz yoki muddati o\'tgan. Qaytadan boshlang.')})
+    users = _accounts_by_phone(phone)
+    if not users:
+        raise NotFound(_('Akkaunt topilmadi.'))
+    try:
+        validate_password(password or '', users[0])
+    except DjangoValidationError as exc:
+        raise ValidationError({'password': list(exc.messages)}) from None
+    cache.delete(key)  # bir martalik
+    now = timezone.now()
+    with transaction.atomic():
+        for user in users:
+            user.set_password(password)
+            user.password_changed_at = now
+            user.save(update_fields=['password', 'password_changed_at'])
+            sessions.revoke_all(user)
+            for token in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=token)
+            audit.record(action='auth.password_reset', actor=user, target=user, request=request)
+    return {'ok': True}
+
+
+# ---------------------------------------------------------------------------
+# Ikki bosqichli tasdiqlash (2FA, SMS kod)
+# ---------------------------------------------------------------------------
+def two_factor_enable(*, user: User, password: str) -> dict:
+    """SMS kod yuboradi; yoqish `two_factor_confirm` bilan tugaydi."""
+    from . import otp
+
+    if not user.check_password(password or ''):
+        raise ValidationError({'password': _("Parol noto'g'ri.")})
+    if not user.phone:
+        raise ValidationError({'detail': _("Avval profilda telefon raqamingizni kiriting.")})
+    if user.two_factor_enabled:
+        raise ValidationError({'detail': _('Ikki bosqichli tasdiqlash allaqachon yoqilgan.')})
+    return otp.issue(scope='2fa-setup', phone=user.phone, payload={'user': str(user.id)})
+
+
+def two_factor_confirm(*, user: User, code: str, request=None) -> dict:
+    from . import otp
+
+    payload = otp.check(scope='2fa-setup', phone=user.phone or '', code=code)
+    if payload.get('user') != str(user.id):
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    user.two_factor_enabled = True
+    user.save(update_fields=['two_factor_enabled'])
+    audit.record(action='auth.2fa_enable', actor=user, target=user, request=request)
+    return {'enabled': True}
+
+
+def two_factor_disable(*, user: User, password: str, request=None) -> dict:
+    if not user.check_password(password or ''):
+        raise ValidationError({'password': _("Parol noto'g'ri.")})
+    user.two_factor_enabled = False
+    user.save(update_fields=['two_factor_enabled'])
+    audit.record(action='auth.2fa_disable', actor=user, target=user, request=request)
+    return {'enabled': False}
+
+
+def two_factor_challenge(user: User) -> dict:
+    """Loginda parol to'g'ri, lekin 2FA yoqilgan: SMS kod yuboriladi va `challenge_token` qaytadi (tokenlar HALI berilmaydi)."""
+    import secrets
+
+    from django.core.cache import cache
+
+    from . import otp
+
+    challenge = secrets.token_urlsafe(24)
+    otp.issue(scope='2fa-login', phone=user.phone or '', payload={'user': str(user.id)})
+    cache.set(f'2fa:challenge:{challenge}', str(user.id), otp.CODE_TTL * 5)
+    return {
+        'two_factor_required': True, 'challenge_token': challenge, 'expires_in': otp.CODE_TTL,
+        'retry_after': otp.RETRY_AFTER, 'phone_hint': otp.sms.mask_phone(user.phone or ''),
+    }
+
+
+def two_factor_login(*, challenge_token: str, code: str, request=None) -> User:
+    """Loginning 2-bosqichi: kod to'g'ri bo'lsa foydalanuvchini qaytaradi (tokenni view beradi)."""
+    from django.core.cache import cache
+
+    from . import otp
+
+    user_id = cache.get(f'2fa:challenge:{challenge_token}')
+    user = User.objects.filter(pk=user_id, is_active=True).first() if user_id else None
+    if user is None:
+        raise ValidationError({'detail': _("Kirish so'rovi eskirgan. Qaytadan kiring.")})
+    payload = otp.check(scope='2fa-login', phone=user.phone or '', code=code)
+    if payload.get('user') != str(user.id):
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    cache.delete(f'2fa:challenge:{challenge_token}')
+    return user
+
+
 def me_stats(user: User) -> dict:
     """Profildagi "Guruh / O'quvchi / Tajriba" raqamlari."""
     from apps.lessons.models import Course, Enrollment

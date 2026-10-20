@@ -7,7 +7,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
 from apps.core import audit
@@ -59,10 +59,10 @@ def strip_html(html: str) -> str:
 @transaction.atomic
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
-    link_type: str = '', link_id: str = '', kind: str = '',
+    link_type: str = '', link_id: str = '', kind: str = '', user_ids=None,
 ) -> Notification:
     if target_type not in Notification.Target.values:
-        raise ValidationError({'target_type': _("'user' yoki 'all' bo'lishi kerak.")})
+        raise ValidationError({'target_type': _("'user', 'users', 'parents_of' yoki 'all' bo'lishi kerak.")})
     clean = sanitize_html(description)
     if not clean:
         raise ValidationError({'description': _("Xabar matni bo'sh bo'lishi mumkin emas.")})
@@ -72,6 +72,8 @@ def send_notification(
             recipients = [User.objects.get(pk=user_id)]
         except (User.DoesNotExist, ValueError, TypeError):
             raise NotFound(_('Foydalanuvchi topilmadi.'))
+    elif target_type in (Notification.Target.USERS, Notification.Target.PARENTS_OF):
+        recipients = _resolve_group(target_type, user_ids)
     else:
         recipients = list(User.objects.exclude(pk=sender.pk))
 
@@ -91,6 +93,37 @@ def send_notification(
         meta={'target_type': target_type, 'recipient_count': len(recipients)}, request=request,
     )
     return notification
+
+
+def _resolve_group(target_type: str, user_ids) -> list:
+    """`users` — berilgan foydalanuvchilar; `parents_of` — berilgan o'quvchilarning tasdiqlangan ota-onalari."""
+    from apps.accounts.models import ParentChildLink
+
+    ids = list(dict.fromkeys(user_ids or []))
+    if not ids:
+        raise ValidationError({'user_ids': _("Foydalanuvchilar ro'yxati kerak.")})
+    if target_type == Notification.Target.USERS:
+        return list(User.objects.filter(pk__in=ids))
+    parent_ids = ParentChildLink.objects.filter(
+        student_id__in=ids, status=ParentChildLink.Status.APPROVED,
+    ).values('parent_id')
+    return list(User.objects.filter(pk__in=parent_ids))
+
+
+def authorize_teacher_targets(*, teacher: User, target_type: str, user_ids) -> None:
+    """O'qituvchi (umumiy `notification.send` huquqisiz) faqat O'Z o'quvchilariga yoki ularning ota-onalariga yubora oladi:
+    `user_ids` — uning kurslaridagi tasdiqlangan o'quvchilar bo'lishi shart."""
+    from apps.lessons.models import Enrollment
+
+    if target_type not in (Notification.Target.USERS, Notification.Target.PARENTS_OF):
+        raise PermissionDenied(_("O'qituvchi faqat o'z o'quvchilari yoki ularning ota-onalariga yubora oladi."))
+    ids = set(user_ids or [])
+    own = set(
+        Enrollment.objects.filter(course__teacher=teacher, status=Enrollment.Status.APPROVED, student_id__in=ids)
+        .values_list('student_id', flat=True)
+    )
+    if not ids or ids - own:
+        raise PermissionDenied(_("Ro'yxatda sizning o'quvchingiz bo'lmagan foydalanuvchi bor."))
 
 
 def mark_read(*, user: User, notification_id) -> NotificationRecipient:

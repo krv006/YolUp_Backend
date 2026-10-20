@@ -73,11 +73,29 @@ class LessonSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lesson
         fields = [
-            'id', 'course', 'course_title', 'title', 'starts_at',
+            'id', 'course', 'course_title', 'title', 'note', 'starts_at',
             'duration_min', 'status', 'room_name', 'created_at',
-            'avg_rating', 'rating_count', 'quiz', 'quiz_id',
+            'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
         ]
-        read_only_fields = ['room_name', 'status']
+        read_only_fields = ['room_name', 'status', 'recurrence_id']
+
+    def validate_recurrence(self, value):
+        """`{freq: 'weekly', weeks: 1..52, weekdays: [0..6]}` — faqat dars YARATILGANDA (seriya ochish) ma'noli."""
+        if value in (None, {}):
+            return None
+        if self.instance is not None:
+            return self.instance.recurrence  # mavjud darsning takrorlanishi tahrirlanmaydi
+        if not isinstance(value, dict) or value.get('freq', 'weekly') != 'weekly':
+            raise serializers.ValidationError(_("Hozircha faqat haftalik takrorlanish (freq=weekly) bor."))
+        weeks, weekdays = value.get('weeks'), value.get('weekdays')
+        if not isinstance(weeks, int) or isinstance(weeks, bool) or not 1 <= weeks <= 52:
+            raise serializers.ValidationError(_("`weeks` 1 dan 52 gacha butun son bo'lishi kerak."))
+        if (
+            not isinstance(weekdays, list) or not 1 <= len(weekdays) <= 7
+            or any(not isinstance(d, int) or isinstance(d, bool) or not 0 <= d <= 6 for d in weekdays)
+        ):
+            raise serializers.ValidationError(_("`weekdays` — hafta kunlari ro'yxati (0=dushanba … 6=yakshanba)."))
+        return {'freq': 'weekly', 'weeks': weeks, 'weekdays': sorted(set(weekdays))}
 
     def validate_starts_at(self, value):
         # Faqat YANGI dars yaratishda tekshiramiz — mavjud (o'tgan) darsni

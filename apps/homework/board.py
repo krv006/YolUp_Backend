@@ -30,6 +30,7 @@ def _assignment_for(student: User, assignment_id):
     assignment = services._get_assignment(assignment_id)
     if not services._is_enrolled(student, assignment.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz — doskada vazifa yecha olmaysiz."))
+    services._ensure_visible(student, assignment)
     return assignment
 
 

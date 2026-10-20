@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import RequirePerm
+from apps.core.permissions import RequirePerm, user_has_perm
 
 from . import selectors, services
 from .models import Notification
@@ -23,11 +23,23 @@ from .serializers import (
 )
 
 
+class CanSendNotifications(IsAuthenticated):
+    """`notification.send` (admin) yoki `notification.send_students` (o'qituvchi — faqat o'z o'quvchilariga)."""
+
+    def has_permission(self, request, view):
+        return bool(
+            super().has_permission(request, view)
+            and (user_has_perm(request.user, 'notification.send') or user_has_perm(request.user, 'notification.send_students'))
+        )
+
+
 class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     """GET /notifications/ — mening inbox'im. Admin uchun qo'shimcha action'lar."""
 
     def get_permissions(self):
-        if self.action in ('send', 'sent', 'recipients'):
+        if self.action == 'send':
+            return [CanSendNotifications()]  # admin (hamma) yoki o'qituvchi (faqat o'z o'quvchilari)
+        if self.action in ('sent', 'recipients'):
             return [RequirePerm('notification.send')()]
         return [IsAuthenticated()]
 
@@ -50,9 +62,16 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         """Admin: bitta userga (`target_type=user` + `user_id`) yoki hammaga (`target_type=all`)."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        notification = services.send_notification(
-            sender=request.user, request=request, **serializer.validated_data,
-        )
+        data = serializer.validated_data
+        if not user_has_perm(request.user, 'notification.send'):
+            services.authorize_teacher_targets(
+                teacher=request.user, target_type=data['target_type'], user_ids=data.get('user_ids'),
+            )
+            # O'qituvchi tizim havolalarini (link_*) yasay olmaydi; `kind` faqat eslatma turlari bilan cheklangan
+            data = {**data, 'link_type': '', 'link_id': ''}
+            if data.get('kind') not in ('homework_reminder', 'lesson_reminder'):
+                data['kind'] = ''
+        notification = services.send_notification(sender=request.user, request=request, **data)
         return Response(NotificationSerializer(notification).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False)

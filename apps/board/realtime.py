@@ -50,6 +50,11 @@ def broadcast_board_granted(lesson_id, student_id: str) -> None:
     _send(lesson_id, {'type': 'board_granted', 'student_id': student_id})
 
 
+def broadcast_board_revoked(lesson_id, student_id: str) -> None:
+    """O'qituvchi doskaga chizish ruxsatini qaytarib oldi — o'quvchi chizish asboblarini o'chirishi uchun."""
+    _send(lesson_id, {'type': 'board_revoked', 'student_id': student_id})
+
+
 def broadcast_mic_request(lesson_id, student_id: str, name: str) -> None:
     """O'quvchi mikrofon so'radi — o'qituvchiga darhol ko'rinishi uchun
     (frontend faqat is_teacher=true bo'lganda "qo'l ko'tarildi" belgisini

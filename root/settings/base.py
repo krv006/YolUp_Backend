@@ -278,6 +278,16 @@ TEST_CREATOR_GIVE_UP_MINUTES = 45                                          # shu
 # Imtihon qoidalari bo'yicha AI test generatori (apps/quizzes/ai_exam.py): OpenAI-mos Chat Completions API.
 # OPENAI_API_KEY bo'sh bo'lsa generator o'chiq (endpoint 400 qaytaradi), qolgan platforma ishlayveradi.
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+
+# SMS (parolni tiklash, 2FA). Bo'sh = provayder ulanmagan (503). `console` — faqat log. Eskiz.uz: ESKIZ_EMAIL/ESKIZ_PASSWORD.
+SMS_BACKEND = os.getenv('SMS_BACKEND', '')
+ESKIZ_EMAIL = os.getenv('ESKIZ_EMAIL', '')
+ESKIZ_PASSWORD = os.getenv('ESKIZ_PASSWORD', '')
+ESKIZ_FROM = os.getenv('ESKIZ_FROM', '4546')
+SMS_CODE_TEMPLATE = os.getenv('SMS_CODE_TEMPLATE', 'YolUp tasdiqlash kodi: {code}. Hech kimga bermang.')
+
+# Guruhga taklif havolasi: https://<domen>/j/<kod>
+INVITE_BASE_URL = os.getenv('INVITE_BASE_URL', 'https://yolup.uz')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
 OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
 # IELTS Writing baholash uchun alohida (kuchliroq) model; bo'sh bo'lsa OPENAI_MODEL ishlatiladi

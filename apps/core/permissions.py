@@ -38,6 +38,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'attendance.view',
         'chat.use',
         'homework.assign', 'homework.view',
+        'notification.send_students',
         'child.create',
         'quiz.create', 'quiz.view',
         'exam.manage', 'exam.view',

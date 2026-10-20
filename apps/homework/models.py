@@ -15,6 +15,7 @@ from django.conf import settings
 from django.db.models import (
     CASCADE,
     SET_NULL,
+    BooleanField,
     CharField,
     DateTimeField,
     FileField,
@@ -50,6 +51,24 @@ class Assignment(TimeStampedUUIDModel):
     attachment = FileField(upload_to=homework_task_path, null=True, blank=True)
     attachment_name = CharField(max_length=255, blank=True)
     due_at = DateTimeField(null=True, blank=True, db_index=True)
+    # Qoralama (o'quvchilarga ko'rinmaydi, chatga xabar tushmaydi) yoki faol (e'lon qilingan)
+    class Status(TextChoices):
+        DRAFT = 'draft', 'Qoralama'
+        ACTIVE = 'active', 'Faol'
+
+    status = CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE, db_index=True)
+    published_at = DateTimeField(null=True, blank=True)
+    # E'lon qilinganda vazifa kartasi guruh chatiga tushadimi; muddatdan keyin topshirish mumkinmi
+    announce_in_chat = BooleanField(default=True)
+    allow_late = BooleanField(default=True)
+    # Baholash turi: five (1-5), hundred (0..max_score), none (bahosiz, faqat izoh)
+    class Grading(TextChoices):
+        FIVE = 'five', '5 ballik'
+        HUNDRED = 'hundred', '100 ballik'
+        NONE = 'none', 'Bahosiz'
+
+    grading = CharField(max_length=8, choices=Grading.choices, default=Grading.FIVE)
+    max_score = PositiveSmallIntegerField(default=5)
     # Til fanlari uchun ko'nikma: writing / reading / listening / speaking.
     # Bo'sh bo'lsa — oddiy fan sifatida tekshiriladi.
     skill_key = CharField(max_length=20, blank=True)
@@ -83,12 +102,13 @@ class Submission(TimeStampedUUIDModel):
         PENDING_REVIEW = 'pending_review', "O'qituvchi ko'rib chiqishi kutilmoqda"
         DONE = 'done', 'Tasdiqlangan'
         ERROR = 'error', 'Xatolik'
+        RESUBMIT_REQUESTED = 'resubmit_requested', "Qayta topshirish so'ralgan"
 
     assignment = ForeignKey('homework.Assignment', CASCADE, related_name='submissions')
     student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='homework_submissions')
     file = FileField(upload_to=homework_submission_path)
     original_name = CharField(max_length=255)
-    status = CharField(max_length=15, choices=Status.choices, default=Status.CHECKING, db_index=True)
+    status = CharField(max_length=20, choices=Status.choices, default=Status.CHECKING, db_index=True)
     # Yakuniy (hozirgi) natija — dastlab AI'nikidan nusxa, o'qituvchi
     # tasdiqlashda ustidan yozishi mumkin. Shu maydonlar o'quvchiga ko'rinadi.
     result = JSONField(null=True, blank=True)
@@ -104,6 +124,12 @@ class Submission(TimeStampedUUIDModel):
         related_name='homework_reviews',
     )
     reviewed_at = DateTimeField(null=True, blank=True)
+    # O'qituvchi qo'ygan xom baho vazifa shkalasida (five: 1-5, hundred: 0..max_score); `overall_score` esa doim 0-100
+    grade_value = FloatField(null=True, blank=True)
+    # Natija (baho va izoh) ota-ona ilovasida ko'rinadimi
+    share_with_parent = BooleanField(default=True)
+    resubmit_comment = TextField(blank=True)
+    resubmit_requested_at = DateTimeField(null=True, blank=True)
     error = TextField(blank=True)
     checked_at = DateTimeField(null=True, blank=True)
     # Topshirilgan payt (`request.LANGUAGE_CODE`, `Accept-Language`dan) saqlanadi

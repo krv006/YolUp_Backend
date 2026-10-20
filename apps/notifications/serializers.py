@@ -86,6 +86,11 @@ class SendNotificationSerializer(serializers.Serializer):
     description = serializers.CharField()
     target_type = serializers.ChoiceField(choices=Notification.Target.choices)
     user_id = serializers.UUIDField(required=False, allow_null=True)
+    # `users` / `parents_of` uchun: bitta so'rovda ko'pchilikka (ko'pi bilan 500)
+    user_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=False, max_length=500)
+    kind = serializers.CharField(required=False, allow_blank=True, max_length=32, default='')
+    link_type = serializers.CharField(required=False, allow_blank=True, max_length=32, default='')
+    link_id = serializers.CharField(required=False, allow_blank=True, max_length=64, default='')
 
 
 class PushSubscribeSerializer(serializers.Serializer):

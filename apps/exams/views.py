@@ -176,6 +176,18 @@ class ExamResultsView(APIView):
         return Response(services.list_results(user=request.user, exam=exam))
 
 
+class ExamShareResultsView(APIView):
+    """`{to: "group_chat"}` — natijalar jadvali guruh chatiga xabar bo'lib boradi (imtihon tugagach, faqat o'qituvchi)."""
+
+    permission_classes = [RequirePerm('exam.manage')]
+
+    def post(self, request, pk):
+        exam = _get_exam(request.user, pk)
+        return Response(services.share_results(
+            teacher=request.user, exam=exam, to=request.data.get('to') or 'group_chat',
+        ))
+
+
 class ExamResultDetailView(APIView):
     permission_classes = [RequirePerm('exam.view')]
 

@@ -3,7 +3,7 @@ import json
 import re
 from urllib.parse import quote
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from django.http import FileResponse, HttpResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import status, viewsets
@@ -166,9 +166,36 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             .select_related('message', 'message__sender').order_by('-message__created_at', 'order')
         )
         rows = rows.filter(mime__startswith='image/') if kind == 'media' else rows.exclude(mime__startswith='image/')
+        params = request.query_params
+        if params.get('cursor') or params.get('limit'):
+            return self._attachments_by_cursor(rows, params)
         page = self.paginate_queryset(rows)
         data = [_attachment_row(row) for row in page]
         return self.get_paginated_response(data)
+
+    def _attachments_by_cursor(self, rows, params):
+        """`?limit=&cursor=` — cursor (oldingi sahifadagi oxirgi biriktirma id'si) bilan: `{count, results, next_cursor}`."""
+        try:
+            size = max(1, min(int(params.get('limit') or DEFAULT_PAGE), MAX_PAGE))
+        except ValueError:
+            raise ValidationError({'limit': _("Son bo'lishi kerak.")}) from None
+        total = rows.count()
+        cursor = params.get('cursor')
+        if cursor:
+            try:
+                anchor = rows.get(pk=cursor)
+            except (MessageAttachment.DoesNotExist, *services.BAD_ID):
+                raise ValidationError({'cursor': _('Biriktirma topilmadi.')}) from None
+            older = Q(message__created_at__lt=anchor.message.created_at)
+            same_message_later = Q(message=anchor.message, order__gt=anchor.order)
+            rows = rows.filter(older | same_message_later)
+        page = list(rows[:size + 1])
+        more = len(page) > size
+        page = page[:size]
+        return Response({
+            'count': total, 'results': [_attachment_row(row) for row in page],
+            'next_cursor': str(page[-1].id) if more and page else None,
+        })
 
     def _send(self, request, pk):
         data = request.data
@@ -421,7 +448,7 @@ def _attachment_row(row) -> dict:
     url = f'/api/v1/chat/attachments/{row.id}/'
     is_image = row.mime.startswith('image/')
     return {
-        'id': str(row.id), 'message_id': str(message.id), 'name': row.name, 'mime_type': row.mime, 'size': row.size,
+        'id': str(row.id), 'message_id': str(message.id), 'name': row.name, 'mime_type': row.mime, 'mime': row.mime, 'size': row.size,
         'url': url, 'thumbnail_url': f'{url}?thumb=1' if is_image else None, 'page_count': row.page_count,
         'created_at': message.created_at,
         'sender': {'id': str(message.sender_id), 'name': message.sender.get_full_name() or message.sender.username},

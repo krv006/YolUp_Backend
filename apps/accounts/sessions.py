@@ -131,6 +131,10 @@ class SessionTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
         data = super().validate(attrs)
+        if self.user.two_factor_enabled:
+            from . import services
+
+            return services.two_factor_challenge(self.user)  # kod tasdiqlanmaguncha token berilmaydi
         refresh = RefreshToken(data['refresh'])
         refresh['sid'] = str(start_session(self.user, self.context.get('request')).id)
         data['refresh'] = str(refresh)

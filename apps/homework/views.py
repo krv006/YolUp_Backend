@@ -22,6 +22,7 @@ class AssignmentListCreateView(APIView):
     def get(self, request):
         return Response(services.list_assignments(
             user=request.user, course_id=request.query_params.get('course'),
+            status=request.query_params.get('status'),
         ))
 
     def post(self, request):
@@ -38,6 +39,11 @@ class AssignmentListCreateView(APIView):
             lesson_id=request.data.get('lesson_id') or None,
             extra_instructions=request.data.get('extra_instructions') or '',
             attachment=request.FILES.get('attachment'),
+            status=request.data.get('status') or 'active',
+            announce_in_chat=request.data.get('announce_in_chat'),
+            allow_late=request.data.get('allow_late'),
+            grading=request.data.get('grading') or 'five',
+            max_score=request.data.get('max_score'),
         )
         return Response(data, status=201)
 
@@ -56,7 +62,10 @@ class AssignmentDetailView(APIView):
             return Response({'detail': "Tahrirlash faqat o'qituvchi uchun."}, status=403)
 
         kwargs = {}
-        for field in ('title', 'description', 'body', 'due_at', 'skill_key', 'lesson_id', 'extra_instructions'):
+        for field in (
+            'title', 'description', 'body', 'due_at', 'skill_key', 'lesson_id', 'extra_instructions',
+            'status', 'announce_in_chat', 'allow_late', 'grading', 'max_score',
+        ):
             if field in request.data:
                 kwargs[field] = request.data.get(field)
         if 'attachment' in request.FILES:
@@ -154,14 +163,55 @@ class SubmissionReviewView(APIView):
     permission_classes = [RequirePerm('homework.assign')]
 
     def post(self, request, submission_id):
+        grade = request.data.get('grade')
+        grade_value, label = None, ''
+        if isinstance(grade, (int, float)) and not isinstance(grade, bool):
+            grade_value = grade
+        elif isinstance(grade, str) and grade.strip():
+            try:
+                grade_value = float(grade.replace(',', '.'))
+            except ValueError:
+                label = grade  # eski usul: matnli baho yorlig'i ("A'lo")
         data = services.review_submission(
             teacher=request.user,
             submission_id=submission_id,
             overall_score=request.data.get('overall_score'),
-            grade=request.data.get('grade') or '',
+            grade=label,
             result=request.data.get('result'),
+            grade_value=grade_value if grade_value is not None else request.data.get('grade_value'),
+            share_with_parent=request.data.get('share_with_parent'),
         )
         return Response(data)
+
+
+class RequestResubmitView(APIView):
+    """`{comment?}` — topshiriqni qayta topshirishga qaytaradi (o'quvchiga bildirishnoma)."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+
+    def post(self, request, submission_id):
+        services.request_resubmit(
+            teacher=request.user, submission_id=submission_id, comment=request.data.get('comment') or '',
+        )
+        return Response({'ok': True})
+
+
+class RemindView(APIView):
+    """Topshirmaganlarga eslatma -> `{notified: n}`."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+
+    def post(self, request, assignment_id):
+        return Response(services.remind_missing(teacher=request.user, assignment_id=assignment_id))
+
+
+class AiSummaryView(APIView):
+    """Guruh bo'yicha AI xulosa -> `{summary, topics, recommendations}`."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+
+    def post(self, request, assignment_id):
+        return Response(services.ai_summary(teacher=request.user, assignment_id=assignment_id))
 
 
 class AssignmentFocusView(APIView):

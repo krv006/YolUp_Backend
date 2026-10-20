@@ -82,6 +82,11 @@ class User(AbstractUser):
     password_changed_at = DateTimeField(null=True, blank=True)
     # Oxirgi faollik (autentifikatsiyalangan so'rov yoki chat ulanishi yopilishi) — chat a'zolari ro'yxatida "5 daqiqa oldin"
     last_seen_at = DateTimeField(null=True, blank=True)
+    # Ikki bosqichli tasdiqlash (SMS kod) — yoqilgan bo'lsa loginda paroldan keyin kod so'raladi
+    two_factor_enabled = BooleanField(default=False)
+    # Tizim sozlamalari: "Yangi xabarlar" va "Email xabarnomalar" tugmalari
+    notify_messages = BooleanField(default=True)
+    notify_email = BooleanField(default=False)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

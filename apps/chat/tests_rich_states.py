@@ -278,7 +278,7 @@ class FilesAndMediaTabsTests(ChatV2Base):
         self.assertEqual([m['name'] for m in media['results']], ['rasm1.png', 'rasm2.png'])
         first = media['results'][0]
         self.assertEqual(
-            set(first), {'id', 'message_id', 'name', 'mime_type', 'size', 'url', 'thumbnail_url', 'page_count', 'created_at', 'sender'},
+            set(first), {'id', 'message_id', 'name', 'mime_type', 'mime', 'size', 'url', 'thumbnail_url', 'page_count', 'created_at', 'sender'},
         )
         self.assertEqual((first['mime_type'], first['sender']['name']), ('image/png', 's3'))
         self.assertTrue(first['thumbnail_url'].endswith('?thumb=1'))
