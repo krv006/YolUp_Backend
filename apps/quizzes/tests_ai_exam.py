@@ -697,6 +697,21 @@ class AiExamJobTests(QuizTestBase):
         self.assertEqual(job.plan['plan']['language'], 'Uzbek (Latin script)')  # reja 'en' degan bo'lsa ham
         self.assertTrue(any('Uzbek (Latin script)' in prompt for prompt in seen[1:]))  # yozuvchi shu tilni oladi
 
+    def test_without_material_and_language_the_test_is_written_in_uzbek(self):
+        # Material yo'q + til aytilmagan: avval AI ko'rsatmalar tilida (inglizcha) yozib yuborar edi
+        self.post_raw(topic='Kvadrat tenglamalar')
+        self.sync()
+        job = AiQuizJob.objects.latest('created_at')
+        self.assertEqual(job.plan['plan']['language'], 'Uzbek (Latin script)')  # reja saqlandi (savollar tayyor bo'lishi shart emas)
+
+    def test_with_material_the_language_still_follows_it(self):
+        self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'course': self.course_id, 'file': self.upload(text=LONG * 5)}
+        response = self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+        self.sync()
+        job = AiQuizJob.objects.get(pk=response.json()['id'])
+        self.assertEqual(job.plan['plan']['language'], 'auto')
+
     def test_rules_override_the_exam_name(self):
         seen = {}
 

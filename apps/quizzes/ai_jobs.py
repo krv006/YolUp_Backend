@@ -361,6 +361,10 @@ def _run_engine(job: AiQuizJob) -> None:
             rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name, material=material)
         if job.language:  # o'qituvchi tilni aniq tanlagan — reja/material tilidan ustun
             plan['language'] = ai_exam.LANGUAGE_NAMES[job.language]
+        elif plan['language'] == 'auto' and not material.strip():
+            # Material yo'q — "material tili" ma'nosiz (ko'rsatmalar inglizcha, AI inglizcha yozib yuborardi).
+            # Platforma o'zbek o'qituvchilari uchun: til aytilmagan bo'lsa o'zbekcha (lotin)
+            plan['language'] = ai_exam.LANGUAGE_NAMES['uz']
         state = {'material': material, 'plan': plan, 'sections': {}}
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])
