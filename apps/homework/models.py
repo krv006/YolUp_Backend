@@ -128,6 +128,9 @@ class Submission(TimeStampedUUIDModel):
     grade_value = FloatField(null=True, blank=True)
     # Natija (baho va izoh) ota-ona ilovasida ko'rinadimi
     share_with_parent = BooleanField(default=True)
+    # O'qituvchining izohi (baho bilan birga o'quvchiga ko'rinadi). `result` (AI natijasi) dan ALOHIDA: o'qituvchi
+    # "qayta tekshirish"ni bossa AI `result` ni yangidan yozadi, izoh esa saqlanib qoladi.
+    teacher_comment = TextField(blank=True)
     resubmit_comment = TextField(blank=True)
     resubmit_requested_at = DateTimeField(null=True, blank=True)
     error = TextField(blank=True)

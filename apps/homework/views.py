@@ -180,6 +180,7 @@ class SubmissionReviewView(APIView):
             result=request.data.get('result'),
             grade_value=grade_value if grade_value is not None else request.data.get('grade_value'),
             share_with_parent=request.data.get('share_with_parent'),
+            teacher_comment=request.data.get('teacher_comment'),
         )
         return Response(data)
 

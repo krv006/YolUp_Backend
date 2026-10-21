@@ -228,6 +228,7 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         'grading': s.assignment.grading,
         'max_score': s.assignment.max_score,
         'share_with_parent': s.share_with_parent,
+        'teacher_comment': '' if hide_result else s.teacher_comment,
         'resubmit_comment': s.resubmit_comment if s.status == Submission.Status.RESUBMIT_REQUESTED else '',
         'error': s.error,
         'is_late': bool(due and s.created_at and s.created_at > due),
@@ -851,7 +852,8 @@ def sync_ai_results(*, now=None, batch: int = 50) -> dict:
 
 # ── o'qituvchi baholashi/tasdiqlashi ────────────────────────────────────────
 def review_submission(*, teacher: User, submission_id, overall_score=None,
-                      grade: str = '', result=None, grade_value=None, share_with_parent=None) -> dict:
+                      grade: str = '', result=None, grade_value=None, share_with_parent=None,
+                      teacher_comment=None) -> dict:
     """O'qituvchi topshiriqni baholaydi. Vazifa baholash turiga qarab:
 
       - `five`: `grade_value` 1-5 (yoki eski `overall_score` 0-100); `overall_score` = baho*20.
@@ -911,6 +913,12 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
             s.grade = rules.grade_label(s.overall_score)
     if result is not None:
         s.result = result
+        if teacher_comment is None and isinstance(result.get('teacher_comment'), str):
+            teacher_comment = result['teacher_comment']  # eski usul: izoh `result` ichida kelgan
+    if teacher_comment is not None:
+        if not isinstance(teacher_comment, str):
+            raise ValidationError({'teacher_comment': _("Matn bo'lishi kerak.")})
+        s.teacher_comment = teacher_comment.strip()[:2000]
     if share_with_parent is not None:
         s.share_with_parent = bool(_bool(share_with_parent, True))
     s.status = Submission.Status.DONE
