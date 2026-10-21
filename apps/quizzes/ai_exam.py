@@ -53,6 +53,9 @@ _PLANNER_SYSTEM = (
     'Keep the real order of sections and question blocks exactly as the rules describe them. '
     'Put the student-facing instruction of each block exactly as the real exam prints it '
     '(for example "Choose NO MORE THAN TWO WORDS from the passage for each answer") in "instruction". '
+    'Every "instruction" and every entry of "rules" must be written in the test language (the "language" you set, or '
+    'the one stated as MANDATORY below): translate the instruction into it, never leave English text in an Uzbek or '
+    'Russian test. '
     'If a section needs a reading passage, set "passage" with the word range; otherwise null. '
     'If a section is a LISTENING section (the student listens to a recording), set "audio" instead of "passage": '
     '{"min_words": 500, "max_words": 800, "speakers": 2, "description": "..."} (a real recording lasts 4-5 minutes, '
@@ -244,6 +247,17 @@ def _material_outline(material: str, limit: int = 12000) -> str:
 # Test tili kodi -> AI ko'rsatmasidagi nom
 LANGUAGE_NAMES = {'uz': 'Uzbek (Latin script)', 'uz_cyrl': 'Uzbek (Cyrillic script)', 'ru': 'Russian', 'en': 'English'}
 
+_ENGLISH_EXAM = re.compile(r'ielts|toefl|\bsat\b|\bgre\b|gmat|cambridge|english|ingliz|angliy', re.IGNORECASE)
+
+
+def default_language(*, exam_name: str, rules: str, material: str) -> str:
+    """Til tanlanmaganda: material ham, qoidalar ham yo'q va imtihon ingliz tilidagi emas (IELTS, SAT...) bo'lsa — 'uz'
+    (ko'rsatmalar inglizcha, shuning uchun AI o'zi inglizcha yozib yuborardi). Aks holda bo'sh: reja/material hal qiladi."""
+    if material.strip() or (rules or '').strip() or _ENGLISH_EXAM.search(exam_name or ''):
+        return ''
+    return 'uz'
+
+
 _IELTS_WRITING = re.compile(r'ielts.*writing|writing.*ielts', re.IGNORECASE)
 
 
@@ -264,7 +278,8 @@ def ielts_writing_plan() -> dict:
     }
 
 
-def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '', material: str = '') -> dict:
+def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name: str = '', material: str = '',
+              language: str = '') -> dict:
     """Reja tuzadi. Manba: (1) o'qituvchining qoidalar matni, (2) imtihon nomi — AI uning rasmiy tuzilmasini
     o'zi eslaydi (IELTS, SAT...), (3) ikkalasi ham bo'sh — oddiy variantli reja (AI chaqirilmaydi).
     Qoidalar va nom birga berilsa, qoidalar ustun."""
@@ -278,6 +293,9 @@ def plan_exam(rules_text: str, *, target_total: int, topic: str = '', exam_name:
     parts = [total, f'topic: {topic}']
     if exam_name:
         parts.append(f'exam: {exam_name}')
+    if language in LANGUAGE_NAMES:  # o'qituvchi tilni aniq tanlagan
+        parts.append(f'language: {LANGUAGE_NAMES[language]} (MANDATORY: set "language" to "{language}" and write every '
+                     '"instruction" and "rules" entry in this language)')
     if rules_text:
         parts.append('EXAM FORMAT RULES (they override your own knowledge of the exam):\n'
                      + rules_text[:settings.AI_EXAM_RULES_CHARS])

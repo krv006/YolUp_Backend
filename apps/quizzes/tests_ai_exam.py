@@ -704,6 +704,28 @@ class AiExamJobTests(QuizTestBase):
         job = AiQuizJob.objects.latest('created_at')
         self.assertEqual(job.plan['plan']['language'], 'Uzbek (Latin script)')  # reja saqlandi (savollar tayyor bo'lishi shart emas)
 
+    def test_planner_is_told_the_language_and_to_translate_instructions(self):
+        seen = []
+
+        def capture(url, json=None, **kwargs):
+            seen.append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'course': self.course_id, 'exam_name': 'Milliy sertifikat matematika', 'language': 'ru'}
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+            self.sync()
+        self.assertIn('language: Russian (MANDATORY', seen[0])
+        # tilsiz va materialsiz, ingliz tili imtihoni emas: avtomatik o'zbekcha; IELTS esa o'zgarmaydi
+        from apps.quizzes import ai_exam
+        self.assertEqual(ai_exam.default_language(exam_name='Milliy sertifikat', rules='', material=''), 'uz')
+        for kwargs in ({'exam_name': 'IELTS Reading', 'rules': '', 'material': ''},
+                       {'exam_name': 'DTM', 'rules': '', 'material': 'matn'},
+                       {'exam_name': 'DTM', 'rules': 'qoidalar', 'material': ''},
+                       {'exam_name': 'Digital SAT', 'rules': '', 'material': ''}):
+            self.assertEqual(ai_exam.default_language(**kwargs), '')
+
     def test_with_material_the_language_still_follows_it(self):
         self.auth(self.teacher_token)
         data = {'topic': 'Bees', 'course': self.course_id, 'file': self.upload(text=LONG * 5)}
