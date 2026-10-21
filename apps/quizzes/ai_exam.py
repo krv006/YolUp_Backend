@@ -239,6 +239,9 @@ def _material_outline(material: str, limit: int = 12000) -> str:
     return '\n[...]\n'.join([material[:third], material[mid - third // 2: mid + third // 2], material[-third:]])
 
 
+# Test tili kodi -> AI ko'rsatmasidagi nom
+LANGUAGE_NAMES = {'uz': 'Uzbek (Latin script)', 'uz_cyrl': 'Uzbek (Cyrillic script)', 'ru': 'Russian', 'en': 'English'}
+
 _IELTS_WRITING = re.compile(r'ielts.*writing|writing.*ielts', re.IGNORECASE)
 
 

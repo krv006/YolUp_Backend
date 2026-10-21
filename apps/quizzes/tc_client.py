@@ -30,6 +30,9 @@ _SUBJECT_CODES = {
     'history': 'HISTORY', 'biology': 'BIOLOGY',
 }
 
+# Test tili berilmasa: Milliy sertifikat — o'zbekcha, IELTS/SAT — inglizcha
+DEFAULT_LANGUAGES = {'uzbmb': 'uz', 'ielts': 'en', 'sat': 'en'}
+
 ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.pptx', '.txt', '.md', '.csv', '.xlsx', '.xlsm'}
 
 _state = {'token': None}
@@ -162,13 +165,15 @@ def document_status(document_id: str) -> dict:
     return _request('GET', f'/documents/{document_id}/status').json()
 
 
-def start_generation(*, document_id: str, standard: str, title: str, count: int) -> str:
-    """Reja tuzadi va test yaratishni FONDA boshlaydi (xizmat 202 qaytaradi). Qaytaradi: test id."""
+def start_generation(*, document_id: str, standard: str, title: str, count: int, language: str = '') -> str:
+    """Reja tuzadi va test yaratishni FONDA boshlaydi (xizmat 202 qaytaradi). Qaytaradi: test id.
+    `language` (uz | uz_cyrl | ru | en) xizmatda MAJBURIY (2026-10-21 dan); berilmasa standartga qarab olinadi."""
     blueprint = _request('POST', '/blueprints', json={
         'standard_version_id': _standard_version_id(standard),
         'document_id': document_id,
         'name': title,
         'requested_total': count,
+        'language': language or DEFAULT_LANGUAGES.get(standard, 'uz'),
     }).json()
     started = _request('POST', '/tests/generate', json={'blueprint_id': blueprint['id'], 'title': title}).json()
     return started['id']

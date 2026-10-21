@@ -679,6 +679,24 @@ class AiExamJobTests(QuizTestBase):
         self.assertEqual([c[0] for c in self.fake.calls], ['plan', 'section', 'section'])
         self.assertEqual(Quiz.objects.get(pk=job.quiz_id).groups.count(), 2)
 
+    def test_chosen_language_overrides_the_plan_language(self):
+        seen = []
+
+        def capture(url, json=None, **kwargs):
+            seen.append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        self.auth(self.teacher_token)
+        data = {'topic': 'Bees', 'course': self.course_id, 'exam_name': 'IELTS Academic Reading', 'language': 'uz'}
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            response = self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
+            self.assertEqual((response.status_code, response.json()['language']), (202, 'uz'))
+            self.sync()
+        job = AiQuizJob.objects.get(pk=response.json()['id'])
+        self.assertEqual(job.status, 'done', job.error)
+        self.assertEqual(job.plan['plan']['language'], 'Uzbek (Latin script)')  # reja 'en' degan bo'lsa ham
+        self.assertTrue(any('Uzbek (Latin script)' in prompt for prompt in seen[1:]))  # yozuvchi shu tilni oladi
+
     def test_rules_override_the_exam_name(self):
         seen = {}
 

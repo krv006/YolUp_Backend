@@ -491,6 +491,8 @@ class AiQuizCreateSerializer(serializers.Serializer):
     exam_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default='')
     # 0 = avto: imtihonning o'z savol soni (imtihon nomi/qoidalari berilganda)
     question_count = serializers.IntegerField(min_value=0, max_value=200, default=0)
+    # Test tili: uz | uz_cyrl | ru | en. Bo'sh = avtomatik (uzbmb -> uz, ielts/sat -> en; AI generatorda — material tili)
+    language = serializers.ChoiceField(choices=AiQuizJob.Language.choices, required=False, allow_blank=True, default='')
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False, allow_null=True)
     subject = serializers.ChoiceField(choices=Course.Subject.choices, required=False, allow_blank=True, default='')
 
@@ -501,7 +503,7 @@ class AiQuizJobSerializer(serializers.ModelSerializer):
     class Meta:
         model = AiQuizJob
         fields = [
-            'id', 'status', 'topic', 'title', 'standard', 'mode', 'question_count', 'course', 'subject',
+            'id', 'status', 'topic', 'title', 'standard', 'language', 'mode', 'question_count', 'course', 'subject',
             'source_name', 'rules_name', 'exam_name', 'summary', 'quiz', 'error', 'warnings', 'created_at', 'updated_at',
         ]
         read_only_fields = fields

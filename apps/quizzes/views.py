@@ -134,7 +134,7 @@ class QuizAiGenerateView(APIView):
         job = ai_jobs.create_job(
             teacher=request.user, uploads=request.FILES.getlist('file'), course=data.get('course'),
             subject=data.get('subject', ''), topic=data['topic'], title=data.get('title', ''),
-            standard=data.get('standard', ''), question_count=data['question_count'],
+            standard=data.get('standard', ''), question_count=data['question_count'], language=data.get('language', ''),
             rules_upload=request.FILES.get('rules_file'), rules_text=data.get('rules_text', ''),
             material_text_value=data.get('material_text', ''), exam_name=data.get('exam_name', ''),
         )

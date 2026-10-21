@@ -141,6 +141,25 @@ class AiQuizJobTests(QuizTestBase):
         self.assertIsNone(body['quiz'])
         self.assertEqual(self.fake.calls, [])  # so'rov ichida xizmatga murojaat yo'q
 
+    def test_language_is_always_sent_to_the_service(self):
+        # Xizmat 2026-10-21 dan `language` ni MAJBURIY talab qiladi (usiz 422) — bermasak standartga qarab olinadi
+        self.start()
+        self.sync()
+        self.assertEqual(self.fake.blueprint_payload['language'], 'uz')  # uzbmb -> o'zbekcha
+        self.assertEqual(self.start().json()['language'], '')  # javobda tanlanmagan til bo'sh
+
+    def test_teacher_chosen_language_wins_and_bad_language_is_refused(self):
+        resp = self.start(language='ru')
+        self.assertEqual((resp.status_code, resp.json()['language']), (202, 'ru'))
+        self.sync()
+        self.assertEqual(self.fake.blueprint_payload['language'], 'ru')
+        self.assertEqual(self.start(language='de').status_code, 400)
+
+    def test_default_language_per_standard(self):
+        from apps.quizzes import tc_client as client
+
+        self.assertEqual(client.DEFAULT_LANGUAGES, {'uzbmb': 'uz', 'ielts': 'en', 'sat': 'en'})
+
     def test_disabled_without_service_url(self):
         with override_settings(TEST_CREATOR_URL=''):
             resp = self.start()

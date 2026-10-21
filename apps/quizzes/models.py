@@ -227,6 +227,12 @@ class AiQuizJob(TimeStampedUUIDModel):
         IELTS = 'ielts', 'IELTS Academic'
         SAT = 'sat', 'Digital SAT'
 
+    class Language(TextChoices):
+        UZ = 'uz', "O'zbekcha (lotin)"
+        UZ_CYRL = 'uz_cyrl', 'Ўзбекча (кирилл)'
+        RU = 'ru', 'Русский'
+        EN = 'en', 'English'
+
     ACTIVE_STATUSES = ('queued', 'processing', 'generating')
 
     teacher = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='ai_quiz_jobs')
@@ -237,6 +243,8 @@ class AiQuizJob(TimeStampedUUIDModel):
     # Bo'sh = imtihon qoidalari bo'yicha AI generator (apps/quizzes/ai_exam.py); to'ldirilgan = Test-creator (eski yo'l)
     standard = CharField(max_length=10, choices=Standard.choices, blank=True, default='')
     question_count = PositiveIntegerField(default=20)
+    # Test tili. Bo'sh = standartga qarab (uzbmb -> uz, ielts/sat -> en); AI generatorda bo'sh = material tilida ("auto")
+    language = CharField(max_length=10, choices=Language.choices, blank=True, default='')
     source_file = FileField(upload_to=ai_quiz_source_path, null=True, blank=True)
     source_name = CharField(max_length=255, blank=True)
     # AI generator materiali: yuklangan fayllar/qo'yilgan matndan olingan toza matn (bo'sh bo'lishi mumkin —

@@ -97,8 +97,10 @@ def _read_stored(entry: dict) -> str:
 
 def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic: str, title: str, standard: str = '',
                question_count: int, rules_upload=None, rules_text: str = '', material_text_value: str = '',
-               exam_name: str = '') -> AiQuizJob:
+               exam_name: str = '', language: str = '') -> AiQuizJob:
     standard = standard or ''
+    if language and language not in AiQuizJob.Language.values:
+        raise ValidationError({'language': _("Til uz, uz_cyrl, ru yoki en bo'lishi kerak.")})
     uploads = [u for u in (uploads or []) if u is not None]
     if standard:
         if not tc_client.enabled():
@@ -148,7 +150,7 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
     source_paths = [] if standard else _stash_material(uploads)
     return AiQuizJob.objects.create(
         teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
-        standard=standard, question_count=question_count,
+        standard=standard, question_count=question_count, language=language or '',
         source_file=uploads[0] if standard else None, source_name=', '.join(source_names)[:255],
         source_text=source_text, source_paths=source_paths, exam_name=(exam_name or '').strip()[:120],
         rules_file=rules_upload, rules_name=(rules_upload.name or '') if rules_upload is not None else '',
@@ -284,7 +286,7 @@ def _generate(job: AiQuizJob) -> None:
     if not state.get('tc_test_id'):
         state['tc_test_id'] = tc_client.start_generation(
             document_id=job.tc_document_id, standard=job.standard, title=job.title or job.topic,
-            count=job.question_count,
+            count=job.question_count, language=job.language,
         )
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])
@@ -357,6 +359,8 @@ def _run_engine(job: AiQuizJob) -> None:
     if not plan:
         plan = ai_exam.plan_exam(
             rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name, material=material)
+        if job.language:  # o'qituvchi tilni aniq tanlagan — reja/material tilidan ustun
+            plan['language'] = ai_exam.LANGUAGE_NAMES[job.language]
         state = {'material': material, 'plan': plan, 'sections': {}}
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])
