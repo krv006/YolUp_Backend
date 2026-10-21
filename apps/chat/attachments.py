@@ -8,12 +8,15 @@ from .models import Message
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_VOICE_BYTES = 10 * 1024 * 1024
+MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 IMAGES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp'}
 AUDIO = {
     '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg',
     '.webm': 'audio/webm', '.wav': 'audio/wav', '.aac': 'audio/aac',
 }
+# `.webm` ovoz sifatida qoladi (brauzer yozuvlari); video uchun mp4/mov/m4v
+VIDEOS = {'.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v'}
 DOCUMENTS = {
     '.pdf': 'application/pdf',
     '.doc': 'application/msword',
@@ -25,13 +28,13 @@ DOCUMENTS = {
     '.txt': 'text/plain',
     '.csv': 'text/csv',
 }
-ALLOWED = {**IMAGES, **AUDIO, **DOCUMENTS}
+ALLOWED = {**IMAGES, **AUDIO, **VIDEOS, **DOCUMENTS}
 
 # Safari/iOS ovoz yozuvi `audio/mp4` ni ko'pincha `.mp4` nomi bilan beradi — faqat ovozli xabar sifatida qabul qilinadi
 VOICE_ONLY = {'.mp4': 'audio/mp4'}
 
 # Brauzerda sahifa ichida ochilishi xavfsiz turlar; qolganlari yuklab olinadi
-INLINE_TYPES = {'application/pdf', *IMAGES.values(), *AUDIO.values()}
+INLINE_TYPES = {'application/pdf', *IMAGES.values(), *AUDIO.values(), *VIDEOS.values()}
 
 MAX_WAVEFORM = 200
 
@@ -81,10 +84,14 @@ def inspect_upload(upload, requested_type: str = '') -> dict:
     kengaytmadan aniqlaymiz — soxta turdan himoya."""
     name = os.path.basename(upload.name or '')[:255] or 'fayl'
     ext = os.path.splitext(name)[1].lower()
-    mime = ALLOWED.get(ext) or (VOICE_ONLY.get(ext) if requested_type == Message.Type.VOICE else None)
+    voice = requested_type == Message.Type.VOICE
+    mime = (VOICE_ONLY.get(ext) if voice else None) or ALLOWED.get(ext)  # ovozli xabarda `.mp4` — audio
     if mime is None:
         raise ValidationError({'file': _("Bu turdagi fayl yuborib bo'lmaydi (%(ext)s).") % {'ext': ext or '-'}})
-    if upload.size > MAX_FILE_BYTES:
+    if ext in VIDEOS and not voice:
+        if upload.size > MAX_VIDEO_BYTES:
+            raise ValidationError({'file': _('Video 50 MB dan katta.')})
+    elif upload.size > MAX_FILE_BYTES:
         raise ValidationError({'file': _('Fayl 20 MB dan katta.')})
     if upload.size == 0:
         raise ValidationError({'file': _("Fayl bo'sh.")})
@@ -99,6 +106,8 @@ def inspect_upload(upload, requested_type: str = '') -> dict:
     elif ext in IMAGES:
         _check_image(upload)
         message_type = Message.Type.IMAGE
+    elif ext in VIDEOS:
+        message_type = Message.Type.VIDEO
     else:
         message_type = Message.Type.FILE
         if ext == '.pdf':

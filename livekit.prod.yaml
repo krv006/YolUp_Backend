@@ -15,6 +15,19 @@ rtc:
   # Serverning tashqi IP sini STUN orqali avtomatik aniqlaydi.
   # Ishlamasa: docker-compose.prod.yml da command ga --node-ip <SERVER_PUBLIC_IP> qo'shing.
   use_external_ip: true
+# --- TURN (ixtiyoriy, hozir O'CHIRILGAN) ---------------------------------------------------------------
+# Kerak bo'lganda: o'quvchi tarmog'i UDP va 7881/tcp ni to'sib, faqat 443 ni ochiq qoldirsa (ba'zi maktab/ofis tarmoqlari).
+# Yoqish uchun: 1) DNS'da `turn.<domen>` A yozuvi shu serverga; 2) serverda 5349/tcp va 3478/udp ochiq (ufw);
+# 3) TLS sertifikat (Caddy'ning `turn.<domen>` uchun olganini ulashing) fayllarini konteynerga ulang;
+# 4) quyidagi blokni izohdan chiqaring va `docker compose ... up -d livekit`. Keyin telefondan mobil internetda
+# va boshqa tarmoqda dars sinab ko'ring. Sinalmagan holda yoqmang — noto'g'ri sozlash LiveKit'ni ishga tushirmaydi.
+# turn:
+#   enabled: true
+#   domain: turn.edu.thesofmebel.uz
+#   tls_port: 5349
+#   udp_port: 3478
+#   cert_file: /etc/turn/fullchain.pem
+#   key_file: /etc/turn/privkey.pem
 # Egress (dars video yozuvi) server bilan Redis orqali gaplashadi
 redis:
   address: redis:6379

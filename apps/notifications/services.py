@@ -88,6 +88,7 @@ def send_notification(
     transaction.on_commit(lambda: realtime.broadcast_notification(notification, recipients))
     transaction.on_commit(lambda: send_web_push(notification, recipients))
     transaction.on_commit(lambda: send_mobile_push(notification, recipients))
+    transaction.on_commit(lambda: send_email_notification(notification, recipients))
     audit.record(
         action='notification.send', actor=sender, target=notification,
         meta={'target_type': target_type, 'recipient_count': len(recipients)}, request=request,
@@ -126,6 +127,32 @@ def authorize_teacher_targets(*, teacher: User, target_type: str, user_ids) -> N
         raise PermissionDenied(_("Ro'yxatda sizning o'quvchingiz bo'lmagan foydalanuvchi bor."))
 
 
+MAX_EMAILS = 200
+
+
+def send_email_notification(notification: Notification, recipients: list[User]) -> None:
+    """"Email xabarnomalar" yoqilgan (`notify_email`) va email manzili bor qabul qiluvchilarga xat. Email ulanmagan bo'lsa
+    jim o'tkaziladi; yuborish alohida oqimda, xato bildirishnomaga ta'sir qilmaydi."""
+    from apps.core import background, mailer
+
+    if not mailer.configured():
+        return
+    emails = [u.email for u in recipients if getattr(u, 'notify_email', False) and u.email][:MAX_EMAILS]
+    if emails:
+        background.run(_send_emails, emails, strip_html(notification.description))
+
+
+def _send_emails(emails: list, text: str) -> None:
+    from apps.core import mailer
+
+    body = f'{text}\n\n— YolUp\nBu xatlarni profil sozlamalarida o\'chirib qo\'yishingiz mumkin.'
+    for address in emails:
+        try:
+            mailer.send_email(address, 'YolUp: yangi bildirishnoma', body)
+        except Exception:  # noqa: BLE001 — bitta manzil xatosi qolganlarga xalaqit bermasin
+            logger.warning('Bildirishnoma xati yuborilmadi: %s', address)
+
+
 def mark_read(*, user: User, notification_id) -> NotificationRecipient:
     try:
         recipient = NotificationRecipient.objects.get(notification_id=notification_id, user=user)
@@ -160,7 +187,7 @@ def remove_push_subscription(*, user: User, endpoint: str) -> bool:
     return bool(deleted)
 
 
-def send_web_push(notification: Notification, recipients: list[User]) -> None:
+def send_web_push(notification: Notification, recipients: list[User], title: str = 'Fokus') -> None:
     """Har qabul qiluvchining barcha obuna qilingan qurilmalariga push
     yuboradi — ilova/tab yopiq bo'lsa ham operatsion tizim darajasida
     bildirishnoma chiqishi uchun. Best-effort: bitta obuna muvaffaqiyatsiz
@@ -173,7 +200,7 @@ def send_web_push(notification: Notification, recipients: list[User]) -> None:
     if not subs:
         return
     payload = json.dumps({
-        'title': 'Fokus',
+        'title': title,
         'body': notification.description[:200],
         'kind': notification.kind,
         'link_type': notification.link_type,
@@ -259,7 +286,7 @@ def _firebase_messaging():
         return None
 
 
-def send_mobile_push(notification: Notification, recipients: list[User]) -> None:
+def send_mobile_push(notification: Notification, recipients: list[User], title: str = 'Fokus') -> None:
     """`send_web_push` bilan bir xil naqsh (best-effort, eskirgan qurilma
     o'chiriladi), faqat FCM orqali mobil qurilmalarga."""
     user_ids = [u.id for u in recipients]
@@ -276,7 +303,7 @@ def send_mobile_push(notification: Notification, recipients: list[User]) -> None
     for device in devices:
         message = messaging.Message(
             token=device.token,
-            notification=messaging.Notification(title='Fokus', body=body),
+            notification=messaging.Notification(title=title, body=body),
             data={
                 'notification_id': str(notification.id),
                 'link_type': notification.link_type or '',

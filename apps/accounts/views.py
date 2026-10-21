@@ -135,7 +135,7 @@ class MeView(generics.RetrieveUpdateAPIView):
 
 
 class SessionListView(APIView):
-    """Faol seanslar: `[{id, device, ip, city, last_active, is_current}]` (`city` — hozircha doim null)."""
+    """Faol seanslar: `[{id, device, ip, city, last_active, is_current}]` (`city` — GEOIP_CITY_DB sozlangan bo'lsa, aks holda null)."""
 
     permission_classes = [IsAuthenticated]
 
@@ -143,7 +143,7 @@ class SessionListView(APIView):
         current = str((request.auth or {}).get('sid') or '')
         rows = UserSession.objects.filter(user=request.user, revoked_at__isnull=True)
         return Response([{
-            'id': str(s.id), 'device': s.device, 'ip': s.ip, 'city': None,
+            'id': str(s.id), 'device': s.device, 'ip': s.ip, 'city': s.city or None,
             'last_active': s.last_active, 'is_current': str(s.id) == current,
         } for s in rows])
 
@@ -239,6 +239,30 @@ class PasswordResetConfirmView(APIView):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return Response(services.password_reset_confirm(request=request, **serializer.validated_data))
+
+
+class SendCodeView(APIView):
+    """Tasdiqlash kodi yuborish. `channel`: `email` yoki `phone` (SMS)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+    channel = 'email'
+
+    def post(self, request):
+        send = services.send_email_code if self.channel == 'email' else services.send_phone_code
+        return Response(send(user=request.user))
+
+
+class VerifyCodeView(APIView):
+    """`{code}` -> `{verified: true}` (email yoki telefon tasdiqlandi)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+    channel = 'email'
+
+    def post(self, request):
+        verify = services.verify_email if self.channel == 'email' else services.verify_phone
+        return Response(verify(user=request.user, code=request.data.get('code'), request=request))
 
 
 class TwoFactorView(APIView):

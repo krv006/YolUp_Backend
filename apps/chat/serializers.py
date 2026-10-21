@@ -92,7 +92,7 @@ class MessageSerializer(serializers.ModelSerializer):
         duration_ms, waveform}`. `file_url`/`file_name`/... eski maydonlari ham joyida."""
         if not obj.file:
             return None
-        kind = obj.message_type if obj.message_type in (Message.Type.VOICE, Message.Type.IMAGE) else 'file'
+        kind = obj.message_type if obj.message_type in (Message.Type.VOICE, Message.Type.IMAGE, Message.Type.VIDEO) else 'file'
         data = {
             'type': kind, 'url': f'/api/v1/chat/files/{obj.id}/', 'name': obj.file_name, 'size': obj.file_size,
             'mime': obj.file_type, 'page_count': obj.page_count,
@@ -115,7 +115,10 @@ class MessageSerializer(serializers.ModelSerializer):
             items = [(str(r.id), r.name, r.mime, r.size, f'/api/v1/chat/attachments/{r.id}/', r.page_count) for r in rows]
         result = []
         for index, (ident, name, mime, size, url, pages) in enumerate(items):
-            kind = 'image' if mime.startswith('image/') else 'voice' if obj.message_type == Message.Type.VOICE else 'file'
+            kind = (
+                'image' if mime.startswith('image/') else 'video' if mime.startswith('video/')
+                else 'voice' if obj.message_type == Message.Type.VOICE else 'file'
+            )
             data = {
                 'id': ident, 'type': kind, 'name': name, 'mime_type': mime, 'size': size, 'url': url,
                 'thumbnail_url': f'{url}?thumb=1' if kind == 'image' else None, 'page_count': pages,
@@ -152,6 +155,9 @@ class MessageSerializer(serializers.ModelSerializer):
         peer = self.context.get('peer_read_at')
         if peer is not None and obj.created_at <= peer:
             return 'read'
+        delivered = self.context.get('peer_delivered_at')
+        if delivered is not None and obj.created_at <= delivered:
+            return 'delivered'
         return 'sent'
 
     def get_reactions(self, obj) -> list:

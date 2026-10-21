@@ -109,6 +109,7 @@ class Message(TimeStampedUUIDModel):
         TEXT = 'text', 'Matn'
         FILE = 'file', 'Fayl'
         IMAGE = 'image', 'Rasm'
+        VIDEO = 'video', 'Video'
         VOICE = 'voice', 'Ovozli xabar'
         ASSIGNMENT = 'assignment', 'Vazifa kartasi'
 
@@ -160,6 +161,8 @@ class RoomRead(TimeStampedUUIDModel):
     room = ForeignKey('chat.ChatRoom', CASCADE, related_name='reads')
     user = ForeignKey('accounts.User', CASCADE, related_name='chat_reads')
     last_read_at = DateTimeField()
+    # Shu foydalanuvchining qurilmasi xabarlarni QABUL QILGAN oxirgi vaqt ("yetib bordi" belgisi uchun)
+    last_delivered_at = DateTimeField(null=True, blank=True)
     # Foydalanuvchining shu suhbatga nisbatan shaxsiy holati (faqat o'zi ko'radi)
     is_pinned = BooleanField(default=False)
     muted = BooleanField(default=False)

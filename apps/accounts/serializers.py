@@ -105,11 +105,24 @@ class MeSerializer(UserSerializer):
         fields = UserSerializer.Meta.fields + [
             'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
+            'email_verified', 'phone_verified',
         ]
-        read_only_fields = UserSerializer.Meta.read_only_fields + ['parent_phone', 'password_changed_at', 'two_factor_enabled']
+        read_only_fields = UserSerializer.Meta.read_only_fields + [
+            'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
+        ]
 
     def validate_email(self, value):
         return (value or '').strip().lower()
+
+    def update(self, instance, validated_data):
+        """Email yoki telefon o'zgarsa yangi manzil/raqam tasdiqlanmagan hisoblanadi."""
+        from apps.core.sms import normalize_phone
+
+        if 'email' in validated_data and validated_data['email'] != instance.email:
+            instance.email_verified = False
+        if 'phone' in validated_data and normalize_phone(validated_data['phone'] or '') != normalize_phone(instance.phone or ''):
+            instance.phone_verified = False
+        return super().update(instance, validated_data)
 
     def validate_birth_date(self, value):
         if value is not None and not (date(1900, 1, 1) <= value <= date.today()):

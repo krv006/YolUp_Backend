@@ -16,7 +16,7 @@ from apps.accounts.models import User
 from apps.core import audit
 from apps.lessons.models import Course, Enrollment
 
-from . import attachments, presence, realtime, selectors
+from . import attachments, presence, push, realtime, selectors
 from .models import ChatRoom, Message, MessageAttachment, MessageHide, MessageReaction, PinnedMessage, RoomRead
 from .serializers import member_row
 
@@ -130,8 +130,8 @@ def send_message_ex(
         fields['duration'] = seconds
         fields['waveform'] = attachments.clean_waveform(waveform)
     elif len(infos) > 1:  # hammasi rasm bo'lsa — rasm xabari, aks holda fayl xabari
-        all_images = all(info['message_type'] == Message.Type.IMAGE for info in infos)
-        fields['message_type'] = Message.Type.IMAGE if all_images else Message.Type.FILE
+        kinds = {info['message_type'] for info in infos}
+        fields['message_type'] = kinds.pop() if len(kinds) == 1 and kinds <= {Message.Type.IMAGE, Message.Type.VIDEO} else Message.Type.FILE
     if not infos and message_type == Message.Type.VOICE:
         raise ValidationError({'file': _('Ovozli xabar uchun audio fayl kerak.')})
     if not text and not files:
@@ -158,6 +158,7 @@ def send_message_ex(
             # Real-time: tranzaksiya muvaffaqiyatli yopilgandan KEYIN tarqatamiz (aks holda ulangan
             # client hali bazada yo'q xabarni ko'rishi mumkin)
             transaction.on_commit(lambda: realtime.broadcast_message(message))
+            transaction.on_commit(lambda: push.schedule(message))  # chatda bo'lmaganlarga push (fonda)
             if mentioned:
                 transaction.on_commit(lambda: _notify_mentions(message, mentioned))
     except IntegrityError:
@@ -319,6 +320,54 @@ def read_room(*, user: User, room_id, last_message_id=None) -> dict:
 def peer_read_at(room: ChatRoom, user: User):
     """Boshqa a'zolar eng oxirgi o'qigan vaqt — o'z xabarlarimning `status`i uchun."""
     return RoomRead.objects.filter(room=room).exclude(user=user).aggregate(m=Max('last_read_at'))['m']
+
+
+def peer_delivered_at(room: ChatRoom, user: User):
+    """Suhbatdosh qurilmasi xabarlarni eng oxirgi qabul qilgan vaqt (faqat 1:1 chat) — `status: delivered` uchun."""
+    if room.kind != ChatRoom.Kind.DIRECT:
+        return None
+    return RoomRead.objects.filter(room=room).exclude(user=user).aggregate(m=Max('last_delivered_at'))['m']
+
+
+def _mark_delivered(room: ChatRoom, user: User, up_to) -> dict | None:
+    """`last_delivered_at` ni `up_to` gacha oldinga suradi va yuboruvchiga `delivered` hodisasini tarqatadi."""
+    state = _state(room, user)
+    if state.last_delivered_at and state.last_delivered_at >= up_to:
+        return None
+    state.last_delivered_at = up_to
+    state.save(update_fields=['last_delivered_at', 'updated_at'])
+    last = room.messages.exclude(sender=user).filter(created_at__lte=up_to).order_by('-created_at').values_list('id', flat=True).first()
+    event = {
+        'type': 'delivered', 'room': str(room.id), 'user_id': str(user.id),
+        'last_message_id': str(last) if last else None, 'last_delivered_at': up_to,
+    }
+    realtime.broadcast_event(room.id, event)
+    return event
+
+
+def deliver_message(*, user: User, message_id) -> dict | None:
+    """Qabul qiluvchining qurilmasi xabarni oldi ("yetib bordi"). Faqat 1:1 chatda va faqat o'z xabari bo'lmaganda;
+    guruhda bu belgi yo'q (har a'zoga yozuv va hodisa qimmat). Qaytaradi: tarqatilgan hodisa yoki None."""
+    try:
+        message = Message.objects.select_related('room').get(pk=message_id)
+    except (Message.DoesNotExist, *BAD_ID):
+        return None
+    room = message.room
+    if room.kind != ChatRoom.Kind.DIRECT or message.sender_id == user.id or not selectors.can_read(user, room):
+        return None
+    return _mark_delivered(room, user, message.created_at)
+
+
+def deliver_room(*, user: User, room_id) -> dict | None:
+    """Foydalanuvchi onlayn bo'lib xonaga ulandi — oflayn paytda kelgan hamma xabar "yetib bordi" bo'ladi."""
+    try:
+        room = ChatRoom.objects.get(pk=room_id)
+    except (ChatRoom.DoesNotExist, *BAD_ID):
+        return None
+    if room.kind != ChatRoom.Kind.DIRECT or not selectors.can_read(user, room):
+        return None
+    newest = room.messages.exclude(sender=user).filter(deleted_at__isnull=True).order_by('-created_at').values_list('created_at', flat=True).first()
+    return _mark_delivered(room, user, newest) if newest else None
 
 
 # ---------------------------------------------------------------------------

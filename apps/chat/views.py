@@ -75,6 +75,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         return {
             'request': request, 'viewer': request.user, 'room': room,
             'peer_read_at': services.peer_read_at(room, request.user),
+            'peer_delivered_at': services.peer_delivered_at(room, request.user),
         }
 
     @action(detail=True, methods=['get', 'post'])
@@ -153,7 +154,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True)
     def attachments(self, request, pk=None):
         """Guruh ma'lumotlaridagi "Fayllar" / "Media": `?kind=file|media&page=` (sahifalangan).
-        `media` — rasmlar, `file` — hujjatlar (ovozli xabarlar kirmaydi). Yangilari birinchi."""
+        `media` — rasm va videolar, `file` — hujjatlar (ovozli xabarlar kirmaydi). Yangilari birinchi."""
         room = self.get_object()
         if not selectors.can_read(request.user, room):
             self.permission_denied(request)
@@ -165,7 +166,8 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             .exclude(message__hides__user=request.user).exclude(message__message_type=Message.Type.VOICE)
             .select_related('message', 'message__sender').order_by('-message__created_at', 'order')
         )
-        rows = rows.filter(mime__startswith='image/') if kind == 'media' else rows.exclude(mime__startswith='image/')
+        media = Q(mime__startswith='image/') | Q(mime__startswith='video/')
+        rows = rows.filter(media) if kind == 'media' else rows.exclude(media)
         params = request.query_params
         if params.get('cursor') or params.get('limit'):
             return self._attachments_by_cursor(rows, params)
@@ -469,6 +471,9 @@ def _thumbnail(field_file):
     return buffer.getvalue()
 
 
+MAX_RANGE_BYTES = 4 * 1024 * 1024
+
+
 def _ranged(request, field_file, content_type):
     match = re.match(r'bytes=(\d*)-(\d*)$', request.headers.get('Range', ''))
     size = field_file.size
@@ -479,7 +484,7 @@ def _ranged(request, field_file, content_type):
         start, end = max(size - int(last), 0), size - 1
     else:
         start, end = int(first), int(last) if last else size - 1
-    end = min(end, size - 1)
+    end = min(end, size - 1, start + MAX_RANGE_BYTES - 1)  # katta videoda bir so'rov xotirani to'ldirmasin
     if start > end or start >= size:
         response = HttpResponse(status=416)
         response['Content-Range'] = f'bytes */{size}'

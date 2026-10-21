@@ -7,6 +7,7 @@ Eski (yangilanishdan oldingi) tokenlarda `sid` yo'q — ular keyingi yangilashda
 """
 import re
 
+from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 from rest_framework_simplejwt.exceptions import InvalidToken
@@ -81,10 +82,35 @@ def client_ip(request):
     return (xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR')) or None
 
 
+_geoip_reader = None
+_geoip_failed = False
+
+
+def city_for_ip(ip) -> str:
+    """IP bo'yicha shahar nomi. `GEOIP_CITY_DB` (MaxMind GeoLite2-City `.mmdb` yo'li) sozlanmagan, kutubxona yoki fayl
+    yo'q, yoki IP topilmasa — bo'sh qator (kirishni hech qachon to'xtatmaydi)."""
+    global _geoip_reader, _geoip_failed
+    path = getattr(settings, 'GEOIP_CITY_DB', '')
+    if not ip or not path or _geoip_failed:
+        return ''
+    try:
+        if _geoip_reader is None:
+            import geoip2.database
+
+            _geoip_reader = geoip2.database.Reader(path)
+        record = _geoip_reader.city(str(ip))
+        return (record.city.name or '')[:100]
+    except Exception:  # noqa: BLE001 — AddressNotFound, fayl yo'q, kutubxona yo'q va h.k.
+        if _geoip_reader is None:
+            _geoip_failed = True  # fayl ochilmadi — har kirishda urinib o'tirmaymiz
+        return ''
+
+
 def start_session(user, request) -> UserSession:
     meta = request.META if request is not None else {}
+    ip = client_ip(request)
     session = UserSession.objects.create(
-        user=user, user_agent=(meta.get('HTTP_USER_AGENT') or '')[:300], ip=client_ip(request),
+        user=user, user_agent=(meta.get('HTTP_USER_AGENT') or '')[:300], ip=ip, city=city_for_ip(ip),
         device=parse_device(meta.get('HTTP_USER_AGENT', ''), meta.get('HTTP_X_DEVICE_NAME', '')),
     )
     extra = list(

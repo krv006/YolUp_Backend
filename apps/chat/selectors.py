@@ -67,7 +67,7 @@ def capabilities(user: User, room: ChatRoom, message: Message) -> dict:
     user_message = message.kind == Message.Kind.USER
     own = message.sender_id == user.id
     return {
-        'edit': own and user_message and message.message_type in (Message.Type.TEXT, Message.Type.FILE, Message.Type.IMAGE),
+        'edit': own and user_message and message.message_type in (Message.Type.TEXT, Message.Type.FILE, Message.Type.IMAGE, Message.Type.VIDEO),
         'delete': True,
         'delete_everyone': own or is_room_teacher(user, room),
         'pin': can_pin(user, room),

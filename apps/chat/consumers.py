@@ -18,6 +18,8 @@ Server -> client:
     {"type": "lesson_ended", "lesson_id": "..."} — jonli dars tugadi
     {"type": "read", "room": "...", "user_id": "...", "last_message_id": "...", "last_read_at": "..."}
         — kimdir xonani shu xabargacha o'qidi (o'z xabarlarimdagi galochka uchun)
+    {"type": "delivered", "room": "...", "user_id": "...", "last_message_id": "...", "last_delivered_at": "..."}
+        — (faqat 1:1 chat) suhbatdosh qurilmasi xabarlarni shu xabargacha qabul qildi ("yetib bordi")
     {"type": "message_updated", "message": {...}} — xabar tahrirlandi
     {"type": "message_deleted", "room": "...", "ids": ["..."]} — xabar(lar) hamma uchun o'chirildi
     {"type": "pinned", "room": "...", "message": {id, sender_name, text, message_type} | null}
@@ -58,7 +60,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             return
         self.room_id = room_id
         self.group = group_name(room_id)
-        self.is_teacher, self.can_pin = await self._room_flags(user, room_id)
+        self.is_teacher, self.can_pin, self.is_direct = await self._room_flags(user, room_id)
         self.user_group = user_group_name(user.id)
         await self.channel_layer.group_add(self.group, self.channel_name)
         await self.channel_layer.group_add(self.user_group, self.channel_name)
@@ -73,6 +75,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         # onlayn belgisi eng oxirida: bu qo'shimcha kutish ulanishni sekinlashtirib, yuqoridagi
         # "LIVE dars" tekshiruvi bilan guruh signali orasida poyga hosil qilmasin
         await self._presence(user, online=True)
+        if self.is_direct:
+            await self._deliver_backlog(user)  # oflayn paytda kelgan xabarlar endi "yetib bordi"
 
     async def disconnect(self, code):
         if hasattr(self, 'group'):
@@ -112,7 +116,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         own = str((message.get('sender') or {}).get('id')) == str(user.id)
         message_type = message.get('message_type')
         message['capabilities'] = {
-            'edit': own and user_message and message_type in ('text', 'file', 'image'),
+            'edit': own and user_message and message_type in ('text', 'file', 'image', 'video'),
             'delete': True,
             'delete_everyone': own or self.is_teacher,
             'pin': self.can_pin,
@@ -122,7 +126,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         return message
 
     async def chat_message(self, event):
-        await self.send_json({'type': 'message', 'message': self._with_capabilities(dict(event['message']))})
+        message = dict(event['message'])
+        await self.send_json({'type': 'message', 'message': self._with_capabilities(message)})
+        if self.is_direct and str((message.get('sender') or {}).get('id')) != str(self.scope['user'].id):
+            await self._deliver(message.get('id'))  # yuboruvchiga "yetib bordi" belgisi
 
     async def chat_event(self, event):
         payload = dict(event['event'])
@@ -184,7 +191,25 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         from .models import ChatRoom
 
         room = ChatRoom.objects.select_related('course').get(pk=room_id)
-        return selectors.is_room_teacher(user, room), selectors.can_pin(user, room)
+        return selectors.is_room_teacher(user, room), selectors.can_pin(user, room), room.kind == ChatRoom.Kind.DIRECT
+
+    @database_sync_to_async
+    def _deliver(self, message_id):
+        from . import services
+
+        try:
+            services.deliver_message(user=self.scope['user'], message_id=message_id)
+        except Exception:  # noqa: BLE001 — "yetib bordi" belgisi xabar oqimini buzmasin
+            pass
+
+    @database_sync_to_async
+    def _deliver_backlog(self, user):
+        from . import services
+
+        try:
+            services.deliver_room(user=user, room_id=self.room_id)
+        except Exception:  # noqa: BLE001 — belgi ulanishni buzmasin
+            pass
 
     @database_sync_to_async
     def _presence(self, user, online: bool):

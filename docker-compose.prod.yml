@@ -25,7 +25,8 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy volatile-ttl
 
   livekit:
-    image: livekit/livekit-server:latest
+    # Versiyani qotirish: .env.prod da LIVEKIT_VERSION=v1.x.y (standart `latest` — hozirgi xatti-harakat saqlanadi)
+    image: livekit/livekit-server:${LIVEKIT_VERSION:-latest}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
     environment:

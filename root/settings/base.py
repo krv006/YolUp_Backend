@@ -286,6 +286,26 @@ ESKIZ_PASSWORD = os.getenv('ESKIZ_PASSWORD', '')
 ESKIZ_FROM = os.getenv('ESKIZ_FROM', '4546')
 SMS_CODE_TEMPLATE = os.getenv('SMS_CODE_TEMPLATE', 'YolUp tasdiqlash kodi: {code}. Hech kimga bermang.')
 
+# Email (tasdiqlash kodi, bildirishnoma xatlari). EMAIL_HOST bo'sh = ulanmagan: tasdiqlash 503 beradi, xatnoma jim o'tkazib yuboriladi.
+EMAIL_HOST = os.getenv('EMAIL_HOST', '')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
+EMAIL_TIMEOUT = 10
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'YolUp <no-reply@yolup.uz>')
+if EMAIL_HOST:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
+# Push va xatnomalar alohida oqimda yuboriladi (so'rovni sekinlashtirmaslik uchun); testlarda — joyida.
+import sys as _sys  # noqa: E402
+
+BACKGROUND_ASYNC = os.getenv('BACKGROUND_ASYNC', '1') == '1' and 'test' not in _sys.argv
+
+# Seanslarda shahar: MaxMind GeoLite2-City (.mmdb) fayli yo'li. Bo'sh = shahar aniqlanmaydi (`null`).
+GEOIP_CITY_DB = os.getenv('GEOIP_CITY_DB', '')
+
 # Guruhga taklif havolasi: https://<domen>/j/<kod>
 INVITE_BASE_URL = os.getenv('INVITE_BASE_URL', 'https://yolup.uz')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')

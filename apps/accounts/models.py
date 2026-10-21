@@ -84,6 +84,9 @@ class User(AbstractUser):
     last_seen_at = DateTimeField(null=True, blank=True)
     # Ikki bosqichli tasdiqlash (SMS kod) — yoqilgan bo'lsa loginda paroldan keyin kod so'raladi
     two_factor_enabled = BooleanField(default=False)
+    # Email/telefon tasdiqlangan (kod orqali). Manzil/raqam o'zgarsa yana `false` bo'ladi.
+    email_verified = BooleanField(default=False)
+    phone_verified = BooleanField(default=False)
     # Tizim sozlamalari: "Yangi xabarlar" va "Email xabarnomalar" tugmalari
     notify_messages = BooleanField(default=True)
     notify_email = BooleanField(default=False)
@@ -175,6 +178,8 @@ class UserSession(TimeStampedUUIDModel):
     device = CharField(max_length=120, blank=True, default='')
     user_agent = CharField(max_length=300, blank=True, default='')
     ip = GenericIPAddressField(null=True, blank=True)
+    # IP bo'yicha shahar (GEOIP_CITY_DB sozlangan bo'lsa), aks holda bo'sh
+    city = CharField(max_length=100, blank=True, default='')
     last_active = DateTimeField(default=timezone.now)
     revoked_at = DateTimeField(null=True, blank=True)
 

@@ -306,6 +306,53 @@ def two_factor_login(*, challenge_token: str, code: str, request=None) -> User:
     return user
 
 
+# ---------------------------------------------------------------------------
+# Email va telefonni kod bilan tasdiqlash
+# ---------------------------------------------------------------------------
+def send_email_code(*, user: User) -> dict:
+    from . import otp
+
+    if not user.email:
+        raise ValidationError({'detail': _("Avval profilda email manzilingizni kiriting.")})
+    if user.email_verified:
+        raise ValidationError({'detail': _('Email allaqachon tasdiqlangan.')})
+    return otp.issue_email(scope='email-verify', email=user.email, payload={'user': str(user.id), 'email': user.email})
+
+
+def verify_email(*, user: User, code: str, request=None) -> dict:
+    from . import otp
+
+    payload = otp.check_email(scope='email-verify', email=user.email or '', code=code)
+    if payload.get('user') != str(user.id) or payload.get('email') != user.email:
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    user.email_verified = True
+    user.save(update_fields=['email_verified'])
+    audit.record(action='auth.email_verified', actor=user, target=user, request=request)
+    return {'verified': True}
+
+
+def send_phone_code(*, user: User) -> dict:
+    from . import otp
+
+    if not user.phone:
+        raise ValidationError({'detail': _("Avval profilda telefon raqamingizni kiriting.")})
+    if user.phone_verified:
+        raise ValidationError({'detail': _('Telefon allaqachon tasdiqlangan.')})
+    return otp.issue(scope='phone-verify', phone=user.phone, payload={'user': str(user.id), 'phone': user.phone})
+
+
+def verify_phone(*, user: User, code: str, request=None) -> dict:
+    from . import otp
+
+    payload = otp.check(scope='phone-verify', phone=user.phone or '', code=code)
+    if payload.get('user') != str(user.id) or payload.get('phone') != user.phone:
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    user.phone_verified = True
+    user.save(update_fields=['phone_verified'])
+    audit.record(action='auth.phone_verified', actor=user, target=user, request=request)
+    return {'verified': True}
+
+
 def me_stats(user: User) -> dict:
     """Profildagi "Guruh / O'quvchi / Tajriba" raqamlari."""
     from apps.lessons.models import Course, Enrollment

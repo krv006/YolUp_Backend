@@ -13,7 +13,7 @@ from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import Throttled, ValidationError
 
-from apps.core import sms
+from apps.core import mailer, sms
 
 CODE_TTL = 120
 RETRY_AFTER = 45
@@ -25,9 +25,8 @@ def _digest(scope: str, code: str) -> str:
     return hmac.new(settings.SECRET_KEY.encode(), f'{scope}:{code}'.encode(), hashlib.sha256).hexdigest()
 
 
-def issue(*, scope: str, phone: str, payload: dict | None = None) -> dict:
-    """Yangi kod yaratib SMS yuboradi. Qaytaradi: `{sent, expires_in, retry_after}`. Juda tez/ko'p so'ralsa — 429."""
-    norm = sms.normalize_phone(phone)
+def _issue(*, scope: str, norm: str, payload, deliver) -> dict:
+    """Umumiy qism: sovitish va kunlik cheklov, so'ng `deliver(code)` bilan yuborish (yuborilmasa — hisoblagich kuymaydi)."""
     now = time.time()
     cool_key = f'otp:cool:{scope}:{norm}'
     last = cache.get(cool_key)
@@ -42,7 +41,7 @@ def issue(*, scope: str, phone: str, payload: dict | None = None) -> dict:
     if used > DAILY_LIMIT:
         raise Throttled(wait=3600, detail=str(_("Bugun juda ko'p kod so'raldi. Ertaga urinib ko'ring.")))
     code = f'{secrets.randbelow(100000):05d}'
-    sms.send_sms(phone, sms.code_text(code))  # yuborilmasa (503/502) — sovitish va hisoblagich kuymasin
+    deliver(code)  # yuborilmasa (503/502) — sovitish va hisoblagich kuymasin
     cache.set(cool_key, now, RETRY_AFTER)
     cache.set(
         f'otp:code:{scope}:{norm}',
@@ -51,9 +50,28 @@ def issue(*, scope: str, phone: str, payload: dict | None = None) -> dict:
     return {'sent': True, 'expires_in': CODE_TTL, 'retry_after': RETRY_AFTER}
 
 
-def check(*, scope: str, phone: str, code: str) -> dict:
-    """Kodni tekshiradi (bir martalik). Muvaffaqiyatda `payload` qaytadi; aks holda 400."""
-    norm = sms.normalize_phone(phone)
+def issue(*, scope: str, phone: str, payload: dict | None = None) -> dict:
+    """Yangi kod yaratib SMS yuboradi. Qaytaradi: `{sent, expires_in, retry_after}`. Juda tez/ko'p so'ralsa — 429."""
+    return _issue(
+        scope=scope, norm=sms.normalize_phone(phone), payload=payload,
+        deliver=lambda code: sms.send_sms(phone, sms.code_text(code)),
+    )
+
+
+def _email_key(email: str) -> str:
+    return (email or '').strip().lower()
+
+
+def issue_email(*, scope: str, email: str, payload: dict | None = None) -> dict:
+    """`issue` bilan bir xil qoidalar, faqat kod emailga yuboriladi."""
+    address = _email_key(email)
+    return _issue(
+        scope=scope, norm=address, payload=payload,
+        deliver=lambda code: mailer.send_email(address, *mailer.code_text(code)),
+    )
+
+
+def _check(*, scope: str, norm: str, code: str) -> dict:
     key = f'otp:code:{scope}:{norm}'
     entry = cache.get(key)
     bad = ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
@@ -68,3 +86,12 @@ def check(*, scope: str, phone: str, code: str) -> dict:
         raise bad
     cache.delete(key)
     return entry['payload']
+
+
+def check(*, scope: str, phone: str, code: str) -> dict:
+    """Kodni tekshiradi (bir martalik). Muvaffaqiyatda `payload` qaytadi; aks holda 400."""
+    return _check(scope=scope, norm=sms.normalize_phone(phone), code=code)
+
+
+def check_email(*, scope: str, email: str, code: str) -> dict:
+    return _check(scope=scope, norm=_email_key(email), code=code)

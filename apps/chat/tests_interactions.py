@@ -315,10 +315,10 @@ class VoiceEndpointTests(ChatV2Base):
         with mock.patch('apps.chat.attachments.MAX_VOICE_BYTES', 50):
             self.assertEqual(self.voice(duration_ms='3000').status_code, 400)  # 10 MB chegarasi
 
-    def test_mp4_is_refused_outside_voice_messages_and_idempotency_works(self):
+    def test_mp4_is_a_video_outside_voice_messages_and_idempotency_works(self):
         file = SimpleUploadedFile('kino.mp4', b'1234', content_type='video/mp4')
         resp = self.api(self.student).post(f'{self.base}/rooms/{self.room.id}/send/', {'file': file}, format='multipart')
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual((resp.status_code, resp.json()['message_type']), (201, 'video'))  # ovozli xabar emas
         first = self.voice(duration_ms='2000', client_message_id='v-1')
         again = self.voice(duration_ms='2000', client_message_id='v-1')
         self.assertEqual((first.status_code, again.status_code), (201, 200))
