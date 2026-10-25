@@ -427,7 +427,7 @@ def remove_group_audio(*, teacher: User, quiz: Quiz, group_id) -> None:
 
 
 @transaction.atomic
-def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
+def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds=None) -> QuizAttempt:
     is_enrolled = Enrollment.objects.filter(
         course=quiz.course, student=student, status=_ENROLLED,
     ).exists()
@@ -444,7 +444,7 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list) -> QuizAttempt:
             raise ValidationError({'answers': _("Bir savolga faqat bitta javob yuborilishi mumkin.")})
         given_by_question[question.id] = answer
 
-    attempt = QuizAttempt.objects.create(quiz=quiz, student=student)
+    attempt = QuizAttempt.objects.create(quiz=quiz, student=student, duration_seconds=duration_seconds)
     score = 0.0
     for question in questions:
         graded = grading.grade(question, given_by_question.get(question.id, {}))

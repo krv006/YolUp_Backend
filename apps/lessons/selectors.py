@@ -3,7 +3,8 @@
 Ota-ona faqat TASDIQLANGAN bog'lanishdagi bolasining ma'lumotini ko'radi —
 bu rozilik modelining texnik kafolati.
 """
-from django.db.models import QuerySet
+from django.db.models import Count, IntegerField, OuterRef, Prefetch, QuerySet, Subquery
+from django.db.models.functions import Coalesce
 
 from apps.accounts.models import ParentChildLink, User
 
@@ -51,6 +52,31 @@ def lessons_for(user: User) -> QuerySet[Lesson]:
             course__enrollments__student__parent_links__status=_APPROVED,
         ).distinct()
     return qs
+
+
+def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
+    """Darslar ro'yxati kartalari uchun hisoblagichlarni BITTA so'rovda qo'shadi (har dars uchun alohida so'rov
+    ketmasligi uchun): o'quvchilar soni, qatnashganlar, hozir xonadagilar, seriya oxiri, biriktirilgan vazifa."""
+    from apps.homework.models import Assignment
+
+    def count(model, **filters):
+        key = next(iter(filters))
+        return Coalesce(Subquery(
+            model.objects.filter(**filters).order_by().values(key.split('__')[0]).annotate(c=Count('pk')).values('c')[:1],
+            output_field=IntegerField(),
+        ), 0)
+
+    return qs.annotate(
+        card_students=count(Enrollment, course=OuterRef('course_id'), status=_ENROLLED),
+        card_attended=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False),
+        card_present=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False, left_at__isnull=True),
+        card_series_end=Subquery(
+            Lesson.objects.filter(recurrence_id=OuterRef('recurrence_id')).order_by('-starts_at').values('starts_at')[:1],
+        ),
+    ).prefetch_related(Prefetch(
+        'assignments', queryset=Assignment.objects.exclude(status=Assignment.Status.DRAFT).order_by('created_at'),
+        to_attr='card_assignments',
+    ))
 
 
 def focus_summary(lesson, student) -> dict:

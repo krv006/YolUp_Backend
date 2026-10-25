@@ -1,12 +1,12 @@
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
-from . import selectors
+from . import dashboard, selectors
 
 
 class DashboardSummaryView(APIView):
@@ -28,6 +28,36 @@ class DashboardTrendsView(APIView):
         if period not in selectors.PERIOD_BUCKET_COUNTS:
             raise ValidationError({'period': _("Noto'g'ri davr — day/week/month/year bo'lishi kerak.")})
         return Response(selectors.dashboard_trends(period))
+
+
+class TeacherDashboardView(APIView):
+    """O'qituvchi bosh sahifasi: to'rtta ko'rsatkich bitta javobda (`/dashboard/teacher/`)."""
+
+    def get(self, request):
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied(_("Faqat o'qituvchi uchun."))
+        return Response(dashboard.teacher_overview(request.user))
+
+
+class ActivityView(APIView):
+    """"So'nggi faollik": `?limit=10` (ko'pi bilan 50) — `[{id, category, title, body, link_type, link_id, created_at}]`."""
+
+    def get(self, request):
+        return Response(dashboard.recent_activity(request.user, request.query_params.get('limit')))
+
+
+class MyTrendsView(APIView):
+    """O'qituvchining o'z kurslari bo'yicha vaqt qatori (`?period=day|week|month|year`, standart `week`)."""
+
+    permission_classes = [RequirePerm('stats.view_own')]
+
+    def get(self, request):
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied(_("Faqat o'qituvchi uchun."))
+        period = request.query_params.get('period', 'week')
+        if period not in selectors.PERIOD_BUCKET_COUNTS:
+            raise ValidationError({'period': _("Noto'g'ri davr — day/week/month/year bo'lishi kerak.")})
+        return Response(selectors.teacher_trends(request.user, period))
 
 
 class MyAnalyticsView(APIView):

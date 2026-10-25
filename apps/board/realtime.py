@@ -34,8 +34,12 @@ def broadcast_erase(lesson_id, sheet_index: int, stroke_ids: list, by: str, reas
     })
 
 
-def broadcast_sheet(lesson_id, index: int) -> None:
-    _send(lesson_id, {'type': 'sheet', 'index': index})
+def broadcast_sheet(lesson_id, index: int, title: str = '') -> None:
+    _send(lesson_id, {'type': 'sheet', 'index': index, 'title': title})
+
+
+def broadcast_sheet_renamed(lesson_id, index: int, title: str) -> None:
+    _send(lesson_id, {'type': 'sheet_renamed', 'index': index, 'title': title})
 
 
 def broadcast_focus(lesson_id, student_id: str, name: str, kind: str) -> None:

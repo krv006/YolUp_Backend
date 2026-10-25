@@ -136,8 +136,9 @@ class RecurrenceTests(ScheduleBase):
         resp = self.create(recurrence={'freq': 'weekly', 'weeks': 3, 'weekdays': [weekday]})
         self.assertEqual(resp.status_code, 201, resp.content)
         first = resp.json()
-        self.assertEqual(first['recurrence'], {'freq': 'weekly', 'weeks': 3, 'weekdays': [weekday]})
         series = list(Lesson.objects.filter(recurrence_id=first['recurrence_id']).order_by('starts_at'))
+        ends_on = timezone.localtime(series[-1].starts_at).date().isoformat()  # seriya oxirgi darsi sanasi
+        self.assertEqual(first['recurrence'], {'freq': 'weekly', 'weeks': 3, 'weekdays': [weekday], 'ends_on': ends_on})
         self.assertEqual(len(series), 3)
         self.assertEqual(str(series[0].id), first['id'])
         self.assertEqual([(b.starts_at - a.starts_at).days for a, b in zip(series, series[1:])], [7, 7])

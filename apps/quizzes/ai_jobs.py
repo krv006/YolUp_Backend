@@ -95,6 +95,20 @@ def _read_stored(entry: dict) -> str:
         raise material_text.MaterialError(f"«{entry['name']}» fayli topilmadi. Qayta yuklang.") from exc
 
 
+def mini_test_material(quiz, questions) -> str:
+    """Mini-test uchun manba matn: o'quvchilar ko'p xato qilgan savollar (to'g'ri javoblari bilan) — AI shu mavzularni
+    mustahkamlovchi YANGI savollar yozadi (aynan o'sha savollarni takrorlamaydi)."""
+    lines = [
+        f"Test: «{quiz.title}». O'quvchilar quyidagi savollarda ko'p xato qilishdi. Shu mavzularni mustahkamlovchi "
+        "yangi savollar yozing (bu savollarning o'zini takrorlamang):", '',
+    ]
+    for index, question in enumerate(questions, 1):
+        lines.append(f'{index}. {" ".join(question.text.split())}')
+        for option in question.options.all():
+            lines.append(f"   {'✓' if option.is_correct else '-'} {option.text}")
+    return '\n'.join(lines)[:MAX_PASTED_MATERIAL]
+
+
 def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic: str, title: str, standard: str = '',
                question_count: int, rules_upload=None, rules_text: str = '', material_text_value: str = '',
                exam_name: str = '', language: str = '') -> AiQuizJob:

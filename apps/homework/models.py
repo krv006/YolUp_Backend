@@ -57,6 +57,9 @@ class Assignment(TimeStampedUUIDModel):
         ACTIVE = 'active', 'Faol'
 
     status = CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE, db_index=True)
+    # Guruhga AI xulosa va tavsiya: oxirgi tayyor natija saqlanadi (sahifa ochilganda qayta hisoblamaslik uchun)
+    ai_summary = JSONField(null=True, blank=True)
+    ai_summary_at = DateTimeField(null=True, blank=True)
     published_at = DateTimeField(null=True, blank=True)
     # E'lon qilinganda vazifa kartasi guruh chatiga tushadimi; muddatdan keyin topshirish mumkinmi
     announce_in_chat = BooleanField(default=True)

@@ -45,8 +45,20 @@ class SheetView(APIView):
     permission_classes = [RequirePerm('room.moderate')]
 
     def post(self, request, lesson_id):
-        index = services.add_sheet(user=request.user, lesson_id=lesson_id)
-        return Response({'index': index}, status=201)
+        title = request.data.get('title') or ''
+        index = services.add_sheet(user=request.user, lesson_id=lesson_id, title=title)
+        return Response({'index': index, 'title': services._clean_title(title)}, status=201)
+
+
+class SheetDetailView(APIView):
+    """`PATCH {title}` — sahifa nomini o'zgartirish (faqat o'qituvchi)."""
+
+    permission_classes = [RequirePerm('room.moderate')]
+
+    def patch(self, request, lesson_id, index):
+        return Response(services.rename_sheet(
+            user=request.user, lesson_id=lesson_id, index=index, title=request.data.get('title'),
+        ))
 
 
 class EraseView(APIView):

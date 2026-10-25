@@ -410,7 +410,10 @@ class UserSearchView(APIView):
     """Admin: bildirishnoma yuborish uchun istalgan rol bo'yicha foydalanuvchi qidirish
     (lessons.CourseViewSet.search_students bilan bir xil naqsh, lekin barcha rollar)."""
 
-    permission_classes = [RequirePerm('user.manage')]
+    def get_permissions(self):
+        if getattr(self.request.user, 'role', None) == 'teacher':
+            return [IsAuthenticated()]  # o'qituvchi faqat o'z guruhlaridagi odamlarni qidiradi (pastda)
+        return [RequirePerm('user.manage')()]
 
     def get(self, request):
         from django.db.models import Q
@@ -420,6 +423,8 @@ class UserSearchView(APIView):
         q = (request.query_params.get('q') or '').strip()
         if len(q) < 2:
             return Response([])
+        if request.user.role == 'teacher':
+            return Response(selectors.teacher_people_search(request.user, q))
         users = User.objects.filter(
             Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
         ).exclude(pk=request.user.pk).order_by('username')[:10]

@@ -203,7 +203,19 @@ class RemindView(APIView):
     permission_classes = [RequirePerm('homework.assign')]
 
     def post(self, request, assignment_id):
-        return Response(services.remind_missing(teacher=request.user, assignment_id=assignment_id))
+        return Response(services.remind_missing(
+            teacher=request.user, assignment_id=assignment_id,
+            message=request.data.get('message'), notify_parents=request.data.get('notify_parents'),
+        ))
+
+
+class AiStatsView(APIView):
+    """Vazifalar sahifasi AI banneri: `?period=today|week|month` -> `{checked, pending_confirm}`."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+
+    def get(self, request):
+        return Response(services.ai_stats(teacher=request.user, period=request.query_params.get('period', 'today')))
 
 
 class AiSummaryView(APIView):

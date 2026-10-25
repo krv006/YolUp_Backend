@@ -515,8 +515,20 @@ def _integrity(attempt: ExamAttempt) -> dict:
     }
 
 
+def _progress(exam: Exam, attempt_ids: list) -> tuple:
+    """(jami savollar, {urinish: javob berilgan savollar}) — jonli imtihonda "28 / 40 savol" uchun."""
+    quiz_ids = [s.quiz_id for s in exam.sections.all() if s.kind != Kind.BREAK and s.quiz_id]
+    total = Question.objects.filter(quiz_id__in=quiz_ids).count()
+    answered: dict = {}
+    for attempt_id, value in ExamAnswer.objects.filter(attempt_id__in=attempt_ids).values_list('attempt_id', 'answer'):
+        if value not in (None, '', [], {}):
+            answered[attempt_id] = answered.get(attempt_id, 0) + 1
+    return total, answered
+
+
 def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
     inputs = _section_inputs(exam, [a.id for a in attempts])
+    total, answered = _progress(exam, [a.id for a in attempts]) if staff else (0, {})
     results = []
     for attempt in attempts:
         data = scoring_engines.compute(exam.scoring, inputs[attempt.id])
@@ -524,8 +536,12 @@ def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
             'student': _student_info(attempt.student), 'participated': True,
             'finished_at': attempt.finished_at,
         })
-        if staff:  # halollik jurnali faqat o'qituvchiga
+        if staff:  # halollik jurnali va progress faqat o'qituvchiga
             data['integrity'] = _integrity(attempt)
+            # DIQQAT: `total` kaliti ball hisobiga band (`total.score`) — progress alohida kalitlarda
+            data['answered'] = answered.get(attempt.id, 0)
+            data['questions_total'] = total
+            data['progress'] = {'answered': data['answered'], 'total': total}
         results.append(data)
     return results
 

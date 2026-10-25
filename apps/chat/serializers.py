@@ -221,6 +221,15 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['image']
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Guruh chatida o'z rasmi bo'lmasa — guruhning (kursning) rasmi ko'rinadi
+        if not data.get('image') and instance.kind == ChatRoom.Kind.COURSE and instance.course_id and instance.course.avatar:
+            request = self.context.get('request')
+            url = instance.course.avatar.url
+            data['image'] = request.build_absolute_uri(url) if request else url
+        return data
+
     def _my_read(self, obj):
         reads = getattr(obj, 'my_reads', None)
         if reads is None:

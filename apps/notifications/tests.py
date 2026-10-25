@@ -107,10 +107,11 @@ class NotificationTests(APITestCase):
         })
         self.assertEqual(resp.status_code, 400)
 
-    def test_user_search_admin_only(self):
+    def test_user_search_admin_sees_everyone_teacher_only_own_groups(self):
         self.auth(self.teacher_token)
         resp = self.client.get('/api/v1/auth/users/search/?q=p1')
-        self.assertEqual(resp.status_code, 403)
+        # O'qituvchi faqat o'z guruhlaridagi odamlarni topadi — p1 uning guruhida emas
+        self.assertEqual((resp.status_code, resp.json()), (200, []))
 
         self.auth(self.admin_token)
         resp = self.client.get('/api/v1/auth/users/search/?q=p1')

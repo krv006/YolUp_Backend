@@ -240,9 +240,38 @@ def teacher_own_stats(teacher: User) -> dict:
     solishtiruv."""
     from apps.accounts import selectors as account_selectors
 
+    overall = account_selectors.teacher_detail_stats(teacher)
+    course_ids = list(Course.objects.filter(teacher=teacher, is_active=True).values_list('id', flat=True))
+    rate = _attendance_rate(course_ids=course_ids) if course_ids else None
+    overall.setdefault('attendance_rate', rate)  # umumiy davomat (kurslar bo'yicha o'rtachadan aniqroq)
     return {
-        'overall': account_selectors.teacher_detail_stats(teacher),
+        'overall': overall,
+        'attendance_rate': rate,
         'courses': teacher_course_breakdown(teacher),
+    }
+
+
+def teacher_trends(teacher: User, period: str) -> dict:
+    """O'qituvchining O'Z kurslari bo'yicha vaqt qatori: testlarning o'rtacha foizi, tugagan darslar, davomat."""
+    count = PERIOD_BUCKET_COUNTS[period]
+    now = timezone.localtime(timezone.now())
+    edges = _period_edges(period, count, now)
+    course_ids = list(Course.objects.filter(teacher=teacher).values_list('id', flat=True))
+    labels, quiz_avg, completed, attendance = [], [], [], []
+    for i in range(count):
+        start, end = edges[i], edges[i + 1]
+        labels.append(_format_label(period, start))
+        avg = QuizAttempt.objects.filter(
+            quiz__course_id__in=course_ids, created_at__gte=start, created_at__lt=end, max_score__gt=0,
+        ).annotate(pct=F('score') * 100.0 / F('max_score')).aggregate(avg=Avg('pct'))['avg']
+        quiz_avg.append(round(avg, 1) if avg is not None else None)
+        completed.append(Lesson.objects.filter(
+            course_id__in=course_ids, status=_FINISHED, starts_at__gte=start, starts_at__lt=end,
+        ).count())
+        attendance.append(_attendance_rate(course_ids=course_ids, start=start, end=end) if course_ids else None)
+    return {
+        'period': period, 'labels': labels, 'quiz_avg_score': quiz_avg,
+        'lessons_completed': completed, 'attendance_rate': attendance,
     }
 
 

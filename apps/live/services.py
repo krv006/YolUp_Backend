@@ -691,6 +691,30 @@ def lesson_presence(*, user: User, lesson_id) -> dict:
     return {'count': len(people), 'avatars': avatars}
 
 
+def lesson_waiting(*, user: User, lesson_id) -> dict:
+    """Darsga kirish ekrani ("7 / 9 o'quvchi kutmoqda"): xonaga allaqachon kirgan, hali chiqmagan o'quvchilar.
+    `students` (ism va avatar) — faqat kurs o'qituvchisiga; o'quvchiga faqat sonlar."""
+    from apps.lessons import selectors as lesson_selectors
+
+    lesson = lesson_selectors.lessons_for(user).select_related('course').filter(pk=lesson_id).first() \
+        if _is_uuid(lesson_id) else None
+    if lesson is None:
+        raise NotFound(_('Dars topilmadi.'))
+    people = [
+        row.student for row in
+        lesson.attendances.filter(joined_at__isnull=False, left_at__isnull=True).select_related('student')
+        .order_by('joined_at')
+    ]
+    total = Enrollment.objects.filter(course=lesson.course, status=Enrollment.Status.APPROVED).count()
+    data = {'waiting_count': len(people), 'total_count': total, 'students': []}
+    if lesson.course.teacher_id == user.id:
+        data['students'] = [{
+            'id': str(person.id), 'name': person.get_full_name() or person.username,
+            'avatar': person.avatar.url if person.avatar else None,
+        } for person in people]
+    return data
+
+
 def _is_uuid(value) -> bool:
     try:
         uuid.UUID(str(value))

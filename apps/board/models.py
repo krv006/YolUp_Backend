@@ -8,6 +8,7 @@ Qoidalar:
 """
 from django.db.models import (
     CASCADE,
+    CharField,
     ForeignKey,
     JSONField,
     PositiveIntegerField,
@@ -24,6 +25,8 @@ SHEET_W, SHEET_H = 1600, 900
 class BoardSheet(TimeStampedUUIDModel):
     lesson = ForeignKey('lessons.Lesson', CASCADE, related_name='board_sheets')
     index = PositiveIntegerField(default=0)
+    # Sahifa nomi ("Mavzu: Present Perfect") — bo'sh bo'lsa frontend raqam ko'rsatadi
+    title = CharField(max_length=120, blank=True, default='')
     # [{id, color, width, points: [[x, y], ...], by}] — by = chizgan foydalanuvchi
     strokes = JSONField(default=list)
 

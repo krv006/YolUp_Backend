@@ -54,6 +54,17 @@ def is_chemistry_lesson(lesson: Lesson) -> bool:
     return lesson.course.subject == Course.Subject.CHEMISTRY
 
 
+def permission_mode(lesson: Lesson) -> str:
+    """`teacher` — hech kimga ruxsat berilmagan; `everyone` — kursdagi hamma o'quvchida bor; aks holda `selected`."""
+    enrolled = set(Enrollment.objects.filter(
+        course=lesson.course, status=Enrollment.Status.APPROVED,
+    ).values_list('student_id', flat=True))
+    granted = set(BoardGrant.objects.filter(lesson=lesson).values_list('student_id', flat=True)) & enrolled
+    if not granted:
+        return 'teacher'
+    return 'everyone' if enrolled and granted == enrolled else 'selected'
+
+
 def get_board(*, user: User, lesson_id) -> dict:
     lesson = _get_lesson(lesson_id)
     if not can_view(user, lesson):
@@ -63,8 +74,11 @@ def get_board(*, user: User, lesson_id) -> dict:
         sheets = [BoardSheet.objects.create(lesson=lesson, index=0)]
     is_teacher = _is_teacher(user, lesson)
     result = {
-        'sheets': [{'index': s.index, 'strokes': s.strokes} for s in sheets],
+        'sheets': [{'index': s.index, 'title': s.title, 'strokes': s.strokes} for s in sheets],
         'can_draw': can_draw(user, lesson),
+        # Kim chiza oladi: `teacher` (faqat o'qituvchi) | `selected` (ba'zi o'quvchilar) | `everyone` (hamma) —
+        # sahifa yangilansa ham yo'qolmaydi (ruxsatlar bazada)
+        'permission_mode': permission_mode(lesson),
         'is_teacher': is_teacher,
         'size': [SHEET_W, SHEET_H],
         'subject': lesson.course.subject,
@@ -211,15 +225,38 @@ def add_stroke(*, user: User, lesson_id, sheet_index: int, stroke: dict) -> dict
 
 
 @transaction.atomic
-def add_sheet(*, user: User, lesson_id) -> int:
+def add_sheet(*, user: User, lesson_id, title: str = '') -> int:
     lesson = _get_lesson(lesson_id)
     if not _is_teacher(user, lesson):
         raise PermissionDenied(_("Yangi sheet'ni faqat o'qituvchi ochadi."))
+    title = _clean_title(title)
     last = lesson.board_sheets.order_by('-index').first()
     index = (last.index + 1) if last else 0
-    BoardSheet.objects.create(lesson=lesson, index=index)
-    transaction.on_commit(lambda: realtime.broadcast_sheet(lesson.id, index))
+    BoardSheet.objects.create(lesson=lesson, index=index, title=title)
+    transaction.on_commit(lambda: realtime.broadcast_sheet(lesson.id, index, title))
     return index
+
+
+def _clean_title(title) -> str:
+    if title is None:
+        return ''
+    if not isinstance(title, str):
+        raise ValidationError({'title': _("Matn bo'lishi kerak.")})
+    return title.strip()[:120]
+
+
+@transaction.atomic
+def rename_sheet(*, user: User, lesson_id, index: int, title) -> dict:
+    """Sahifa nomini o'zgartiradi (bo'sh qator — nomni o'chiradi). Faqat o'qituvchi."""
+    lesson = _get_lesson(lesson_id)
+    if not _is_teacher(user, lesson):
+        raise PermissionDenied(_("Sahifa nomini faqat o'qituvchi o'zgartiradi."))
+    title = _clean_title(title)
+    sheet, _created = BoardSheet.objects.get_or_create(lesson=lesson, index=int(index))
+    sheet.title = title
+    sheet.save(update_fields=['title', 'updated_at'])
+    transaction.on_commit(lambda: realtime.broadcast_sheet_renamed(lesson.id, sheet.index, title))
+    return {'index': sheet.index, 'title': sheet.title}
 
 
 @transaction.atomic

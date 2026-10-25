@@ -7,6 +7,7 @@ from django.db.models import (
     CharField,
     DateTimeField,
     ForeignKey,
+    ImageField,
     JSONField,
     OneToOneField,
     PositiveIntegerField,
@@ -68,6 +69,8 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
     invite_expires_at = DateTimeField(null=True, blank=True)
     invite_requires_approval = BooleanField(default=False)
     monthly_fee = PositiveIntegerField(null=True, blank=True)
+    # Guruh rasmi (ro'yxatlar, dars kartalari, chat) — ixtiyoriy
+    avatar = ImageField(upload_to='course_avatars/', null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

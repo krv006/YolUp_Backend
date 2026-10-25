@@ -551,6 +551,7 @@ def get_assignment(*, user: User, assignment_id) -> dict:
     _ensure_visible(user, a)
     data = _assignment_dict(a)
     if a.course.teacher_id == user.id:
+        data['ai_group_summary'] = _stored_summary(a)
         subs = list(a.submissions.select_related('student', 'assignment'))
         data['submissions'] = [
             _submission_dict(s, include_result=False, is_teacher=True) for s in subs
@@ -960,8 +961,9 @@ def request_resubmit(*, teacher: User, submission_id, comment: str = '') -> dict
 REMIND_COOLDOWN = 10 * 60
 
 
-def remind_missing(*, teacher: User, assignment_id) -> dict:
-    """Hali topshirmagan (tasdiqlangan) o'quvchilarga eslatma: `{notified: n}`. Bir vazifaga 10 daqiqada bir marta."""
+def remind_missing(*, teacher: User, assignment_id, message=None, notify_parents=False) -> dict:
+    """Hali topshirmagan (tasdiqlangan) o'quvchilarga eslatma: `{notified}` (+ `parents_notified`, agar `notify_parents` so'ralgan bo'lsa). `message` — o'qituvchi
+    tahrirlagan matn (bo'sh bo'lsa standart matn); `notify_parents` — ota-onalarga ham. Bir vazifaga 10 daqiqada bir marta."""
     from django.core.cache import cache
 
     from apps.notifications.models import Notification
@@ -972,20 +974,33 @@ def remind_missing(*, teacher: User, assignment_id) -> dict:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi eslatma yuboradi."))
     if a.status != Assignment.Status.ACTIVE:
         raise ValidationError({'detail': _("Qoralama vazifaga eslatma yuborib bo'lmaydi.")})
+    if message is not None and not isinstance(message, str):
+        raise ValidationError({'message': _("Matn bo'lishi kerak.")})
+    custom = (message or '').strip()
+    if len(custom) > 500:
+        raise ValidationError({'message': _('Xabar 500 belgidan oshmasligi kerak.')})
     if not cache.add(f'hw:remind:{a.id}', 1, REMIND_COOLDOWN):
         raise ValidationError({'detail': _("Eslatma yaqinda yuborilgan. Birozdan keyin qayta urinib ko'ring."), 'retry_after': REMIND_COOLDOWN})
     submitted = set(Submission.objects.filter(assignment=a).values_list('student_id', flat=True))
-    description = f'«{a.course.title}»: «{a.title}» vazifasini hali topshirmadingiz.'
-    notified = 0
-    for student in _enrolled_students(a.course):
-        if student.id in submitted:
-            continue
+    description = custom or f'«{a.course.title}»: «{a.title}» vazifasini hali topshirmadingiz.'
+    missing = [student for student in _enrolled_students(a.course) if student.id not in submitted]
+    for student in missing:
         send_notification(
             sender=teacher, description=description, target_type=Notification.Target.USER, user_id=student.id,
             kind='homework_reminder', link_type='assignment', link_id=str(a.id),
         )
-        notified += 1
-    return {'notified': notified}
+    result = {'notified': len(missing)}
+    if _bool(notify_parents, False):
+        parents_notified = 0
+        if missing:
+            sent = send_notification(
+                sender=teacher, description=description, target_type=Notification.Target.PARENTS_OF,
+                user_ids=[student.id for student in missing],
+                kind='homework_reminder', link_type='assignment', link_id=str(a.id),
+            )
+            parents_notified = sent.recipients.count()
+        result['parents_notified'] = parents_notified  # faqat `notify_parents` so'ralganda
+    return result
 
 
 AI_SUMMARY_TTL = 10 * 60
@@ -1022,7 +1037,7 @@ def ai_summary(*, teacher: User, assignment_id) -> dict:
     key = f'hw:aisum:{a.id}:{len(latest)}:{max(s.updated_at for s in latest.values()).timestamp()}'
     cached = cache.get(key)
     if cached:
-        return cached
+        return _with_summary_meta(a, cached)
     user_prompt = (
         f'Vazifa: «{a.title}» ({a.course.title}). {a.description}\n'
         f'Natijalar ({len(digest)} ta topshiriq):\n{json.dumps(digest, ensure_ascii=False)[:12000]}'
@@ -1040,7 +1055,42 @@ def ai_summary(*, teacher: User, assignment_id) -> dict:
         'recommendations': texts(data.get('recommendations')), 'submissions_count': len(latest),
     }
     cache.set(key, result, AI_SUMMARY_TTL)
-    return result
+    return _with_summary_meta(a, result)
+
+
+def _with_summary_meta(a: Assignment, result: dict) -> dict:
+    """Tayyor xulosani vazifada saqlaydi va `text` + `created_at` bilan qaytaradi (`GET /assignments/{id}/` ham shuni beradi)."""
+    if a.ai_summary != result or not a.ai_summary_at:
+        a.ai_summary, a.ai_summary_at = result, timezone.now()
+        a.save(update_fields=['ai_summary', 'ai_summary_at', 'updated_at'])
+    return {**result, 'text': result['summary'], 'created_at': a.ai_summary_at}
+
+
+def _stored_summary(a: Assignment):
+    if not a.ai_summary:
+        return None
+    return {**a.ai_summary, 'text': a.ai_summary.get('summary', ''), 'created_at': a.ai_summary_at}
+
+
+def ai_stats(*, teacher: User, period: str = 'today') -> dict:
+    """Vazifalar sahifasidagi AI banneri: davr ichida AI tekshirgan topshiriqlar (`checked`) va hozir o'qituvchi
+    tasdig'ini kutayotganlar (`pending_confirm`). `period`: today | week | month."""
+    from datetime import timedelta
+
+    if period not in ('today', 'week', 'month'):
+        raise ValidationError({'period': _("today, week yoki month bo'lishi kerak.")})
+    now = timezone.localtime()
+    since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == 'week':
+        since -= timedelta(days=6)
+    elif period == 'month':
+        since -= timedelta(days=29)
+    mine = Submission.objects.filter(assignment__course__teacher=teacher)
+    return {
+        'period': period,
+        'checked': mine.filter(checked_at__gte=since).count(),
+        'pending_confirm': mine.filter(status=Submission.Status.PENDING_REVIEW).count(),
+    }
 
 
 # ── vazifa sahifasida vaqt kuzatuvi ─────────────────────────────────────────

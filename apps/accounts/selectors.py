@@ -94,6 +94,44 @@ def teacher_detail_stats(teacher: User) -> dict:
     }
 
 
+def teacher_people_search(teacher, q: str) -> list:
+    """Suhbatlar qidiruvidagi "Odamlar": o'qituvchining o'z guruhlaridagi o'quvchilar (tasdiq kutayotganlar ham) va
+    ularning tasdiqlangan ota-onalari — ism, @username yoki telefon bo'yicha. `room_id` — shu odam bilan allaqachon
+    ochiq 1:1 suhbat bo'lsa, aks holda `null`. Boshqa foydalanuvchilar ko'rinmaydi."""
+    from django.db.models import Q
+
+    from apps.chat.models import ChatRoom
+    from apps.lessons.models import Enrollment
+
+    students = User.objects.filter(
+        role=User.Role.STUDENT, enrollments__course__teacher=teacher,
+        enrollments__status__in=(Enrollment.Status.APPROVED, Enrollment.Status.PENDING),
+    )
+    parents = User.objects.filter(
+        role=User.Role.PARENT, child_links__status=ParentChildLink.Status.APPROVED,
+        child_links__student__enrollments__course__teacher=teacher,
+        child_links__student__enrollments__status=Enrollment.Status.APPROVED,
+    )
+    match = (
+        Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q) | Q(phone__icontains=q)
+    )
+    ids = list(dict.fromkeys(
+        list(students.filter(match).values_list('id', flat=True)[:20])
+        + list(parents.filter(match).values_list('id', flat=True)[:20])
+    ))
+    people = list(User.objects.filter(pk__in=ids).order_by('first_name', 'username')[:20])
+    rooms = {
+        room.student_id: str(room.id) for room in ChatRoom.objects.filter(
+            kind=ChatRoom.Kind.DIRECT, teacher=teacher, student_id__in=[p.id for p in people],
+        ).exclude(direct_status=ChatRoom.DirectStatus.BLOCKED)
+    }
+    return [{
+        'id': str(person.id), 'name': person.get_full_name() or person.username, 'username': person.username,
+        'role': person.role, 'avatar': person.avatar.url if person.avatar else None,
+        'room_id': rooms.get(person.id),
+    } for person in people]
+
+
 def teacher_list() -> QuerySet[User]:
     """Admin uchun: barcha o'qituvchilar (reyting statistikasi bilan, UserSerializer orqali)."""
     return User.objects.filter(role=User.Role.TEACHER).order_by('first_name', 'last_name')

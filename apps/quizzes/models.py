@@ -161,6 +161,8 @@ class QuizAttempt(TimeStampedUUIDModel):
     # Qisman ball mumkin (matching/fill_blank) — 2 xonagacha yaxlitlanadi.
     score = FloatField(default=0)
     max_score = PositiveIntegerField(default=0)
+    # Test yechishga ketgan vaqt (soniya) — brauzer o'lchab yuboradi (`duration_seconds`); yuborilmasa `null`
+    duration_seconds = PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

@@ -3,13 +3,14 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
-from django.db.models import F, Prefetch, Window
+from django.db.models import Count, F, IntegerField, OuterRef, Prefetch, Q, Subquery, Window
+from django.db.models.functions import Coalesce
 from django.db.models.functions import RowNumber
 from django.http import HttpResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, status
-from rest_framework.exceptions import NotFound, ValidationError
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,7 +18,7 @@ from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
 from . import ai_jobs, attempts_export, export, selectors, services
-from .models import AiQuizJob, AnswerResponse, Quiz
+from .models import AiQuizJob, AnswerResponse, Question, Quiz
 from .serializers import (
     AiQuizCreateSerializer,
     AiQuizJobSerializer,
@@ -358,8 +359,16 @@ class QuizAttemptListCreateView(APIView):
 
     def get(self, request, pk):
         quiz = _get_quiz(request.user, pk)
+        answers = AnswerResponse.objects.filter(attempt=OuterRef('pk')).exclude(question__type=Question.Type.ESSAY)
         attempts = selectors.attempts_for(request.user, quiz).annotate(
             attempt_no=Window(RowNumber(), partition_by=[F('student_id')], order_by=F('created_at').asc()),
+            question_n=Coalesce(Subquery(
+                answers.order_by().values('attempt').annotate(c=Count('pk')).values('c')[:1], output_field=IntegerField(),
+            ), 0),
+            correct_n=Coalesce(Subquery(
+                answers.filter(is_correct=True).order_by().values('attempt').annotate(c=Count('pk')).values('c')[:1],
+                output_field=IntegerField(),
+            ), 0),
         )
         return Response(AttemptListSerializer(attempts, many=True, context={'request': request}).data)
 
@@ -369,5 +378,78 @@ class QuizAttemptListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         attempt = services.submit_attempt(
             student=request.user, quiz=quiz, answers=serializer.validated_data['answers'],
+            duration_seconds=serializer.validated_data.get('duration_seconds'),
         )
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
+
+
+class QuizStatsView(APIView):
+    """O'qituvchi: savollar bo'yicha statistika — `[{question_id, order, label, wrong_rate, attempts_count}]`,
+    eng ko'p xato qilinganlari birinchi (`wrong_rate` — foiz). Insho savollari kirmaydi."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.view')()]
+
+    def get(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        if request.user.role not in _STAFF_ROLES:
+            raise PermissionDenied(_("Savollar statistikasi faqat o'qituvchiga."))
+        questions = list(quiz.questions.exclude(type=Question.Type.ESSAY).order_by('order', 'created_at'))
+        rows = {
+            row['question']: row for row in AnswerResponse.objects.filter(attempt__quiz=quiz).values('question').annotate(
+                total=Count('pk'), wrong=Count('pk', filter=Q(is_correct=False)),
+            )
+        }
+        result = []
+        for position, question in enumerate(questions, 1):
+            row = rows.get(question.id)
+            if not row or not row['total']:
+                continue
+            label = ' '.join(question.text.split())
+            result.append({
+                'question_id': str(question.id), 'order': position,
+                'label': label if len(label) <= 80 else label[:79] + '…',
+                'wrong_rate': round(row['wrong'] * 100 / row['total']), 'attempts_count': row['total'],
+            })
+        result.sort(key=lambda item: (-item['wrong_rate'], item['order']))
+        return Response(result)
+
+
+class QuizMiniTestView(APIView):
+    """AI: xato qilingan savollar bo'yicha mini-test (`POST {quiz_id, wrong_question_ids}`) — odatdagi AI ish (202),
+    natija qoralama test bo'ladi (`GET /quizzes/ai-generate/{id}/`)."""
+
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request):
+        if not _is_uuid(request.data.get('quiz_id')):
+            raise ValidationError({'quiz_id': _("Test id'si kerak.")})
+        quiz = _get_quiz(request.user, request.data.get('quiz_id'))
+        if request.user.role not in _STAFF_ROLES or quiz.course.teacher_id != request.user.id:
+            raise PermissionDenied(_("Bu test sizning guruhingizniki emas."))
+        raw = request.data.get('wrong_question_ids')
+        if not isinstance(raw, list) or not 1 <= len(raw) <= 30:
+            raise ValidationError({'wrong_question_ids': _("1 tadan 30 tagacha savol id'si ro'yxati kerak.")})
+        questions = list(quiz.questions.filter(pk__in=[str(i) for i in raw if _is_uuid(i)]).prefetch_related('options'))
+        if not questions:
+            raise ValidationError({'wrong_question_ids': _("Bu testda bunday savol topilmadi.")})
+        material = ai_jobs.mini_test_material(quiz, questions)
+        job = ai_jobs.create_job(
+            teacher=request.user, uploads=[], course=quiz.course, subject='',
+            topic=f"{quiz.title}: xato qilingan mavzular"[:200], title=f'{quiz.title} — mini-test'[:200],
+            question_count=min(20, max(5, len(questions) * 2)), material_text_value=material,
+        )
+        return Response(AiQuizJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+
+def _is_uuid(value) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError):
+        return False

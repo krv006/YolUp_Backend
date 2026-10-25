@@ -5,7 +5,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
@@ -28,6 +28,7 @@ from .serializers import (
 
 class CourseViewSet(viewsets.ModelViewSet):
     serializer_class = CourseSerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]  # `avatar` rasmi multipart bilan yuklanadi
 
     @property
     def throttle_scope(self):
@@ -250,14 +251,17 @@ class LessonViewSet(viewsets.ModelViewSet):
             return [RequirePerm('lesson.cancel')()]
         if self.action == 'rate':
             return [RequirePerm('lesson.rate')()]
-        if self.action == 'recording_stream':
-            # Video oqimi imzolangan muddatli token bilan himoyalangan —
+        if self.action in ('recording_stream', 'board_preview'):
+            # Video oqimi / doska rasmi imzolangan muddatli token bilan himoyalangan —
             # <video src> Authorization header yubora olmaydi
             return [AllowAny()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        return selectors.lessons_for(self.request.user)
+        qs = selectors.lessons_for(self.request.user)
+        if self.action in ('list', 'retrieve'):
+            qs = selectors.with_card_stats(qs)
+        return qs
 
     def perform_create(self, serializer):
         data = dict(serializer.validated_data)
@@ -300,6 +304,65 @@ class LessonViewSet(viewsets.ModelViewSet):
             services.update_lesson_quiz(
                 teacher=self.request.user, lesson=lesson, quiz=quiz, request=self.request,
             )
+
+    @action(detail=False, methods=['get'])
+    def conflicts(self, request):
+        """Vaqt to'qnashuvi: `?start=<ISO vaqt>&duration=<daqiqa>[&exclude=<dars id>]` — o'qituvchining shu vaqtga to'g'ri
+        keladigan boshqa darslari. Javob: `{has_conflict, lessons: [...]}`."""
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied(_("Faqat o'qituvchi uchun."))
+        return Response(services.lesson_conflicts(
+            teacher=request.user, start=request.query_params.get('start'),
+            duration=request.query_params.get('duration'), exclude=request.query_params.get('exclude'),
+        ))
+
+    @action(detail=True, methods=['get'])
+    def waiting(self, request, pk=None):
+        """Darsga kirish ekrani: hozir xonada kutayotgan o'quvchilar. `{waiting_count, total_count, students}`
+        (`students` ro'yxati — faqat o'qituvchiga)."""
+        from apps.live import services as live_services
+
+        return Response(live_services.lesson_waiting(user=request.user, lesson_id=pk))
+
+    @action(detail=True, methods=['get'], url_path='board')
+    def board(self, request, pk=None):
+        """`GET /board/{id}/` bilan bir xil (yozuv sahifasi uchun qulay manzil)."""
+        from apps.board import services as board_services
+
+        return Response(board_services.get_board(user=request.user, lesson_id=pk))
+
+    @action(detail=True, methods=['get'], url_path='board/pdf')
+    def board_pdf(self, request, pk=None):
+        """Doska PDF — dars tugagandan keyin ham ishlaydi."""
+        from apps.board import services as board_services
+
+        path = board_services.pdf_file(user=request.user, lesson_id=pk)
+        response = FileResponse(open(path, 'rb'), content_type='application/pdf')
+        response['Content-Disposition'] = 'inline; filename="doska.pdf"'
+        response['Cache-Control'] = 'no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+    @action(
+        detail=True, methods=['get'], url_path=r'board/preview/(?P<index>\d+)',
+        permission_classes=[AllowAny], authentication_classes=[],
+    )
+    def board_preview(self, request, pk=None, index=None):
+        """Doska sahifasining kichik rasmi (PNG) — imzolangan muddatli havola bilan (`recording` javobidagi
+        `board_page_previews[].image_url`); `<img src>` Authorization sarlavhasi yubora olmaydi."""
+        from django.http import HttpResponse
+
+        from .models import Lesson as LessonModel
+
+        try:
+            lesson = LessonModel.objects.get(pk=pk)
+        except (LessonModel.DoesNotExist, ValueError, TypeError):
+            raise NotFound(_('Dars topilmadi.'))
+        png = services.board_preview_png(lesson=lesson, index=int(index), token=request.query_params.get('t') or '')
+        response = HttpResponse(png, content_type='image/png')
+        response['Cache-Control'] = 'private, max-age=3600'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
 
     @action(detail=True, methods=['post'])
     def finish(self, request, pk=None):
@@ -360,6 +423,13 @@ class LessonViewSet(viewsets.ModelViewSet):
             services.delete_recording(teacher=request.user, lesson=lesson)
             return Response(status=204)
         return Response(services.recording_info(user=request.user, lesson=lesson))
+
+    @action(detail=True, methods=['post'], url_path='recording/share')
+    def recording_share(self, request, pk=None):
+        """O'qituvchi tayyor yozuvni guruh chatiga yuboradi (havola bilan xabar). Javob: `{ok, message_id}`."""
+        lesson = self.get_object()
+        message = services.share_recording(teacher=request.user, lesson=lesson)
+        return Response({'ok': True, 'message_id': str(message.id)}, status=status.HTTP_201_CREATED)
 
     @action(
         detail=True, methods=['post'], url_path='recording/audio',

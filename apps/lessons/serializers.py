@@ -21,13 +21,32 @@ class CourseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'teacher', 'title', 'subject', 'subject_label', 'description',
             'is_active', 'student_count', 'my_status', 'is_language_subject', 'created_at',
-            'lessons_per_week', 'monthly_fee',
+            'lessons_per_week', 'monthly_fee', 'avatar',
         ]
         read_only_fields = ['is_active']
         extra_kwargs = {
             'lessons_per_week': {'min_value': 1, 'max_value': 14},
             'monthly_fee': {'min_value': 0, 'max_value': 1_000_000_000},
         }
+
+    def validate_avatar(self, value):
+        """Rasm: JPEG/PNG/WebP, ko'pi bilan 5 MB (bo'sh qiymat — rasmni o'chiradi)."""
+        if not value:
+            return value
+        from PIL import Image
+
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError(_('Rasm 5 MB dan katta.'))
+        try:
+            value.seek(0)
+            fmt = Image.open(value).format
+        except Exception:  # noqa: BLE001
+            raise serializers.ValidationError(_('Rasm fayli buzilgan.')) from None
+        finally:
+            value.seek(0)
+        if fmt not in ('JPEG', 'PNG', 'WEBP'):
+            raise serializers.ValidationError(_('Faqat JPEG, PNG yoki WebP rasm.'))
+        return value
 
     def get_student_count(self, obj) -> int:
         return obj.enrollments.filter(status=Enrollment.Status.APPROVED).count()
@@ -69,6 +88,13 @@ class LessonSerializer(serializers.ModelSerializer):
     )
     # O'qish uchun — hozir shu darsga biriktirilgan test (bo'lsa) id'si.
     quiz_id = serializers.SerializerMethodField()
+    # Darslar ro'yxati kartalari uchun (qo'shimcha so'rovsiz): kursdagi o'quvchilar soni; tugagan darsda ishtirokchilar
+    # soni va davomat foizi; jonli darsda hozir qo'shilganlar soni; darsga biriktirilgan vazifa
+    students_count = serializers.SerializerMethodField()
+    participants_count = serializers.SerializerMethodField()
+    attendance_rate = serializers.SerializerMethodField()
+    joined_count = serializers.SerializerMethodField()
+    assignment = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -76,6 +102,7 @@ class LessonSerializer(serializers.ModelSerializer):
             'id', 'course', 'course_title', 'title', 'note', 'starts_at',
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
+            'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'assignment',
         ]
         read_only_fields = ['room_name', 'status', 'recurrence_id']
 
@@ -125,6 +152,62 @@ class LessonSerializer(serializers.ModelSerializer):
     def get_quiz_id(self, obj) -> str | None:
         quiz = obj.quizzes.first()
         return str(quiz.id) if quiz else None
+
+    # Ro'yxat so'rovi `annotate` qilgan qiymatlarni (`_students` va h.k.) ishlatadi; yakka dars/boshqa joylarda
+    # (annotatsiya yo'q) o'zi hisoblaydi — shu tufayli ro'yxatda har dars uchun qo'shimcha so'rov ketmaydi.
+    def _students(self, obj) -> int:
+        value = getattr(obj, 'card_students', None)
+        if value is None:
+            value = Enrollment.objects.filter(course_id=obj.course_id, status=Enrollment.Status.APPROVED).count()
+        return value or 0
+
+    def _attended(self, obj) -> int:
+        value = getattr(obj, 'card_attended', None)
+        if value is None:
+            value = Attendance.objects.filter(lesson=obj, joined_at__isnull=False).count()
+        return value or 0
+
+    def get_students_count(self, obj) -> int:
+        return self._students(obj)
+
+    def get_participants_count(self, obj) -> int | None:
+        return self._attended(obj) if obj.status == Lesson.Status.FINISHED else None
+
+    def get_attendance_rate(self, obj) -> int | None:
+        if obj.status != Lesson.Status.FINISHED:
+            return None
+        students = self._students(obj)
+        return round(self._attended(obj) * 100 / students) if students else 0
+
+    def get_joined_count(self, obj) -> int | None:
+        """Jonli darsda hozir xonada turgan o'quvchilar soni (kirgan, hali chiqmagan)."""
+        if obj.status != Lesson.Status.LIVE:
+            return None
+        value = getattr(obj, 'card_present', None)
+        if value is None:
+            value = Attendance.objects.filter(lesson=obj, joined_at__isnull=False, left_at__isnull=True).count()
+        return value or 0
+
+    def get_assignment(self, obj) -> dict | None:
+        """Darsga biriktirilgan (qoralama bo'lmagan) birinchi vazifa: `{id, title}`."""
+        rows = getattr(obj, 'card_assignments', None)
+        if rows is None:
+            from apps.homework.models import Assignment
+
+            rows = list(Assignment.objects.filter(lesson=obj).exclude(status=Assignment.Status.DRAFT).order_by('created_at')[:1])
+        return {'id': str(rows[0].id), 'title': rows[0].title} if rows else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        recurrence = data.get('recurrence')
+        if isinstance(recurrence, dict) and instance.recurrence_id:
+            # Seriya qachon tugaydi: oxirgi darsning sanasi
+            last = getattr(instance, 'card_series_end', None)
+            if last is None:
+                last = Lesson.objects.filter(recurrence_id=instance.recurrence_id).order_by('-starts_at').values_list(
+                    'starts_at', flat=True).first()
+            data['recurrence'] = {**recurrence, 'ends_on': timezone.localtime(last).date().isoformat() if last else None}
+        return data
 
     def get_rating_count(self, obj) -> int:
         return obj.ratings.count()
@@ -186,12 +269,13 @@ class AttendanceSerializer(serializers.ModelSerializer):
     focus_exits = serializers.SerializerMethodField()
     focus = serializers.SerializerMethodField()
     focus_alert = serializers.SerializerMethodField()
+    focus_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = Attendance
         fields = [
             'id', 'lesson', 'lesson_title', 'student', 'joined_at', 'left_at', 'minutes',
-            'attention_total', 'attention_answered', 'focus_exits', 'focus', 'focus_alert',
+            'attention_total', 'attention_answered', 'focus_exits', 'focus', 'focus_alert', 'focus_percent',
         ]
 
     def get_lesson_title(self, obj) -> str:
@@ -213,6 +297,17 @@ class AttendanceSerializer(serializers.ModelSerializer):
         """Chiqish-qaytish tahlili: jami/eng uzun yo'qlik + taymlayn
         (qachon chiqdi, qachon qaytdi, necha sekund turdi)."""
         return selectors.focus_summary(obj.lesson, obj.student)
+
+    def get_focus_percent(self, obj) -> int | None:
+        """Darsda necha foiz vaqt e'tibor bilan o'tirgani: 100 − (oynadan tashqarida bo'lgan vaqt / darsda turgan vaqt).
+        Hisoblab bo'lmasa (kirgan/chiqqan vaqt yo'q) — `null`."""
+        if not obj.joined_at or not obj.left_at:
+            return None
+        total = (obj.left_at - obj.joined_at).total_seconds()
+        if total <= 0:
+            return None
+        away = selectors.focus_summary(obj.lesson, obj.student).get('away_seconds') or 0
+        return max(0, min(100, round(100 - away * 100 / total)))
 
     def get_focus_alert(self, obj) -> bool:
         """Chegaradan oshib, ota-onaga signal yaratilganmi (FOCUS_PARENT_ALERT_THRESHOLD)."""

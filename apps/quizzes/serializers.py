@@ -395,6 +395,8 @@ class AnswerSubmitSerializer(serializers.Serializer):
 
 class AttemptSubmitSerializer(serializers.Serializer):
     answers = AnswerSubmitSerializer(many=True)
+    # Testni yechishga ketgan vaqt (soniya) — ixtiyoriy; natijalar jadvalida "Vaqt" ustuni uchun
+    duration_seconds = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=24 * 3600)
 
     def validate_answers(self, answers):
         if not answers:
@@ -441,10 +443,21 @@ class AttemptResultSerializer(serializers.ModelSerializer):
     to'g'ri javob ochiladi (qayta urinishda yaxshilash uchun o'rganish)."""
 
     answers = AnswerResultSerializer(many=True, read_only=True)
+    correct_count = serializers.SerializerMethodField()
+    question_count = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAttempt
-        fields = ['id', 'quiz', 'student', 'score', 'max_score', 'created_at', 'answers']
+        fields = [
+            'id', 'quiz', 'student', 'score', 'max_score', 'created_at', 'duration_seconds',
+            'correct_count', 'question_count', 'answers',
+        ]
+
+    def get_correct_count(self, obj) -> int:
+        return sum(1 for a in obj.answers.all() if a.is_correct and a.question.type != Question.Type.ESSAY)
+
+    def get_question_count(self, obj) -> int:
+        return sum(1 for a in obj.answers.all() if a.question.type != Question.Type.ESSAY)
 
 
 class AttemptListSerializer(serializers.ModelSerializer):
@@ -454,13 +467,22 @@ class AttemptListSerializer(serializers.ModelSerializer):
     student_full_name = serializers.SerializerMethodField()
     student_avatar_url = serializers.SerializerMethodField()
     attempt_no = serializers.SerializerMethodField()
+    correct_count = serializers.SerializerMethodField()
+    question_count = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAttempt
         fields = [
             'id', 'quiz', 'student', 'student_name', 'student_full_name', 'student_avatar_url', 'attempt_no',
-            'score', 'max_score', 'created_at',
+            'score', 'max_score', 'created_at', 'duration_seconds', 'correct_count', 'question_count',
         ]
+
+    def get_correct_count(self, obj) -> int:
+        # View `Subquery` bilan to'ldiradi (har urinish uchun alohida so'rov ketmasligi uchun)
+        return getattr(obj, 'correct_n', None) or 0
+
+    def get_question_count(self, obj) -> int:
+        return getattr(obj, 'question_n', None) or 0
 
     def get_student_full_name(self, obj) -> str:
         return obj.student.get_full_name() or obj.student.username

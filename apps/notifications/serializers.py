@@ -25,20 +25,51 @@ def category_of(kind: str, link_type: str = '') -> str:
     return 'announcement'
 
 
+CATEGORY_TITLES = {
+    'assignment': 'Yangi vazifa', 'submission': 'Vazifa natijasi', 'lesson_reminder': 'Dars eslatmasi',
+    'member_joined': "Qo'shilish so'rovi", 'mention': 'Sizni eslatishdi', 'payment': "To'lov", 'announcement': "E'lon",
+}
+KIND_TITLES = {
+    'homework_pending_review': 'Tekshiruv kutmoqda', 'homework_reviewed': 'Yangi baho',
+    'homework_resubmit': 'Qayta topshirish', 'homework_reminder': 'Vazifa eslatmasi',
+    'ai_quiz_ready': 'AI test tayyor', 'ai_quiz_failed': 'AI test yaratilmadi',
+    'lesson_cancelled': 'Dars bekor qilindi', 'exam_scheduled': 'Imtihon belgilandi',
+    'teacher_approved': 'Hisob tasdiqlandi', 'teacher_pending_approval': 'Tasdiq kutilmoqda',
+    'chat_message': 'Yangi xabar',
+}
+
+
+def title_of(kind: str, link_type: str = '') -> str:
+    """Qisqa sarlavha (ro'yxat kartasi uchun): `kind` bo'yicha, bo'lmasa `category` bo'yicha."""
+    return KIND_TITLES.get(kind or '') or CATEGORY_TITLES[category_of(kind, link_type)]
+
+
 class NotificationSerializer(serializers.ModelSerializer):
-    """Xabarning o'zi — sender + matn (inbox va WS push uchun ham ishlatiladi)."""
+    """Xabarning o'zi — sender + matn (inbox va WS push uchun ham ishlatiladi). `title` — qisqa sarlavha,
+    `body` — HTML'siz oddiy matn; `description` (HTML) eskicha qoladi."""
 
     sender = UserSerializer(read_only=True)
     category = serializers.SerializerMethodField()
+    title = serializers.SerializerMethodField()
+    body = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
         fields = [
-            'id', 'sender', 'description', 'target_type', 'kind', 'category', 'link_type', 'link_id', 'created_at',
+            'id', 'sender', 'description', 'title', 'body', 'target_type', 'kind', 'category', 'link_type', 'link_id',
+            'created_at',
         ]
 
     def get_category(self, obj) -> str:
         return category_of(obj.kind, obj.link_type)
+
+    def get_title(self, obj) -> str:
+        return title_of(obj.kind, obj.link_type)
+
+    def get_body(self, obj) -> str:
+        from .services import strip_html
+
+        return strip_html(obj.description or '')
 
 
 class InboxItemSerializer(serializers.ModelSerializer):

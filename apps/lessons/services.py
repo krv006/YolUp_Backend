@@ -764,6 +764,108 @@ def _recording_stats(lesson: Lesson) -> dict:
     }
 
 
+def _board_extras(lesson: Lesson, recording) -> dict:
+    """Yozuv sahifasi uchun doska ma'lumotlari: `chapters` (doska sahifasi almashgan vaqtlar), `board_page_previews`
+    (sahifalarning kichik rasmlari — imzolangan muddatli havola), `pdf_url` (bo'sh bo'lmasa)."""
+    from django.core import signing
+
+    sheets = [s for s in lesson.board_sheets.order_by('index') if s.strokes]
+    if not sheets:
+        return {'chapters': [], 'board_page_previews': [], 'pdf_url': None}
+    started = recording.video_started_at or recording.audio_started_at or lesson.live_started_at or recording.created_at
+    token = signing.TimestampSigner(salt='board-preview').sign(str(lesson.id))
+    chapters, previews = [], []
+    for position, sheet in enumerate(sheets):
+        seconds = 0 if position == 0 else max(0, int((sheet.created_at - started).total_seconds()))
+        chapters.append({'seconds': seconds, 'title': sheet.title or f'Doska {sheet.index + 1}'})
+        previews.append({
+            'page': sheet.index + 1, 'title': sheet.title,
+            'image_url': f'/api/v1/lessons/{lesson.id}/board/preview/{sheet.index}/?t={token}',
+        })
+    return {'chapters': chapters, 'board_page_previews': previews, 'pdf_url': f'/api/v1/board/{lesson.id}/pdf/'}
+
+
+def board_preview_png(*, lesson: Lesson, index: int, token: str) -> bytes:
+    """Imzolangan token bilan doska sahifasining PNG rasmi (kengligi 640 px)."""
+    import io
+
+    from django.core import signing
+
+    from apps.board.render import render_sheet
+
+    try:
+        value = signing.TimestampSigner(salt='board-preview').unsign(token, max_age=RECORDING_STREAM_MAX_AGE)
+    except signing.BadSignature:
+        raise PermissionDenied(_('Havola yaroqsiz yoki muddati tugagan.'))
+    if value != str(lesson.id):
+        raise PermissionDenied(_('Havola boshqa darsga tegishli.'))
+    sheet = lesson.board_sheets.filter(index=index).first()
+    if sheet is None or not sheet.strokes:
+        raise NotFound(_('Sahifa topilmadi.'))
+    image = render_sheet(sheet.strokes).convert('RGB')
+    image.thumbnail((640, 360))
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG', optimize=True)
+    return buffer.getvalue()
+
+
+def lesson_conflicts(*, teacher: User, start, duration, exclude=None) -> dict:
+    """O'qituvchining berilgan vaqt oralig'iga (`start` dan `duration` daqiqa) to'g'ri keladigan boshqa darslari.
+    Bekor qilingan/tugagan darslar hisobga olinmaydi."""
+    from datetime import timedelta
+
+    from django.utils.dateparse import parse_datetime
+
+    moment = parse_datetime(str(start or ''))
+    if moment is None:
+        raise ValidationError({'start': _("Noto'g'ri vaqt (ISO ko'rinishida bo'lishi kerak).")})
+    if timezone.is_naive(moment):
+        moment = timezone.make_aware(moment)
+    try:
+        minutes = int(duration if duration not in (None, '') else 45)
+    except (TypeError, ValueError):
+        raise ValidationError({'duration': _("Butun son bo'lishi kerak.")}) from None
+    if not 1 <= minutes <= 24 * 60:
+        raise ValidationError({'duration': _("1 dan 1440 daqiqagacha bo'lishi kerak.")})
+    end = moment + timedelta(minutes=minutes)
+    # Dars davomiyligi bazada daqiqa (butun son) — kesishishni Python'da tekshiramiz; bazadan faqat mumkin bo'lgan
+    # oynadagilar olinadi (bir dars sutkadan uzoq bo'lmaydi)
+    rows = Lesson.objects.filter(
+        course__teacher=teacher, status__in=(Lesson.Status.SCHEDULED, Lesson.Status.LIVE),
+        starts_at__lt=end, starts_at__gt=moment - timedelta(days=1),
+    ).select_related('course')
+    if exclude:
+        rows = rows.exclude(pk=exclude) if _is_uuid_text(exclude) else rows
+    lessons = [
+        {'id': str(row.id), 'title': row.title, 'course': str(row.course_id), 'course_title': row.course.title,
+         'starts_at': row.starts_at, 'duration_min': row.duration_min}
+        for row in rows.order_by('starts_at') if row.starts_at + timedelta(minutes=row.duration_min) > moment
+    ]
+    return {'has_conflict': bool(lessons), 'lessons': lessons}
+
+
+def _is_uuid_text(value) -> bool:
+    import uuid
+
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def share_recording(*, teacher: User, lesson: Lesson):
+    """Tayyor dars yozuvini guruh chatiga yuboradi. Qaytaradi: chat xabari."""
+    from .models import LessonRecording
+
+    if lesson.course.teacher_id != teacher.id:
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi yozuvni chatga yuboradi."))
+    recording = LessonRecording.objects.filter(lesson=lesson).first()
+    if recording is None or recording.status != LessonRecording.Status.COMPLETED:
+        raise ValidationError({'detail': _("Yozuv hali tayyor emas.")})
+    return publish_recording_message(lesson, recording.title or lesson.title or lesson.course.title)
+
+
 def recording_info(*, user: User, lesson: Lesson) -> dict:
     """Yozuv holati + tayyor bo'lsa muddatli stream havolasi."""
     from django.core import signing
@@ -823,6 +925,7 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
         'error': recording.error,
         'stream_url': None,
         **_recording_stats(lesson),
+        **_board_extras(lesson, recording),
     }
     if file_ready:
         # Imzolangan, muddatli havola — <video src> uchun (headerlarsiz),
@@ -1011,7 +1114,7 @@ def finalize_recording_video(*, teacher: User, lesson: Lesson) -> None:
     live_services.maybe_start_merge(lesson.id)
 
 
-def publish_recording_message(lesson: Lesson, title: str) -> None:
+def publish_recording_message(lesson: Lesson, title: str):
     """Dars tugagach guruh chatga yozuv havolasini tashlaydi (board PDF uslubi)."""
     from django.db import transaction
 
@@ -1035,3 +1138,4 @@ def publish_recording_message(lesson: Lesson, title: str) -> None:
     # send_message bilan bir xil: WebSocket'ga darhol tarqatamiz, aks holda
     # chat qayta ochilmaguncha (yoki sahifa yangilanmaguncha) ko'rinmay turadi.
     transaction.on_commit(lambda: realtime.broadcast_message(message))
+    return message
