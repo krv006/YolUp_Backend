@@ -1,0 +1,4 @@
+# Linux serverda ishlaydigan fayllar har doim LF (Windows CRLF skriptni buzadi)
+*.sh text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf
