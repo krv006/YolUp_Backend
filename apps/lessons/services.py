@@ -468,10 +468,7 @@ def delete_course(*, teacher: User, course: Course, request=None) -> None:
     # Video yozuvlar — fayl + baza yozuvi butunlay o'chadi
     from .models import LessonRecording
     for recording in LessonRecording.objects.filter(lesson_id__in=lesson_ids):
-        if recording.file_name:
-            path = _recording_path(recording)
-            if path.exists():
-                path.unlink()
+        remove_recording_files(recording)
         recording.delete()
 
     # Doska — chizmalar, chizish ruxsatlari, o'chirish jurnali + PDF fayllar
@@ -736,8 +733,22 @@ def _can_view_lesson(user: User, lesson: Lesson) -> bool:
 
 
 def _recording_path(recording):
+    """Ijro etiladigan fayl: tayyor MP4 nusxa bo'lsa — shu (asl WebM `prune_recordings` bilan o'chirilgan bo'lishi mumkin),
+    aks holda asl fayl."""
     from django.conf import settings
+    if recording.mp4_file_name:
+        mp4_path = settings.RECORDINGS_DIR / recording.mp4_file_name
+        if mp4_path.exists():
+            return mp4_path
     return settings.RECORDINGS_DIR / recording.file_name
+
+
+def remove_recording_files(recording) -> None:
+    """Yozuvning BARCHA fayllarini (yakuniy WebM, MP4/M4A nusxa, xom video va audio qismlar) diskdan o'chiradi."""
+    from django.conf import settings
+    for name in (recording.file_name, recording.mp4_file_name, recording.video_file_name, recording.audio_file_name):
+        if name:
+            (settings.RECORDINGS_DIR / name).unlink(missing_ok=True)
 
 
 def _one_side_stale(recording, *, wait=timedelta(minutes=2)) -> bool:
@@ -950,15 +961,9 @@ def recording_stream_path(*, lesson: Lesson, token: str):
     recording = LessonRecording.objects.filter(lesson=lesson).first()
     if recording is None or not recording.file_name:
         raise NotFound(_("Yozuv topilmadi."))
-    path = _recording_path(recording)
+    path = _recording_path(recording)  # iOS ham ochadigan MP4 nusxa tayyor bo'lsa — shu (WebM iOS'da ochilmaydi)
     if not path.exists():
         raise NotFound(_("Yozuv fayli hali tayyor emas."))
-    if recording.mp4_file_name:  # iOS ham ochadigan nusxa tayyor bo'lsa — shuni beramiz (WebM iOS'da ochilmaydi)
-        from django.conf import settings
-
-        mp4_path = settings.RECORDINGS_DIR / recording.mp4_file_name
-        if mp4_path.exists():
-            return mp4_path
     return path
 
 
@@ -974,13 +979,7 @@ def delete_recording(*, teacher: User, lesson: Lesson) -> None:
     recording = LessonRecording.objects.filter(lesson=lesson).first()
     if recording is None:
         raise NotFound(_("Yozuv yo'q."))
-    for name in (recording.file_name, recording.mp4_file_name, recording.video_file_name,
-                 recording.audio_file_name):
-        if not name:
-            continue
-        path = settings.RECORDINGS_DIR / name
-        if path.exists():
-            path.unlink()
+    remove_recording_files(recording)
     recording.delete()
 
 
