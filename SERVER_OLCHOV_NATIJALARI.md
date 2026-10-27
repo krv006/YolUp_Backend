@@ -252,3 +252,46 @@ Baho — **resurs samaradorligi va yuk ostida ishonchlilik** bo'yicha, faqat o'l
 5. MP4 tayyor bo'lgach WebM'ni o'chirish, yozuvlar uchun qo'shimcha disk/tashqi saqlash.
 
 **O'lchanmaganlar (halol):** (a) 1 000+ LiveKit tomoshabin (test kompyuteri chegarasi); (b) netcup EPYC 9645 protsessorida haqiqiy tezlik; (c) Redis orqali chat yetkazish narxi; (d) haqiqiy prod yuki (eski serverdan `docker stats` natijasi hali kelmagan); (e) cron ishlarining narxi.
+
+---
+
+## 14. TUZATISHLARDAN KEYIN QAYTA O'LCHOV (2026-10-27, Linux + Postgres 18 + Redis, o'sha 10 000 foydalanuvchili baza)
+
+Birinchi o'lchovda topilgan muammolar tuzatildi va **o'sha usulda qayta o'lchandi**. Tuzatishlar hali prod'da emas — deploy'dan keyin kuchga kiradi.
+
+| So'rov | Oldin | Keyin | Nima qilindi |
+|---|---|---|---|
+| Darslar ro'yxati | 64 SQL / 47 ms | **4 SQL / 14 ms** | N+1 → sub-so'rovlar |
+| Davomat (20 qator) | 124 SQL / ~158 ms | **7 SQL / 17 ms** | guruhli yuklash |
+| Tahlil `analytics/me` | 46 SQL / 351 ms | **16 SQL / 26 ms** | guruhli agregatlar |
+| Tahlil `trends` | 200 ms | **5 SQL / 19 ms** | filtrli agregat |
+| O'qituvchi paneli | 58 ms | **8 SQL / 11 ms** | guruhli |
+| Kurslar ro'yxati (o'qituvchi, 5 kurs) | 28 SQL | **6 SQL / 12 ms** | o'quvchilar soni, o'z holati, o'qituvchi — oldindan yuklanadi |
+| Bildirishnomalar (o'quvchi) | 33 SQL | **5 SQL / 10 ms** | o'qituvchi reytingi/sertifikatlari bir so'rovga keshlanadi |
+| Chat xonalari (5 xona) | 31 SQL | **12 SQL / 38 ms** | o'qilmagan/belgilanish/oxirgi o'qilgan — bitta annotatsiyali so'rov; xona soniga bog'liq emas |
+| Baza ulanishlari | 64 parallel → 199 ulanish, 3 500 xato | **chegaralangan** (`DB_POOL_MAX` yoki WSGI gthread) | ulanishlar puli |
+| O'qituvchi doska so'rovi | 235 KB har 2 s | **~100 bayt har 3 s** (`/live/lesson/<id>/signals/`) | yengil endpoint |
+| `attention` so'rovi | har 3 s | **har 6 s** (tekshiruv oynasi 15 s + 8 s imtiyoz) | frontend |
+| `away_students` | butun jurnalni o'qiydi | **faqat hozir chiqib turganlar** (SQL'da) + indeks | `FocusEvent(lesson, student, created_at)` |
+| Cron | 8 ta `sleep`-sikl, har ishga tushish ~1 CPU-s (~0,15 yadro doimiy) | **bitta doimiy jarayon** (`run_scheduler`) | Django bir marta yuklanadi |
+
+**Topilgan va tuzatilgan xato:** kurs o'chirilganda faqat asosiy WebM o'chardi — MP4 nusxa va xom video/audio qismlar diskda yetim qolardi. Endi hammasi o'chadi (test bilan).
+
+**Yangi buyruqlar (hech biri o'zi ishga tushmaydi):**
+
+- `python manage.py prune_recordings` — faqat hisobot: qancha GB bo'shatish mumkin. `--apply` xom qismlarni, `--apply --drop-webm` MP4 tayyor yozuvlarning asl WebM'ini ham o'chiradi (faqat 7 kundan eski, fayl o'qilishi tekshirilgandan keyin). Yozuv MP4 bilan ko'rsatiladi.
+- `python manage.py prune_notifications [--days 180] [--apply]` — eski bildirishnomalar (yiliga ~4 GB o'sishning asosiy qismi).
+- `.env`: `THROTTLE_AUTH`, `THROTTLE_USER`, `THROTTLE_ANON` — maktab Wi-Fi'si (bitta IP) uchun kirish chegarasini oshirish.
+
+### Yangilangan baho (deploy va quyidagi shartlardan keyin)
+
+| Yo'nalish | Oldin | Keyin |
+|---|---|---|
+| Baza ulanishlari / bir vaqtdalik | 3 | **8** (puli o'lchangan; real yukda tasdiqlash kerak) |
+| Mijoz so'rov chastotasi | 3 | **6** (doska polling'i yengillashdi; haqiqiy darsda tasdiqlanmagan) |
+| Bitta so'rov samaradorligi | 6 | **8** |
+| Saqlash boshqaruvi | 4 | **5** (vositalar tayyor, lekin qo'llanmagan va saqlash muddati hal qilinmagan) |
+| Joylashtirish / kuzatuv | 5 | **5.5** (cron birlashtirildi; zaxira tiklash hali sinalmagan) |
+| **UMUMIY** | **5.5** | **~7 / 10** |
+
+8/10 ga yetish uchun qolgan: (1) deploy + ikki hisob bilan haqiqiy darsda tekshirish; (2) `prune_recordings --apply --drop-webm` ni qo'llash va yozuv saqlash muddatini hal qilish; (3) zaxira tiklashni bir marta sinab ko'rish; (4) prod'dan haqiqiy `docker stats`.
