@@ -146,10 +146,12 @@ class LessonSerializer(serializers.ModelSerializer):
 
     def get_avg_rating(self, obj) -> float | None:
         from django.db.models import Avg
-        result = obj.ratings.aggregate(avg=Avg('stars'))['avg']
+        result = obj.card_avg_rating if hasattr(obj, 'card_avg_rating') else obj.ratings.aggregate(avg=Avg('stars'))['avg']
         return round(result, 1) if result else None
 
     def get_quiz_id(self, obj) -> str | None:
+        if hasattr(obj, 'card_quiz_id'):  # ro'yxat so'rovi oldindan hisoblagan
+            return str(obj.card_quiz_id) if obj.card_quiz_id else None
         quiz = obj.quizzes.first()
         return str(quiz.id) if quiz else None
 
@@ -210,7 +212,7 @@ class LessonSerializer(serializers.ModelSerializer):
         return data
 
     def get_rating_count(self, obj) -> int:
-        return obj.ratings.count()
+        return obj.card_rating_count if hasattr(obj, 'card_rating_count') else obj.ratings.count()
 
 
 class LessonRatingSerializer(serializers.ModelSerializer):

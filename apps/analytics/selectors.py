@@ -8,11 +8,12 @@ o'tishi mumkin, shuning uchun avval xavfsiz ID ro'yxati olinadi.
 """
 from datetime import timedelta
 
-from django.db.models import Avg, Count, F, Q
+from django.db.models import Avg, Count, F, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.lessons.models import Course, Enrollment, Lesson, LessonRating
+from apps.lessons.models import Attendance, Course, Enrollment, Lesson, LessonRating
 from apps.quizzes.models import QuizAttempt
 
 _ENROLLED = Enrollment.Status.APPROVED
@@ -63,9 +64,18 @@ def _format_label(period: str, start) -> str:
     return str(start.year)
 
 
-def _attendance_rate(course_ids=None, start=None, end=None):
-    """Kutilgan (yozilgan o'quvchi soni x tugagan dars) va haqiqiy qatnashgan
-    (kamida bir marta kirgan) o'quvchilar nisbati, foizda. Ma'lumot bo'lmasa None."""
+def _count_sq(model, **filters):
+    """Tashqi qatorga bog'liq COUNT — kesishuvchi JOIN o'rniga (JOIN+DISTINCT har bir dars uchun enrollments x attendances
+    ko'paytmasini hosil qilardi; 10 000 foydalanuvchida bu soniyalarga cho'zilardi)."""
+    key = next(iter(filters))
+    return Coalesce(Subquery(
+        model.objects.filter(**filters).order_by().values(key.split('__')[0]).annotate(c=Count('pk')).values('c')[:1],
+        output_field=IntegerField(),
+    ), 0)
+
+
+def _finished_with_attendance(course_ids=None, start=None, end=None):
+    """Tugagan darslar + har biri uchun `enrolled` (kutilgan) va `attended` (kamida bir marta kirgan) sonlari."""
     lessons = Lesson.objects.filter(status=_FINISHED)
     if course_ids is not None:
         lessons = lessons.filter(course_id__in=course_ids)
@@ -73,17 +83,30 @@ def _attendance_rate(course_ids=None, start=None, end=None):
         lessons = lessons.filter(starts_at__gte=start)
     if end is not None:
         lessons = lessons.filter(starts_at__lt=end)
-    lessons = lessons.annotate(
-        enrolled_count=Count(
-            'course__enrollments', filter=Q(course__enrollments__status=_ENROLLED), distinct=True,
-        ),
-        attended_count=Count(
-            'attendances', filter=Q(attendances__joined_at__isnull=False), distinct=True,
-        ),
+    return lessons.annotate(
+        enrolled=_count_sq(Enrollment, course=OuterRef('course_id'), status=_ENROLLED),
+        attended=_count_sq(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False),
     )
-    expected = sum(lesson.enrolled_count for lesson in lessons)
-    actual = sum(lesson.attended_count for lesson in lessons)
+
+
+def _attendance_rate(course_ids=None, start=None, end=None):
+    """Kutilgan (yozilgan o'quvchi soni x tugagan dars) va haqiqiy qatnashgan
+    (kamida bir marta kirgan) o'quvchilar nisbati, foizda. Ma'lumot bo'lmasa None."""
+    totals = _finished_with_attendance(course_ids, start, end).aggregate(expected=Sum('enrolled'), actual=Sum('attended'))
+    expected, actual = totals['expected'] or 0, totals['actual'] or 0
     return round(actual / expected * 100, 1) if expected else None
+
+
+def _attendance_by_course(course_ids) -> dict:
+    """{kurs_id: davomat foizi yoki None} — BITTA so'rovda (kurslar bo'yicha sikl o'rniga)."""
+    rows = _finished_with_attendance(course_ids).order_by().values('course_id').annotate(
+        expected=Sum('enrolled'), actual=Sum('attended'),
+    )
+    result = {course_id: None for course_id in course_ids}
+    for row in rows:
+        expected, actual = row['expected'] or 0, row['actual'] or 0
+        result[row['course_id']] = round(actual / expected * 100, 1) if expected else None
+    return result
 
 
 def _top_courses(limit: int = 5) -> list:
@@ -108,32 +131,37 @@ def _top_courses(limit: int = 5) -> list:
 
 
 def _top_teachers(limit: int = 5) -> list:
-    teacher_ids = Course.objects.filter(is_active=True).values_list('teacher_id', flat=True).distinct()
+    """Hammasi guruhlangan so'rovlar bilan (avval har o'qituvchi uchun 4 ta so'rov — 500 o'qituvchida 2 000 so'rov)."""
     now = timezone.localtime(timezone.now())
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
+    active = Course.objects.filter(is_active=True)
+    course_counts = {row['teacher_id']: row['n'] for row in active.order_by().values('teacher_id').annotate(n=Count('id'))}
+    lessons = {
+        row['course__teacher_id']: row
+        for row in Lesson.objects.filter(course__is_active=True).order_by().values('course__teacher_id').annotate(
+            month=Count('id', filter=Q(status=_FINISHED, starts_at__gte=month_start, starts_at__lte=now)),
+            finished=Count('id', filter=Q(status=_FINISHED)), cancelled=Count('id', filter=Q(status=_CANCELLED)),
+        )
+    }
+    ratings = {
+        row['lesson__course__teacher_id']: row['avg']
+        for row in LessonRating.objects.filter(lesson__course__is_active=True, lesson__is_deleted=False).order_by().values(
+            'lesson__course__teacher_id').annotate(avg=Avg('stars'))
+    }
     scored = []
-    for teacher in User.objects.filter(id__in=teacher_ids):
-        course_ids = list(Course.objects.filter(teacher=teacher, is_active=True).values_list('id', flat=True))
-        lessons_this_month = Lesson.objects.filter(
-            course_id__in=course_ids, status=_FINISHED, starts_at__gte=month_start, starts_at__lte=now,
-        ).count()
-        held_or_cancelled = Lesson.objects.filter(course_id__in=course_ids, status__in=[_FINISHED, _CANCELLED])
-        finished = held_or_cancelled.filter(status=_FINISHED).count()
-        cancelled = held_or_cancelled.filter(status=_CANCELLED).count()
-        reliability = round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None
-        rating = LessonRating.objects.filter(
-            lesson__course_id__in=course_ids, lesson__is_deleted=False,
-        ).aggregate(avg=Avg('stars'))['avg']
+    for teacher in User.objects.filter(id__in=list(course_counts)):
+        row = lessons.get(teacher.id) or {'month': 0, 'finished': 0, 'cancelled': 0}
+        finished, cancelled = row['finished'], row['cancelled']
+        rating = ratings.get(teacher.id)
         scored.append({
             'id': str(teacher.id),
             'name': teacher.get_full_name() or teacher.username,
-            'course_count': len(course_ids),
-            'lessons_this_month': lessons_this_month,
+            'course_count': course_counts[teacher.id],
+            'lessons_this_month': row['month'],
             'avg_rating': round(rating, 1) if rating is not None else None,
-            'reliability': reliability,
+            'reliability': round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None,
         })
-    scored.sort(key=lambda row: row['avg_rating'] or 0, reverse=True)
+    scored.sort(key=lambda item: item['avg_rating'] or 0, reverse=True)
     return scored[:limit]
 
 
@@ -203,33 +231,38 @@ def student_own_stats(student: User) -> dict:
 
 def teacher_course_breakdown(teacher: User) -> list[dict]:
     """O'qituvchining har bir kursi ("sinf") bo'yicha solishtiruv
-    statistikasi — Workspace > Tahlil'da kurslar orasidagi farqni ko'rish uchun."""
-    courses = Course.objects.filter(teacher=teacher, is_active=True)
+    statistikasi — Workspace > Tahlil'da kurslar orasidagi farqni ko'rish uchun.
+    Hammasi guruhlangan so'rovlar bilan (avval har kurs uchun 5+ so'rov ketardi)."""
+    courses = list(Course.objects.filter(teacher=teacher, is_active=True))
+    ids = [course.id for course in courses]
+    students = {row['course_id']: row['n'] for row in Enrollment.objects.filter(
+        course_id__in=ids, status=_ENROLLED).order_by().values('course_id').annotate(n=Count('id'))}
+    lessons = {row['course_id']: row for row in Lesson.objects.filter(course_id__in=ids).order_by().values('course_id').annotate(
+        finished=Count('id', filter=Q(status=_FINISHED)), cancelled=Count('id', filter=Q(status=_CANCELLED)))}
+    ratings = {row['lesson__course_id']: row['avg'] for row in LessonRating.objects.filter(
+        lesson__course_id__in=ids, lesson__is_deleted=False).order_by().values('lesson__course_id').annotate(avg=Avg('stars'))}
+    quizzes = {row['quiz__course_id']: row for row in QuizAttempt.objects.filter(
+        quiz__course_id__in=ids, max_score__gt=0).annotate(pct=F('score') * 100.0 / F('max_score')).order_by().values(
+        'quiz__course_id').annotate(avg=Avg('pct'), n=Count('id'))}
+    attendance = _attendance_by_course(ids)
 
     result = []
     for course in courses:
-        student_count = Enrollment.objects.filter(course=course, status=_ENROLLED).count()
-        lessons = Lesson.objects.filter(course=course)
-        finished = lessons.filter(status=_FINISHED).count()
-        cancelled = lessons.filter(status=_CANCELLED).count()
-        reliability = round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None
-        rating = LessonRating.objects.filter(
-            lesson__course=course, lesson__is_deleted=False,
-        ).aggregate(avg=Avg('stars'))['avg']
-        quiz_stats = _attempt_summary(
-            QuizAttempt.objects.filter(quiz__course=course, max_score__gt=0)
-        )
+        row = lessons.get(course.id) or {'finished': 0, 'cancelled': 0}
+        finished, cancelled = row['finished'], row['cancelled']
+        rating = ratings.get(course.id)
+        quiz = quizzes.get(course.id)
         result.append({
             'course_id': str(course.id),
             'course_title': course.title,
-            'student_count': student_count,
+            'student_count': students.get(course.id, 0),
             'avg_rating': round(rating, 1) if rating is not None else None,
-            'reliability': reliability,
-            'quiz_avg_percentage': quiz_stats['avg_percentage'],
-            'quiz_attempt_count': quiz_stats['attempt_count'],
-            'attendance_rate': _attendance_rate(course_ids=[course.id]),
+            'reliability': round(finished / (finished + cancelled) * 100, 1) if (finished + cancelled) else None,
+            'quiz_avg_percentage': round(quiz['avg'], 1) if quiz and quiz['avg'] is not None else None,
+            'quiz_attempt_count': quiz['n'] if quiz else 0,
+            'attendance_rate': attendance.get(course.id),
         })
-    result.sort(key=lambda row: row['student_count'], reverse=True)
+    result.sort(key=lambda item: item['student_count'], reverse=True)
     return result
 
 
@@ -251,27 +284,43 @@ def teacher_own_stats(teacher: User) -> dict:
     }
 
 
+def _bucket(field: str, start, end) -> Q:
+    return Q(**{f'{field}__gte': start, f'{field}__lt': end})
+
+
 def teacher_trends(teacher: User, period: str) -> dict:
-    """O'qituvchining O'Z kurslari bo'yicha vaqt qatori: testlarning o'rtacha foizi, tugagan darslar, davomat."""
+    """O'qituvchining O'Z kurslari bo'yicha vaqt qatori: testlarning o'rtacha foizi, tugagan darslar, davomat.
+    Har ko'rsatkich BITTA so'rovda (filtrli agregat), kesim soniga qaramay."""
     count = PERIOD_BUCKET_COUNTS[period]
     now = timezone.localtime(timezone.now())
     edges = _period_edges(period, count, now)
     course_ids = list(Course.objects.filter(teacher=teacher).values_list('id', flat=True))
-    labels, quiz_avg, completed, attendance = [], [], [], []
-    for i in range(count):
-        start, end = edges[i], edges[i + 1]
-        labels.append(_format_label(period, start))
-        avg = QuizAttempt.objects.filter(
-            quiz__course_id__in=course_ids, created_at__gte=start, created_at__lt=end, max_score__gt=0,
-        ).annotate(pct=F('score') * 100.0 / F('max_score')).aggregate(avg=Avg('pct'))['avg']
-        quiz_avg.append(round(avg, 1) if avg is not None else None)
-        completed.append(Lesson.objects.filter(
-            course_id__in=course_ids, status=_FINISHED, starts_at__gte=start, starts_at__lt=end,
-        ).count())
-        attendance.append(_attendance_rate(course_ids=course_ids, start=start, end=end) if course_ids else None)
+    labels = [_format_label(period, edges[i]) for i in range(count)]
+    first, last = edges[0], edges[-1]
+
+    quiz = QuizAttempt.objects.filter(
+        quiz__course_id__in=course_ids, max_score__gt=0, created_at__gte=first, created_at__lt=last,
+    ).annotate(pct=F('score') * 100.0 / F('max_score')).aggregate(**{
+        f'b{i}': Avg('pct', filter=_bucket('created_at', edges[i], edges[i + 1])) for i in range(count)})
+    completed = Lesson.objects.filter(
+        course_id__in=course_ids, status=_FINISHED, starts_at__gte=first, starts_at__lt=last,
+    ).aggregate(**{f'b{i}': Count('id', filter=_bucket('starts_at', edges[i], edges[i + 1])) for i in range(count)})
+    sums = {}
+    if course_ids:
+        sums = _finished_with_attendance(course_ids, first, last).aggregate(
+            **{f'e{i}': Sum('enrolled', filter=_bucket('starts_at', edges[i], edges[i + 1])) for i in range(count)},
+            **{f'a{i}': Sum('attended', filter=_bucket('starts_at', edges[i], edges[i + 1])) for i in range(count)},
+        )
+
+    def rate(i):
+        expected, actual = sums.get(f'e{i}') or 0, sums.get(f'a{i}') or 0
+        return round(actual / expected * 100, 1) if expected else None
+
     return {
-        'period': period, 'labels': labels, 'quiz_avg_score': quiz_avg,
-        'lessons_completed': completed, 'attendance_rate': attendance,
+        'period': period, 'labels': labels,
+        'quiz_avg_score': [round(quiz[f'b{i}'], 1) if quiz[f'b{i}'] is not None else None for i in range(count)],
+        'lessons_completed': [completed[f'b{i}'] for i in range(count)],
+        'attendance_rate': [rate(i) for i in range(count)],
     }
 
 

@@ -3,7 +3,7 @@
 Ota-ona faqat TASDIQLANGAN bog'lanishdagi bolasining ma'lumotini ko'radi —
 bu rozilik modelining texnik kafolati.
 """
-from django.db.models import Count, IntegerField, OuterRef, Prefetch, QuerySet, Subquery
+from django.db.models import Avg, Count, FloatField, IntegerField, OuterRef, Prefetch, QuerySet, Subquery
 from django.db.models.functions import Coalesce
 
 from apps.accounts.models import ParentChildLink, User
@@ -58,6 +58,7 @@ def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
     """Darslar ro'yxati kartalari uchun hisoblagichlarni BITTA so'rovda qo'shadi (har dars uchun alohida so'rov
     ketmasligi uchun): o'quvchilar soni, qatnashganlar, hozir xonadagilar, seriya oxiri, biriktirilgan vazifa."""
     from apps.homework.models import Assignment
+    from apps.quizzes.models import Quiz
 
     def count(model, **filters):
         key = next(iter(filters))
@@ -70,6 +71,15 @@ def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
         card_students=count(Enrollment, course=OuterRef('course_id'), status=_ENROLLED),
         card_attended=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False),
         card_present=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False, left_at__isnull=True),
+        # Har dars uchun alohida so'rov ketmasligi uchun (avval: test, o'rtacha baho, baholar soni — 3 ta/dars)
+        card_rating_count=count(LessonRating, lesson=OuterRef('pk')),
+        card_avg_rating=Subquery(
+            LessonRating.objects.filter(lesson=OuterRef('pk')).order_by().values('lesson').annotate(a=Avg('stars')).values('a')[:1],
+            output_field=FloatField(),
+        ),
+        card_quiz_id=Subquery(
+            Quiz.objects.filter(lesson=OuterRef('pk')).order_by('created_at').values('id')[:1],
+        ),
         card_series_end=Subquery(
             Lesson.objects.filter(recurrence_id=OuterRef('recurrence_id')).order_by('-starts_at').values('starts_at')[:1],
         ),
