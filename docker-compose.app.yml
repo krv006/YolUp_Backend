@@ -1,5 +1,8 @@
-# APP server (netcup RS 4000): sayt (API), chat/doska (WebSocket), baza, Redis, fon ishlari, yozuvlarni qayta ishlash.
-# Jonli dars video serveri (LiveKit) BU YERDA EMAS — u MEDIA serverda (docker-compose.media.yml).
+# APP (CORE) server (netcup RS 2000): sayt (API), chat/doska (WebSocket), baza, Redis, fon ishlari.
+# Jonli dars video serveri (LiveKit), yozuv fayllari, yozuvni birlashtirish va MP4 ga o'tkazish BU YERDA EMAS —
+# ular MEDIA serverda (docker-compose.media.yml, netcup RS 4000). Ikki server o'rtasida yopiq WireGuard kanal bor
+# (deploy/new/wireguard.sh): baza va Redis FAQAT shu kanal orqali MEDIA serverga ochiladi, internetga emas.
+# Yozuv bilan bog'liq so'rovlarni (/api/v1/lessons/<id>/recording*) Caddy MEDIA serverdagi `rec` xizmatiga yo'naltiradi.
 #
 # Ishga tushirish (serverda, /var/www/edu_platform ichida):
 #   cp .env.app.example .env      # va qiymatlarni to'ldiring
@@ -15,15 +18,16 @@ x-backend: &backend
   environment: &backend-env
     DJANGO_ENV: prod
     POSTGRES_HOST: db
-    REDIS_URL: redis://redis:6379/0
+    REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD .env da berilishi shart}@redis:6379/0
     RECORDINGS_DIR: /app/recordings
+    RECORDINGS_LOCAL: "0"   # yozuv fayllari bu serverda EMAS (MEDIA serverda) — bu yerda birlashtirish urinilmaydi
+    SERVER_ROLE: core
     # Mobil push (FCM): .env da to'ldirilsa va quyidagi `volumes`dagi fayl ulansa ishlaydi, aks holda jim o'chiq
     GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
     FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
   volumes:
     - media:/app/media
     - logs:/app/logs
-    - recordings:/app/recordings
     # - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
 
 services:
@@ -35,18 +39,21 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-edtech}
       POSTGRES_USER: ${POSTGRES_USER:-edtech}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env da berilishi shart}
-    # 32 GB RAM (RS 4000) uchun sozlangan. RS 2000 (16 GB) da `shared_buffers=4GB`, `effective_cache_size=10GB` qiling.
+    # 16 GB RAM (RS 2000) uchun sozlangan (RAM ning ~20% / ~55%). Server RS 4000 ga o'tsa: PG_SHARED_BUFFERS=8GB, PG_EFFECTIVE_CACHE=20GB.
+    # MEDIA serverdagi `rec` xizmati ham shu bazaga WireGuard orqali ulanadi (quyidagi `ports`).
     command: >
       postgres
-      -c shared_buffers=${PG_SHARED_BUFFERS:-8GB}
-      -c effective_cache_size=${PG_EFFECTIVE_CACHE:-20GB}
+      -c shared_buffers=${PG_SHARED_BUFFERS:-3GB}
+      -c effective_cache_size=${PG_EFFECTIVE_CACHE:-9GB}
       -c work_mem=16MB
       -c maintenance_work_mem=1GB
-      -c max_connections=${PG_MAX_CONNECTIONS:-300}
+      -c max_connections=${PG_MAX_CONNECTIONS:-250}
       -c random_page_cost=1.1
       -c wal_compression=on
       -c max_wal_size=4GB
       -c checkpoint_completion_target=0.9
+    ports:
+      - "${CORE_WG_IP:-10.10.0.1}:5432:5432"   # FAQAT WireGuard manzilida (internetga ochiq emas)
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -59,7 +66,9 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     # Kesh, real-vaqt (WebSocket), onlayn holat, throttle. Diskka yozilmaydi (hammasi vaqtinchalik ma'lumot).
-    command: redis-server --maxmemory ${REDIS_MAXMEMORY:-2gb} --maxmemory-policy volatile-ttl --save ""
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD .env da berilishi shart} --maxmemory ${REDIS_MAXMEMORY:-2gb} --maxmemory-policy volatile-ttl --save ""
+    ports:
+      - "${CORE_WG_IP:-10.10.0.1}:6379:6379"   # FAQAT WireGuard manzilida; MEDIA serverdagi rec/cron shu orqali ulanadi
 
   # API (HTTP). Migratsiya va statik fayllar shu yerda bajariladi.
   # WSGI (gunicorn gthread), ASGI EMAS — o'lchov (2026-10-27, Linux + Postgres) bo'yicha: bir xil so'rov ~2x kam protsessor
@@ -103,35 +112,21 @@ services:
   cron:
     <<: *backend
     # Bitta doimiy jarayon (avval har vazifa uchun sleep-tsikl: Django har safar qayta yuklanib ~0,15 yadro band bo'lardi)
-    command: python manage.py run_scheduler --startup-delay 30
+    # recover_recordings MEDIA serverda (fayllar o'sha yerda); bu yerda fayl bilan ishlamaydigan vazifalar
+    command: python manage.py run_scheduler --startup-delay 30 --skip recover_recordings
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
 
-  # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish, shuning uchun alohida va yadro bilan cheklangan.
-  transcoder:
-    <<: *backend
-    cpus: ${TRANSCODER_CPUS:-2}
-    command: >
-      sh -c "sleep 60 &&
-             while true; do
-               python manage.py convert_recordings --limit 1;
-               sleep 30;
-             done"
-    volumes:
-      - logs:/app/logs
-      - recordings:/app/recordings
-    depends_on:
-      db:
-        condition: service_healthy
-
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:?DOMAIN .env da berilishi shart}
+      # Yozuv so'rovlari qayerga: ikki serverda MEDIA serverning WireGuard manzili (10.10.0.2:8000); bitta serverda web:8000
+      REC_UPSTREAM: ${REC_UPSTREAM:-web:8000}
     ports:
       - "80:80"
       - "443:443"
@@ -149,6 +144,5 @@ volumes:
   pgdata:
   media:
   logs:
-  recordings:
   caddy_data:
   caddy_config:

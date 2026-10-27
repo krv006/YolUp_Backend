@@ -1,12 +1,32 @@
-# MEDIA server (netcup RS 2000/4000): faqat jonli dars video/ovoz serveri (LiveKit) va uning HTTPS kirish eshigi.
-# Sayt/API/baza BU YERDA EMAS — ular APP serverda (docker-compose.app.yml).
+# MEDIA server (netcup RS 4000): jonli dars video/ovoz (LiveKit) + dars yozuvlari (qabul qilish, birlashtirish, MP4 ga
+# o'tkazish, fayllarni saqlash va berish). Sayt/chat/baza BU YERDA EMAS — ular APP (CORE) serverda (docker-compose.app.yml).
 #
-# Ishga tushirish (serverda, /var/www/edu_platform ichida):
-#   cp .env.media.example .env    # va qiymatlarni to'ldiring
-#   docker compose -f docker-compose.media.yml up -d
+# Ustuvorlik qoidasi: jonli dars hech qachon och qolmasin. LiveKit eng yuqori CPU ulushiga ega (cpu_shares), yozuvni
+# o'tkazish (og'ir ish) eng pasti va yadro soni bilan cheklangan — dars paytida video o'tkazish darsni sekinlashtirmaydi.
+#
+# Ishga tushirish (serverda, /var/www/edu_platform ichida; AVVAL WireGuard ulangan va APP server ishlab turgan bo'lishi kerak):
+#   cp .env.media.example .env    # va qiymatlarni to'ldiring (APP serverdagi .env bilan bir xil kalitlar!)
+#   docker compose -f docker-compose.media.yml up -d --build
 #
 # DNS: LK_DOMAIN (masalan lk.thesofmebel.uz) A-yozuvi SHU serverning IP'siga yo'naltirilgan bo'lishi shart
 # (Caddy sertifikatni shu orqali oladi).
+
+x-backend: &backend
+  build: .
+  image: edu-app:latest
+  restart: unless-stopped
+  env_file: .env
+  environment: &backend-env
+    DJANGO_ENV: prod
+    # Baza va Redis APP serverda — WireGuard kanali orqali (internet orqali emas)
+    POSTGRES_HOST: ${CORE_WG_IP:-10.10.0.1}
+    REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD .env da berilishi shart}@${CORE_WG_IP:-10.10.0.1}:6379/0
+    RECORDINGS_DIR: /app/recordings
+    RECORDINGS_LOCAL: "1"    # yozuv fayllari aynan shu serverda
+    SERVER_ROLE: media
+  volumes:
+    - recordings:/app/recordings
+    - logs:/app/logs
 
 services:
   livekit:
@@ -14,6 +34,7 @@ services:
     image: livekit/livekit-server:${LIVEKIT_VERSION:-v1.13.4}
     restart: unless-stopped
     command: --config /etc/livekit.yaml
+    cpu_shares: 4096        # CPU talashganda eng ustuvor (standart 1024)
     environment:
       # Format muhim: "kalit: sekret" (ikki nuqtadan keyin probel). APP serverdagi .env bilan AYNAN bir xil bo'lishi shart.
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?}: ${LIVEKIT_API_SECRET:?}"
@@ -29,6 +50,40 @@ services:
         hard: 65535
     volumes:
       - ./deploy/media/livekit.yaml:/etc/livekit.yaml:ro
+
+  # Yozuv API'si: o'qituvchi brauzeridan video/audio bo'laklarni qabul qiladi, birlashtiradi (ffmpeg -c copy), yozuvni
+  # tomoshabinlarga beradi. APP serverdagi Caddy /api/v1/lessons/<id>/recording* so'rovlarini shu yerga yuboradi.
+  # Faqat WireGuard manzilida tinglaydi (internetga ochiq emas). Migratsiyani APP serverdagi `web` bajaradi — avval APP'ni
+  # yangilang, keyin shu serverni.
+  rec:
+    <<: *backend
+    cpus: ${REC_CPUS:-3}
+    cpu_shares: 1024
+    ports:
+      - "${MEDIA_WG_IP:-10.10.0.2}:8000:8000"
+    command: >
+      sh -c "gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000
+               --workers ${REC_WORKERS:-4} --threads ${REC_THREADS:-16} --timeout 120 --worker-tmp-dir /dev/shm"
+
+  # Yozuv serveridagi davriy vazifalar: qotib qolgan yozuvni tiklash, yetim fayllarni tozalash, disk ogohlantirishi.
+  # (Faylsiz vazifalar — eslatmalar, AI va h.k. — APP serverda.) REC_JOBS dan prune_orphan_recordings ni olib tashlasangiz,
+  # fayl o'chirish o'chadi.
+  rec-cron:
+    <<: *backend
+    cpu_shares: 256
+    command: python manage.py run_scheduler --startup-delay 30 --only ${REC_JOBS:-recover_recordings,prune_orphan_recordings,check_disk}
+
+  # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish: yadro soni va ustuvorligi cheklangan, bitta-bitta ishlaydi.
+  transcoder:
+    <<: *backend
+    cpus: ${TRANSCODER_CPUS:-3}
+    cpu_shares: 256         # CPU talashganda eng pasti: avval jonli dars, keyin yozuvni o'tkazish
+    command: >
+      sh -c "sleep 60 &&
+             while true; do
+               nice -n 15 python manage.py convert_recordings --limit 1;
+               sleep 30;
+             done"
 
   caddy:
     image: caddy:2-alpine
@@ -47,5 +102,7 @@ services:
       - livekit
 
 volumes:
+  recordings:
+  logs:
   caddy_data:
   caddy_config:

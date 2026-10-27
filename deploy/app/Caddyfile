@@ -9,6 +9,13 @@
 		reverse_proxy ws:8000
 	}
 
+	# Dars yozuvi: bo'lak yuklash, tugatish, ko'rish/oqim (stream), o'chirish. Fayllar MEDIA serverda turadi, shuning uchun
+	# bu so'rovlar o'sha yerdagi `rec` xizmatiga boradi (REC_UPSTREAM; bitta serverli rejimda — web:8000).
+	@recording path_regexp ^/api/v1/lessons/[^/]+/recording
+	handle @recording {
+		reverse_proxy {$REC_UPSTREAM:web:8000}
+	}
+
 	# API, admin, statik fayllar
 	@backend path /api/* /admin/* /static/*
 	handle @backend {
