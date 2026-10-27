@@ -283,22 +283,44 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def get_lesson_title(self, obj) -> str:
         return obj.lesson.title or obj.lesson.course.title
 
+    # Ro'yxat ko'rinishi `extras` ni (selectors.attendance_extras) kontekstga beradi — shunda har qator uchun alohida so'rov
+    # ketmaydi; yakka qator (extras yo'q) eskicha hisoblanadi.
+    def _extras(self):
+        return self.context.get('extras')
+
     def get_attention_total(self, obj) -> int:
+        extras = self._extras()
+        if extras is not None:
+            return extras['checks'].get((obj.lesson_id, obj.student_id), (0, 0))[0]
         return obj.lesson.attention_checks.filter(student=obj.student).count()
 
     def get_attention_answered(self, obj) -> int:
+        extras = self._extras()
+        if extras is not None:
+            return extras['checks'].get((obj.lesson_id, obj.student_id), (0, 0))[1]
         return obj.lesson.attention_checks.filter(
             student=obj.student, answered_at__isnull=False,
         ).count()
 
+    def _focus(self, obj) -> dict:
+        cached = obj.__dict__.get('_focus_summary')
+        if cached is None:
+            extras = self._extras()
+            if extras is not None:
+                cached = selectors.focus_summary_from(extras['events'].get((obj.lesson_id, obj.student_id), []), obj.left_at)
+            else:
+                cached = selectors.focus_summary(obj.lesson, obj.student)
+            obj.__dict__['_focus_summary'] = cached
+        return cached
+
     def get_focus_exits(self, obj) -> int:
         """O'quvchi dars davomida necha marta oynadan chiqib ketgani (anti-cheat)."""
-        return obj.lesson.focus_events.filter(student=obj.student, kind='exit').count()
+        return self._focus(obj)['exits']
 
     def get_focus(self, obj) -> dict:
         """Chiqish-qaytish tahlili: jami/eng uzun yo'qlik + taymlayn
         (qachon chiqdi, qachon qaytdi, necha sekund turdi)."""
-        return selectors.focus_summary(obj.lesson, obj.student)
+        return self._focus(obj)
 
     def get_focus_percent(self, obj) -> int | None:
         """Darsda necha foiz vaqt e'tibor bilan o'tirgani: 100 − (oynadan tashqarida bo'lgan vaqt / darsda turgan vaqt).
@@ -308,9 +330,12 @@ class AttendanceSerializer(serializers.ModelSerializer):
         total = (obj.left_at - obj.joined_at).total_seconds()
         if total <= 0:
             return None
-        away = selectors.focus_summary(obj.lesson, obj.student).get('away_seconds') or 0
+        away = self._focus(obj).get('away_seconds') or 0
         return max(0, min(100, round(100 - away * 100 / total)))
 
     def get_focus_alert(self, obj) -> bool:
         """Chegaradan oshib, ota-onaga signal yaratilganmi (FOCUS_PARENT_ALERT_THRESHOLD)."""
+        extras = self._extras()
+        if extras is not None:
+            return (obj.lesson_id, obj.student_id) in extras['alerts']
         return obj.lesson.focus_alerts.filter(student=obj.student).exists()

@@ -103,6 +103,13 @@ def focus_summary(lesson, student) -> dict:
         lesson.focus_events.filter(student=student).order_by('created_at')
         .values_list('kind', 'created_at')
     )
+    att = lesson.attendances.filter(student=student).first()
+    return focus_summary_from(events, att.left_at if att and att.left_at else None)
+
+
+def focus_summary_from(events, left_at) -> dict:
+    """`focus_summary` ning sof hisob qismi: `events` — [(kind, vaqt), ...] (vaqt bo'yicha), `left_at` — darsdan chiqqan
+    vaqt (qaytmagan chiqish davomiyligi shungacha hisoblanadi). Ro'yxatlarda bazaga qayta murojaat qilmaslik uchun ajratilgan."""
     timeline = []
     total = 0.0
     longest = 0.0
@@ -120,8 +127,7 @@ def focus_summary(lesson, student) -> dict:
             open_exit = None
     if open_exit is not None:
         # qaytmadi — davomiyligi darsdan chiqqan/dars tugagan vaqtgacha
-        att = lesson.attendances.filter(student=student).first()
-        end = (att.left_at if att and att.left_at else None)
+        end = left_at
         seconds = max(0.0, (end - open_exit).total_seconds()) if end else None
         timeline.append({
             'left_at': open_exit, 'returned_at': None,
@@ -138,8 +144,36 @@ def focus_summary(lesson, student) -> dict:
     }
 
 
+def attendance_extras(rows) -> dict:
+    """Davomat ro'yxati sahifasi uchun hamma qo'shimcha ma'lumotni BITTA guruhli yuklash bilan oladi: e'tibor tekshiruvlari,
+    fokus hodisalari va ogohlantirishlar (avval har qator uchun ~6 ta alohida so'rov ketardi: 20 qatorda 124 SQL)."""
+    from collections import defaultdict
+
+    from django.db.models import Count, Q
+
+    from .models import AttentionCheck, FocusAlert, FocusEvent
+
+    lessons = {row.lesson_id for row in rows}
+    students = {row.student_id for row in rows}
+    if not rows:
+        return {'checks': {}, 'events': {}, 'alerts': set()}
+    checks = {
+        (item['lesson_id'], item['student_id']): (item['total'], item['answered'])
+        for item in AttentionCheck.objects.filter(lesson_id__in=lessons, student_id__in=students).order_by()
+        .values('lesson_id', 'student_id').annotate(total=Count('id'), answered=Count('id', filter=Q(answered_at__isnull=False)))
+    }
+    events = defaultdict(list)
+    for lesson_id, student_id, kind, at in (
+        FocusEvent.objects.filter(lesson_id__in=lessons, student_id__in=students).order_by('created_at')
+        .values_list('lesson_id', 'student_id', 'kind', 'created_at')
+    ):
+        events[(lesson_id, student_id)].append((kind, at))
+    alerts = set(FocusAlert.objects.filter(lesson_id__in=lessons, student_id__in=students).values_list('lesson_id', 'student_id'))
+    return {'checks': checks, 'events': events, 'alerts': alerts}
+
+
 def attendance_for(user: User) -> QuerySet[Attendance]:
-    qs = Attendance.objects.select_related('lesson', 'student')
+    qs = Attendance.objects.select_related('lesson', 'lesson__course', 'student')
     if user.role == User.Role.TEACHER:
         return qs.filter(lesson__course__teacher=user)
     if user.role == User.Role.STUDENT:

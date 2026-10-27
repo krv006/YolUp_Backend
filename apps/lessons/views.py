@@ -569,3 +569,12 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return selectors.attendance_for(self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        """Sahifadagi qatorlar uchun e'tibor/fokus ma'lumotlari bitta guruhli yuklash bilan (har qatorga alohida so'rov emas)."""
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        rows = list(page if page is not None else queryset)
+        context = {**self.get_serializer_context(), 'extras': selectors.attendance_extras(rows)}
+        data = self.get_serializer(rows, many=True, context=context).data
+        return self.get_paginated_response(data) if page is not None else Response(data)
