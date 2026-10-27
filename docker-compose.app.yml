@@ -1,0 +1,165 @@
+# APP server (netcup RS 4000): sayt (API), chat/doska (WebSocket), baza, Redis, fon ishlari, yozuvlarni qayta ishlash.
+# Jonli dars video serveri (LiveKit) BU YERDA EMAS — u MEDIA serverda (docker-compose.media.yml).
+#
+# Ishga tushirish (serverda, /var/www/edu_platform ichida):
+#   cp .env.app.example .env      # va qiymatlarni to'ldiring
+#   docker compose -f docker-compose.app.yml up -d --build
+#
+# Eski docker-compose.prod.yml (bitta server + boshqa loyihalar) o'zgarmadi — eski Contabo serverda ishlayveradi.
+
+x-backend: &backend
+  build: .
+  image: edu-app:latest   # bitta image hamma xizmatga (4 marta qayta yig'ilmasin)
+  restart: unless-stopped
+  env_file: .env
+  environment: &backend-env
+    DJANGO_ENV: prod
+    POSTGRES_HOST: db
+    REDIS_URL: redis://redis:6379/0
+    RECORDINGS_DIR: /app/recordings
+    # Mobil push (FCM): .env da to'ldirilsa va quyidagi `volumes`dagi fayl ulansa ishlaydi, aks holda jim o'chiq
+    GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+    FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+  volumes:
+    - media:/app/media
+    - logs:/app/logs
+    - recordings:/app/recordings
+    # - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-edtech}
+      POSTGRES_USER: ${POSTGRES_USER:-edtech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env da berilishi shart}
+    # 32 GB RAM (RS 4000) uchun sozlangan. RS 2000 (16 GB) da `shared_buffers=4GB`, `effective_cache_size=10GB` qiling.
+    command: >
+      postgres
+      -c shared_buffers=${PG_SHARED_BUFFERS:-8GB}
+      -c effective_cache_size=${PG_EFFECTIVE_CACHE:-20GB}
+      -c work_mem=16MB
+      -c maintenance_work_mem=1GB
+      -c max_connections=200
+      -c random_page_cost=1.1
+      -c wal_compression=on
+      -c max_wal_size=4GB
+      -c checkpoint_completion_target=0.9
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edtech} -d ${POSTGRES_DB:-edtech}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Kesh, real-vaqt (WebSocket), onlayn holat, throttle. Diskka yozilmaydi (hammasi vaqtinchalik ma'lumot).
+    command: redis-server --maxmemory ${REDIS_MAXMEMORY:-2gb} --maxmemory-policy volatile-ttl --save ""
+
+  # API (HTTP). Migratsiya va statik fayllar shu yerda bajariladi.
+  web:
+    <<: *backend
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             (while true; do
+               python manage.py record_resource_sample;
+               sleep 300;
+             done &) &&
+             gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+               --workers ${WEB_WORKERS:-8} --timeout 60"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Chat va doska WebSocket'lari — API'dan ALOHIDA, uzoq ulanishlar API'ni band qilmasin (Caddy `/ws/*` ni shu yerga yuboradi).
+  ws:
+    <<: *backend
+    command: >
+      sh -c "gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+               --workers ${WS_WORKERS:-3} --timeout 60"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      web:
+        condition: service_started
+
+  # Davriy vazifalar (eslatmalar, darslarni avtomatik yakunlash, yozuvni tiklash, AI ishlar).
+  cron:
+    <<: *backend
+    command: >
+      sh -c "sleep 30 &&
+             (while true; do
+               python manage.py auto_finish_expired_lessons;
+               python manage.py recover_recordings;
+               python manage.py send_deadline_reminders;
+               python manage.py close_stale_voice_rooms;
+               sleep 300;
+             done) &
+             (while true; do
+               python manage.py sync_ai_quizzes;
+               python manage.py sync_exam_writing_ai;
+               sleep 30;
+             done) &
+             while true; do
+               python manage.py send_lesson_reminders;
+               python manage.py sync_homework_ai;
+               sleep 60;
+             done"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish, shuning uchun alohida va yadro bilan cheklangan.
+  transcoder:
+    <<: *backend
+    cpus: ${TRANSCODER_CPUS:-2}
+    command: >
+      sh -c "sleep 60 &&
+             while true; do
+               python manage.py convert_recordings --limit 1;
+               sleep 30;
+             done"
+    volumes:
+      - logs:/app/logs
+      - recordings:/app/recordings
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN .env da berilishi shart}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./deploy/app:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - media:/srv/media:ro
+    depends_on:
+      - web
+      - ws
+
+volumes:
+  pgdata:
+  media:
+  logs:
+  recordings:
+  caddy_data:
+  caddy_config:

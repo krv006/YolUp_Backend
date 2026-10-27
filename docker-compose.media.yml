@@ -1,0 +1,51 @@
+# MEDIA server (netcup RS 2000/4000): faqat jonli dars video/ovoz serveri (LiveKit) va uning HTTPS kirish eshigi.
+# Sayt/API/baza BU YERDA EMAS — ular APP serverda (docker-compose.app.yml).
+#
+# Ishga tushirish (serverda, /var/www/edu_platform ichida):
+#   cp .env.media.example .env    # va qiymatlarni to'ldiring
+#   docker compose -f docker-compose.media.yml up -d
+#
+# DNS: LK_DOMAIN (masalan lk.thesofmebel.uz) A-yozuvi SHU serverning IP'siga yo'naltirilgan bo'lishi shart
+# (Caddy sertifikatni shu orqali oladi).
+
+services:
+  livekit:
+    # Versiya qotirilgan. Agar `manifest unknown` chiqsa, .env da LIVEKIT_VERSION=1.13.4 (`v`siz) deb sinab ko'ring.
+    image: livekit/livekit-server:${LIVEKIT_VERSION:-v1.13.4}
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      # Format muhim: "kalit: sekret" (ikki nuqtadan keyin probel). APP serverdagi .env bilan AYNAN bir xil bo'lishi shart.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?}: ${LIVEKIT_API_SECRET:?}"
+    ports:
+      - "7881:7881"         # WebRTC TCP fallback
+      - "7882:7882/udp"     # WebRTC media (UDP mux — bitta port)
+      # TURN yoqilganda (deploy/media/livekit.yaml dagi blok) quyidagilarni ham oching va ufw'da ruxsat bering:
+      # - "3478:3478/udp"
+      # - "5349:5349/tcp"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - ./deploy/media/livekit.yaml:/etc/livekit.yaml:ro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      LK_DOMAIN: ${LK_DOMAIN:?LK_DOMAIN .env da berilishi shart}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/media:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - livekit
+
+volumes:
+  caddy_data:
+  caddy_config:

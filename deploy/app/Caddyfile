@@ -1,0 +1,35 @@
+# APP server — HTTPS (Let's Encrypt avtomatik) + API/WebSocket/statik/media.
+# Frontend alohida joyda (Vercel) va shu domen API'sini chaqiradi.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Chat va doska WebSocket'lari — alohida `ws` konteyneri
+	@ws path /ws/*
+	handle @ws {
+		reverse_proxy ws:8000
+	}
+
+	# API, admin, statik fayllar
+	@backend path /api/* /admin/* /static/*
+	handle @backend {
+		reverse_proxy web:8000
+	}
+
+	# Yopiq fayllar ochiq tarqatilmaydi — faqat login va ruxsat tekshiradigan API orqali
+	handle /media/homework/* {
+		respond 404
+	}
+	handle /media/ai_quiz_sources/* {
+		respond 404
+	}
+
+	# Qolgan yuklamalar (rasm, avatar) — backend bilan umumiy volume
+	handle /media/* {
+		root * /srv
+		file_server
+	}
+
+	handle {
+		redir * /api/docs/ 302
+	}
+}

@@ -291,3 +291,8 @@ logs/
 
 # dars video yozuvlari (lokal)
 recordings/
+
+# Serverda vaqtincha nusxalangan sekretlar (hech qachon commit qilinmasin)
+.env.old
+.env.bak
+*.dump

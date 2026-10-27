@@ -1,0 +1,5 @@
+# MEDIA server — LiveKit signaling (WebSocket) va server-server API uchun HTTPS kirish eshigi.
+# Brauzer: wss://<LK_DOMAIN>  ·  Backend: https://<LK_DOMAIN> (LIVEKIT_API_URL berilmasa, LIVEKIT_URL dan olinadi)
+{$LK_DOMAIN} {
+	reverse_proxy livekit:7880
+}
