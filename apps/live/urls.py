@@ -11,6 +11,7 @@ urlpatterns = [
     path('request-mic/', views.RequestMicView.as_view(), name='room-request-mic'),
     path('mute-all/', views.MuteAllView.as_view(), name='room-mute-all'),
     path('lesson/<uuid:lesson_id>/presence/', views.LessonPresenceView.as_view(), name='lesson-presence'),
+    path('lesson/<uuid:lesson_id>/signals/', views.LessonSignalsView.as_view(), name='lesson-signals'),
     path('grant-mic/', views.GrantMicView.as_view(), name='room-grant-mic'),
     path('deny-mic/', views.DenyMicView.as_view(), name='room-deny-mic'),
     path('request-camera/', views.RequestCameraView.as_view(), name='room-request-camera'),

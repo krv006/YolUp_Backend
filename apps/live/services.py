@@ -715,6 +715,17 @@ def lesson_waiting(*, user: User, lesson_id) -> dict:
     return data
 
 
+def lesson_signals(*, teacher: User, lesson_id) -> dict:
+    """O'qituvchi uchun YENGIL holat: oynadan chiqib ketgan o'quvchilar va javob kutayotgan mikrofon/kamera so'rovlari.
+    Ilgari frontend buni butun doskani (yuzlab kilobayt) har 2 soniyada so'rab olardi."""
+    lesson = _get_owned_lesson(teacher=teacher, lesson_id=lesson_id)
+    return {
+        'away_students': away_students(lesson),
+        'pending_mic_requests': pending_mic_requests(lesson),
+        'pending_camera_requests': pending_camera_requests(lesson),
+    }
+
+
 def _is_uuid(value) -> bool:
     try:
         uuid.UUID(str(value))

@@ -106,6 +106,15 @@ class LessonPresenceView(APIView):
         return Response(services.lesson_presence(user=request.user, lesson_id=lesson_id))
 
 
+class LessonSignalsView(APIView):
+    """O'qituvchi: `{away_students, pending_mic_requests, pending_camera_requests}` — doskani yuklamasdan, kichik javob."""
+
+    permission_classes = [RequirePerm('room.moderate')]
+
+    def get(self, request, lesson_id):
+        return Response(services.lesson_signals(teacher=request.user, lesson_id=lesson_id))
+
+
 class GrantMicView(APIView):
     """O'qituvchi: o'quvchiga mikrofon ruxsatini beradi."""
 
