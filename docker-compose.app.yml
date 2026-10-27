@@ -42,7 +42,7 @@ services:
       -c effective_cache_size=${PG_EFFECTIVE_CACHE:-20GB}
       -c work_mem=16MB
       -c maintenance_work_mem=1GB
-      -c max_connections=200
+      -c max_connections=${PG_MAX_CONNECTIONS:-300}
       -c random_page_cost=1.1
       -c wal_compression=on
       -c max_wal_size=4GB
@@ -62,6 +62,9 @@ services:
     command: redis-server --maxmemory ${REDIS_MAXMEMORY:-2gb} --maxmemory-policy volatile-ttl --save ""
 
   # API (HTTP). Migratsiya va statik fayllar shu yerda bajariladi.
+  # WSGI (gunicorn gthread), ASGI EMAS — o'lchov (2026-10-27, Linux + Postgres) bo'yicha: bir xil so'rov ~2x kam protsessor
+  # (4.5 vs 8.4 ms) va baza ulanishlari CHEKLANGAN (workers x threads). ASGI + CONN_MAX_AGE=60 da bitta jarayon 64 parallel
+  # so'rovda 199 ta Postgres ulanishini ochib, "too many clients" xatosi berdi.
   web:
     <<: *backend
     command: >
@@ -71,8 +74,8 @@ services:
                python manage.py record_resource_sample;
                sleep 300;
              done &) &&
-             gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-               --workers ${WEB_WORKERS:-8} --timeout 60"
+             gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000
+               --workers ${WEB_WORKERS:-8} --threads ${WEB_THREADS:-8} --timeout 60 --worker-tmp-dir /dev/shm"
     depends_on:
       db:
         condition: service_healthy
