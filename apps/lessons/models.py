@@ -8,6 +8,7 @@ from django.db.models import (
     DateTimeField,
     ForeignKey,
     ImageField,
+    Index,
     JSONField,
     OneToOneField,
     PositiveIntegerField,
@@ -181,6 +182,8 @@ class FocusEvent(TimeStampedUUIDModel):
 
     class Meta:
         ordering = ['created_at']
+        # "o'quvchining oxirgi hodisasi" (away_students) va fokus hisobotlari shu bo'yicha qidiradi
+        indexes = [Index(fields=['lesson', 'student', 'created_at'], name='focus_lesson_student_time')]
 
     def __str__(self):
         return f'{self.student.username} · {self.kind} · {self.created_at:%H:%M:%S}'

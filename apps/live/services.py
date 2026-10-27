@@ -8,6 +8,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from livekit.api import AccessToken, LiveKitAPI, UpdateParticipantRequest, VideoGrants
@@ -281,20 +282,18 @@ def away_students(lesson: Lesson) -> list[dict]:
     """Hozir darsdan "chiqib ketgan" (oynadan chiqib, hali qaytmagan)
     o'quvchilar — o'qituvchi doskani (qayta) ochganda darhol ko'rishi uchun
     (WebSocket ulanishidan oldingi holatni ham qamrab oladi)."""
-    events = (
-        FocusEvent.objects.filter(lesson=lesson)
-        .select_related('student')
-        .order_by('created_at')
+    # Faqat "o'zidan keyin hodisa yo'q chiqish" — ya'ni o'quvchining OXIRGI hodisasi chiqish bo'lganlar. Bazada filtrlanadi:
+    # javobda faqat hozir chiqib turganlar (bir necha o'quvchi), butun jurnal (minglab qator) emas.
+    later = FocusEvent.objects.filter(
+        lesson=lesson, student=OuterRef('student'), created_at__gt=OuterRef('created_at'),
     )
-    last_kind = {}
-    names = {}
-    for e in events:
-        last_kind[e.student_id] = e.kind
-        names[e.student_id] = e.student.first_name or e.student.username
-    return [
-        {'student_id': str(sid), 'name': names[sid]}
-        for sid, kind in last_kind.items() if kind == FocusEvent.Kind.EXIT
-    ]
+    rows = (
+        FocusEvent.objects.filter(lesson=lesson, kind=FocusEvent.Kind.EXIT)
+        .annotate(has_later=Exists(later)).filter(has_later=False)
+        .select_related('student').order_by('created_at')
+    )
+    names = {e.student_id: e.student.first_name or e.student.username for e in rows}
+    return [{'student_id': str(sid), 'name': name} for sid, name in names.items()]
 
 
 def request_mic(*, user: User, lesson_id, request=None) -> None:

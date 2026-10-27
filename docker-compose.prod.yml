@@ -113,25 +113,8 @@ services:
     # `send_lesson_reminders` alohida, tezroq (60s) siklda — foydalanuvchi
     # o'zi tanlagan eslatma vaqti (`lesson_reminder_minutes`) daqiqa
     # aniqligida bo'lishi kerak; 300s sikl uni 5 daqiqagacha kechiktirar edi.
-    command: >
-      sh -c "sleep 30 &&
-             (while true; do
-               python manage.py auto_finish_expired_lessons;
-               python manage.py recover_recordings;
-               python manage.py send_deadline_reminders;
-               python manage.py close_stale_voice_rooms;
-               sleep 300;
-             done) &
-             (while true; do
-               python manage.py sync_ai_quizzes;
-               python manage.py sync_exam_writing_ai;
-               sleep 30;
-             done) &
-             while true; do
-               python manage.py send_lesson_reminders;
-               python manage.py sync_homework_ai;
-               sleep 60;
-             done"
+    # Bitta doimiy jarayon (avval har vazifa uchun sleep-tsikl: Django har safar qayta yuklanib ~0,15 yadro band bo'lardi)
+    command: python manage.py run_scheduler --startup-delay 30
     volumes:
       - media:/app/media
       - logs:/app/logs

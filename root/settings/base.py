@@ -123,9 +123,10 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '60/min',
-        'user': '240/min',
-        'auth': '30/min',   # login / register / OTP — bruteforce himoyasi
+        # Env bilan sozlanadi: maktab/o'quv markazi Wi-Fi'sidagi ko'p o'quvchi bitta IP'dan kirsa 'auth' chegarasini oshiring
+        'anon': os.getenv('THROTTLE_ANON', '60/min'),
+        'user': os.getenv('THROTTLE_USER', '240/min'),
+        'auth': os.getenv('THROTTLE_AUTH', '30/min'),   # login / register / OTP — bruteforce himoyasi (IP bo'yicha)
     },
     'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
 }
