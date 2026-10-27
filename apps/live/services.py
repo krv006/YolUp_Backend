@@ -958,6 +958,9 @@ def recover_recordings(*, now=None, limit: int = 3) -> dict:
         .filter(
             Q(status=LessonRecording.Status.MERGING, updated_at__lt=now - MERGE_STUCK_AFTER)
             | Q(status=LessonRecording.Status.FAILED)
+            # Dars majburan yakunlangan, lekin birlashtirish boshlanmagan (sayt serveri fayllarga ega emas) — fayllar
+            # `FILE_IDLE_AFTER` dan beri o'zgarmagan bo'lsagina olinadi (pastda)
+            | Q(status=LessonRecording.Status.RECORDING, updated_at__lt=now - FILE_IDLE_AFTER)
         )
         .order_by('updated_at')[:limit * 4]
     )

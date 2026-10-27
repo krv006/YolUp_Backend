@@ -672,6 +672,8 @@ def _ensure_recording_finalized(lesson: Lesson) -> None:
     video/audio bo'lak(lar)ini backend o'zi "tayyor" deb belgilaydi va
     birlashtirishni (yoki bitta tomon bilan yakunlashni) ishga tushiradi —
     frontend signaliga umuman bog'liq qolmasdan."""
+    from django.conf import settings
+
     from apps.live import services as live_services
 
     from .models import LessonRecording
@@ -685,6 +687,8 @@ def _ensure_recording_finalized(lesson: Lesson) -> None:
     if recording.audio_file_name and not recording.audio_finalized_at:
         recording.audio_finalized_at = timezone.now()
         recording.save(update_fields=['audio_finalized_at', 'updated_at'])
+    if not settings.RECORDINGS_LOCAL:
+        return  # fayllar boshqa serverda — birlashtirishni o'sha yerdagi `recover_recordings` bajaradi
     live_services.maybe_start_merge(lesson.id)
     live_services.finalize_single_side(lesson.id)
 

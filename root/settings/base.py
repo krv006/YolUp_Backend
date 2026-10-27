@@ -247,6 +247,11 @@ LIVEKIT_API_URL = os.getenv('LIVEKIT_API_URL', '')
 # Dars video yozuvlari (LiveKit Egress fayllari) — auth endpoint orqali beriladi
 RECORDINGS_DIR = Path(os.getenv('RECORDINGS_DIR', BASE_DIR / 'recordings'))
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+# Yozuv fayllari shu serverda turadimi? Ikki serverli joylashtirishda sayt (APP) serverida `0` — fayllar MEDIA serverda,
+# birlashtirish va tiklashni o'sha yerdagi jarayonlar bajaradi. Bitta serverda (standart) `1`.
+RECORDINGS_LOCAL = os.getenv('RECORDINGS_LOCAL', '1') != '0'
+# Bu server nomi (monitoringda ajratish uchun): 'core' (sayt/baza) yoki 'media' (video/yozuv). Bo'sh = bitta server.
+SERVER_ROLE = os.getenv('SERVER_ROLE', '')
 # Egress konteyneri fayl yozadigan yo'l (uning FS'ida) — compose'da /out
 EGRESS_OUTPUT_PREFIX = os.getenv('EGRESS_OUTPUT_PREFIX', '/out')
 

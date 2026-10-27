@@ -23,14 +23,15 @@ class ResourceCurrentView(APIView):
     permission_classes = [RequirePerm('audit.view')]
 
     def get(self, request):
-        sample = selectors.latest_sample()
+        sample = selectors.latest_sample(request.query_params.get('host'))
         if sample is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(ResourceSampleSerializer(sample).data)
 
 
 class ResourceHistoryView(APIView):
-    """`?hours=24` (standart) — vaqt qatori + shu davrdagi eng band lahza (peak)."""
+    """`?hours=24` (standart) — vaqt qatori + shu davrdagi eng band lahza (peak). `?host=core|media|all` — qaysi server
+    (berilmasa — asosiy server)."""
 
     permission_classes = [RequirePerm('audit.view')]
 
@@ -41,8 +42,9 @@ class ResourceHistoryView(APIView):
             hours = 24
         hours = max(1, min(hours, 24 * 30))  # 1 soatdan 30 kungacha
 
-        samples = selectors.history(hours=hours)
-        peak = selectors.peak_sample(hours=hours)
+        host = request.query_params.get('host')
+        samples = selectors.history(hours=hours, host=host)
+        peak = selectors.peak_sample(hours=hours, host=host)
         return Response({
             'hours': hours,
             'samples': ResourceSampleSerializer(samples, many=True).data,

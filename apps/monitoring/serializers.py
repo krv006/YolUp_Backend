@@ -6,4 +6,4 @@ from .models import ResourceSample
 class ResourceSampleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ResourceSample
-        fields = ['id', 'cpu_percent', 'memory_percent', 'memory_used_mb', 'memory_total_mb', 'created_at']
+        fields = ['id', 'cpu_percent', 'memory_percent', 'memory_used_mb', 'memory_total_mb', 'host', 'disk_percent', 'created_at']

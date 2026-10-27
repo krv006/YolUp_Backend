@@ -110,3 +110,33 @@ class MonitoringViewTests(APITestCase):
         resp = self.client.get('/api/v1/monitoring/history/?hours=999999')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()['hours'], 24 * 30)
+
+
+class HostScopeTests(APITestCase):
+    def setUp(self):
+        self.admin = make_admin('mon_host_admin')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login(self.client, self.admin.username)}')
+        for host, cpu in (('', 10.0), ('core', 20.0), ('media', 70.0)):
+            ResourceSample.objects.create(
+                cpu_percent=cpu, memory_percent=10, memory_used_mb=1, memory_total_mb=10, host=host, disk_percent=40.0,
+            )
+
+    def test_default_scope_is_primary_server(self):
+        data = self.client.get('/api/v1/monitoring/history/').json()
+        self.assertEqual(sorted(s['cpu_percent'] for s in data['samples']), [10.0, 20.0])
+
+    def test_media_scope_and_all(self):
+        media = self.client.get('/api/v1/monitoring/history/?host=media').json()
+        self.assertEqual([s['cpu_percent'] for s in media['samples']], [70.0])
+        self.assertEqual(media['samples'][0]['disk_percent'], 40.0)
+        self.assertEqual(len(self.client.get('/api/v1/monitoring/history/?host=all').json()['samples']), 3)
+
+    @patch('apps.monitoring.services.psutil')
+    def test_record_sample_stores_role_and_disk(self, mock_psutil):
+        mock_psutil.cpu_percent.return_value = 5.0
+        mock_psutil.virtual_memory.return_value = _mock_memory(10.0, 100, 1000)
+        mock_psutil.disk_usage.return_value = MagicMock(percent=61.234)
+        with self.settings(SERVER_ROLE='media'):
+            sample = services.record_sample()
+        self.assertEqual(sample.host, 'media')
+        self.assertEqual(sample.disk_percent, 61.2)

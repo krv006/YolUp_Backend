@@ -7,7 +7,7 @@ konteynerining o'z cgroup-chegaralangan CPU/RAM holati ko'rinadi
 (`apps.monitoring.management.commands.record_resource_sample`, backend
 konteynerining o'zi ichida davriy ishga tushiriladi — docker-compose.prod.yml).
 """
-from django.db.models import FloatField, PositiveIntegerField
+from django.db.models import CharField, FloatField, PositiveIntegerField
 
 from apps.core.models import TimeStampedUUIDModel
 
@@ -17,6 +17,10 @@ class ResourceSample(TimeStampedUUIDModel):
     memory_percent = FloatField()
     memory_used_mb = PositiveIntegerField()
     memory_total_mb = PositiveIntegerField()
+    # Ikki serverli joylashtirishda qaysi serverniki ('core' | 'media'); bitta serverda bo'sh.
+    host = CharField(max_length=20, blank=True, default='', db_index=True)
+    # Yozuvlar (yoki umuman) joylashgan disk to'lganligi, foizda
+    disk_percent = FloatField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
