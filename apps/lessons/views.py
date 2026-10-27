@@ -58,8 +58,10 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if self.action == 'catalog':
-            return Course.objects.filter(is_active=True).select_related('teacher').order_by('title')
-        return selectors.courses_for(self.request.user)
+            return selectors.with_course_stats(Course.objects.filter(is_active=True), self.request.user).order_by('title')
+        qs = selectors.courses_for(self.request.user)
+        # ro'yxat/ko'rish uchun statistika oldindan yuklanadi; yozish amallarida (update/destroy...) kerak emas
+        return selectors.with_course_stats(qs, self.request.user) if self.action in ('list', 'retrieve') else qs
 
     @action(detail=False)
     def catalog(self, request):

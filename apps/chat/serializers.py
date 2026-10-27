@@ -242,7 +242,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         if obj.kind != ChatRoom.Kind.COURSE or not obj.course_id:
             return None
         from apps.lessons.models import Lesson
-        lesson = obj.course.lessons.filter(status=Lesson.Status.LIVE).first()
+        live = getattr(obj.course, 'live_lessons', None)  # view'da bitta so'rov bilan oldindan yuklangan
+        lesson = (live[0] if live else None) if live is not None else obj.course.lessons.filter(status=Lesson.Status.LIVE).first()
         if lesson is None:
             return None
         return {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'room_name': lesson.room_name}

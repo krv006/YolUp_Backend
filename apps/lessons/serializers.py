@@ -49,6 +49,8 @@ class CourseSerializer(serializers.ModelSerializer):
         return value
 
     def get_student_count(self, obj) -> int:
+        if hasattr(obj, 'list_student_count'):
+            return obj.list_student_count
         return obj.enrollments.filter(status=Enrollment.Status.APPROVED).count()
 
     def get_subject_label(self, obj) -> str:
@@ -72,6 +74,8 @@ class CourseSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return None
+        if hasattr(obj, 'my_enrollments'):
+            return obj.my_enrollments[0].status if obj.my_enrollments else None
         enrollment = obj.enrollments.filter(student=request.user).first()
         return enrollment.status if enrollment else None
 

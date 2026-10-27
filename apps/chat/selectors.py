@@ -34,9 +34,13 @@ def can_read(user: User, room: ChatRoom) -> bool:
         return user.id in (room.teacher_id, room.student_id)
     if room.course.teacher_id == user.id:
         return True
-    return Enrollment.objects.filter(
-        course=room.course, student=user, status=Enrollment.Status.APPROVED,
-    ).exists()
+    # Ro'yxatda bitta xona uchun can_write/capabilities/can_pin shuni qayta-qayta so'raydi — natijani xona ob'ektida eslab qolamiz
+    memo = room.__dict__.setdefault('_can_read_memo', {})
+    if user.id not in memo:
+        memo[user.id] = Enrollment.objects.filter(
+            course=room.course, student=user, status=Enrollment.Status.APPROVED,
+        ).exists()
+    return memo[user.id]
 
 
 def can_write(user: User, room: ChatRoom) -> bool:

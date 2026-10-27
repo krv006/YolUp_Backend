@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.permissions import RequirePerm
+from apps.lessons.models import Lesson
 
 from . import attachments, selectors, services
 from .models import ChatRoom, Message, MessageAttachment, PinnedMessage, RoomRead
@@ -65,6 +66,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
                 to_attr='last_message_list',
             ),
             Prefetch('reads', queryset=RoomRead.objects.filter(user=user), to_attr='my_reads'),
+            Prefetch('course__lessons', queryset=Lesson.objects.filter(status=Lesson.Status.LIVE), to_attr='live_lessons'),
         )
 
     def _room_response(self, pk, http_status=status.HTTP_200_OK):

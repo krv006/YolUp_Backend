@@ -61,17 +61,24 @@ class UserSerializer(serializers.ModelSerializer):
     def get_certificates(self, obj):
         if obj.role != User.Role.TEACHER:
             return []
-        request = self.context.get('request')
-        return CertificateSerializer(
-            obj.certificates.all(), many=True, context={'request': request},
-        ).data
+        # Bir so'rov ichida bir xil o'qituvchi ko'p qatorda uchraydi (kurslar/bildirishnomalar/chat ro'yxati) — bir marta o'qiymiz
+        cache = self.context.setdefault('_teacher_certificates', {})
+        if obj.pk not in cache:
+            request = self.context.get('request')
+            cache[obj.pk] = CertificateSerializer(
+                obj.certificates.all(), many=True, context={'request': request},
+            ).data
+        return cache[obj.pk]
 
     def _rating_stats(self, obj):
         if not hasattr(obj, '_rating_stats_cache'):
-            obj._rating_stats_cache = (
-                selectors.teacher_rating_stats(obj) if obj.role == User.Role.TEACHER
-                else {'avg_rating': None, 'rating_count': None}
-            )
+            if obj.role != User.Role.TEACHER:
+                obj._rating_stats_cache = {'avg_rating': None, 'rating_count': None}
+            else:
+                cache = self.context.setdefault('_teacher_ratings', {})
+                if obj.pk not in cache:
+                    cache[obj.pk] = selectors.teacher_rating_stats(obj)
+                obj._rating_stats_cache = cache[obj.pk]
         return obj._rating_stats_cache
 
     def get_avg_rating(self, obj):

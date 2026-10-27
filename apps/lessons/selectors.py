@@ -28,6 +28,15 @@ def courses_for(user: User) -> QuerySet[Course]:
     return Course.objects.all()
 
 
+def with_course_stats(qs: QuerySet[Course], user: User) -> QuerySet[Course]:
+    """Kurslar ro'yxati uchun: o'qituvchi (JOIN), o'quvchilar soni (sub-so'rov) va shu foydalanuvchining yozilish holati
+    (bitta prefetch) — serializer har kurs uchun alohida so'rov yubormasligi uchun."""
+    approved = Enrollment.objects.filter(course=OuterRef('pk'), status=_ENROLLED).order_by().values('course').annotate(c=Count('pk')).values('c')
+    return qs.select_related('teacher').annotate(
+        list_student_count=Coalesce(Subquery(approved, output_field=IntegerField()), 0),
+    ).prefetch_related(Prefetch('enrollments', queryset=Enrollment.objects.filter(student=user), to_attr='my_enrollments'))
+
+
 def ratings_for_teacher(teacher: User) -> QuerySet[LessonRating]:
     """O'qituvchining BARCHA darslariga qo'yilgan baholar (talaba fikri bilan) —
     eng yangisi birinchi. O'qituvchining o'z profilida ham, admin panelida
