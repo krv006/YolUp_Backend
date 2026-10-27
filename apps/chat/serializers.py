@@ -289,6 +289,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def _unread_info(self, obj) -> tuple:
         """(soni, birinchi o'qilmagan xabar id'si) — bir xona uchun bir marta hisoblanadi; xabar bo'lmasa
         ikkinchi so'rov yuborilmaydi."""
+        if hasattr(obj, 'room_unread'):  # ro'yxatda selectors.with_room_stats bitta so'rovda hisoblab bergan
+            return obj.room_unread, (str(obj.room_first_unread) if obj.room_first_unread else None)
         cache = self.__dict__.setdefault('_unread_cache', {})
         if obj.pk not in cache:
             qs = self._unread_qs(obj)
@@ -332,6 +334,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         return pins[0] if pins else None
 
     def get_last_read_message_id(self, obj):
+        if hasattr(obj, 'room_last_read_id'):
+            return str(obj.room_last_read_id) if obj.room_last_read_id else None
         read = self._my_read(obj)
         if read is None:
             return None
@@ -341,6 +345,8 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         return str(last) if last else None
 
     def get_has_unread_mention(self, obj) -> bool:
+        if hasattr(obj, 'room_has_mention'):
+            return obj.room_has_mention
         return self._unread_qs(obj).filter(mentions=self.context['request'].user).exists()
 
     def get_can_write(self, obj) -> bool:

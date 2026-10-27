@@ -1,10 +1,37 @@
 """Chat selectors — o'qish yo'li: kim qaysi xonani ko'radi."""
-from django.db.models import Exists, OuterRef, Prefetch, Q
+from datetime import datetime, timezone as dt_timezone
+
+from django.db.models import Count, DateTimeField, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 
 from apps.accounts.models import User
 from apps.lessons.models import Enrollment
 
 from .models import ChatRoom, Message, MessageReaction, RoomRead
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
+
+
+def with_room_stats(qs, user: User):
+    """Xonalar ro'yxati uchun o'qilmaganlar soni, birinchi o'qilmagan xabar, belgilanish (@) va oxirgi o'qilgan xabar —
+    bitta SO'ROVDA (avval har xona uchun 4-5 ta alohida so'rov ketardi). Mantiq `ChatRoomSerializer._unread_qs` bilan bir xil."""
+    read_at = Subquery(RoomRead.objects.filter(room=OuterRef('pk'), user=user).values('last_read_at')[:1], output_field=DateTimeField())
+    qs = qs.annotate(room_read_at=read_at)
+    unread = (
+        Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True)
+        .exclude(sender=user).exclude(hides__user=user)
+        .filter(created_at__gt=Coalesce(OuterRef('room_read_at'), Value(_EPOCH, output_field=DateTimeField())))
+    )
+    last_read = Message.objects.filter(
+        room=OuterRef('pk'), deleted_at__isnull=True, created_at__lte=OuterRef('room_read_at'),
+    ).order_by('-created_at').values('id')[:1]
+    return qs.annotate(
+        room_unread=Coalesce(Subquery(unread.order_by().values('room').annotate(c=Count('pk')).values('c'), output_field=IntegerField()), 0),
+        room_first_unread=Subquery(unread.order_by('created_at').values('id')[:1]),
+        room_has_mention=Exists(unread.filter(mentions=user)),
+        room_last_read_id=Subquery(last_read),
+    )
 
 
 def rooms_for(user: User):

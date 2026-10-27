@@ -52,7 +52,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         qs = selectors.rooms_for(user)
         if self.action == 'list':
             hidden = selectors.hidden_filter(user).values('room_id')
-            qs = qs.exclude(pk__in=hidden)
+            qs = selectors.with_room_stats(qs.exclude(pk__in=hidden), user)
         return qs.select_related('course').prefetch_related(
             Prefetch(
                 'pins',
