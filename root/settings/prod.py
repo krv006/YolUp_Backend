@@ -29,17 +29,9 @@ CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS + [  # noqa: F405
     if o.strip() and o.strip() not in CSRF_TRUSTED_ORIGINS  # noqa: F405
 ]
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('POSTGRES_DB'),
-        'USER': os.getenv('POSTGRES_USER'),
-        'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
-        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
-        'PORT': os.getenv('POSTGRES_PORT', '5432'),
-        'CONN_MAX_AGE': 60,
-    }
-}
+from .db import build_database  # noqa: E402
+
+DATABASES = {'default': build_database(os.environ)}
 
 # Security hardening
 SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'true').lower() == 'true'

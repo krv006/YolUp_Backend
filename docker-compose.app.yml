@@ -85,6 +85,9 @@ services:
   # Chat va doska WebSocket'lari — API'dan ALOHIDA, uzoq ulanishlar API'ni band qilmasin (Caddy `/ws/*` ni shu yerga yuboradi).
   ws:
     <<: *backend
+    environment:
+      <<: *backend-env
+      DB_POOL_MAX: ${WS_DB_POOL_MAX:-16}   # ASGI jarayon: ulanishlar puli (root/settings/db.py)
     command: >
       sh -c "gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
                --workers ${WS_WORKERS:-3} --timeout 60"

@@ -49,6 +49,8 @@ services:
       POSTGRES_HOST: db
       REDIS_URL: redis://redis:6379/0
       RECORDINGS_DIR: /app/recordings
+      # ASGI jarayon uchun baza ulanishlari puli (3 worker x 20 = 60 < Postgres 100). Sababi: root/settings/db.py
+      DB_POOL_MAX: ${DB_POOL_MAX:-20}
       # Server-server LiveKit API — Caddy/TLS orqali emas, to'g'ridan-to'g'ri
       LIVEKIT_API_URL: http://livekit:7880
       # Mobil push (FCM) — sozlanmasa (bo'sh) mobil push jim o'chiriladi,
