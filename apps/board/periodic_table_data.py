@@ -148,3 +148,23 @@ PERIODIC_TABLE = [
 ]
 
 PERIODIC_TABLE_BY_SYMBOL = {el['symbol']: el for el in PERIODIC_TABLE}
+
+# Elementning lotincha nomi (belgi bo'yicha) — `GET /board/periodic-table/` har elementga `latin_name` qo'shadi
+_LATIN = (
+    "H Hydrogenium|He Helium|Li Lithium|Be Beryllium|B Borum|C Carboneum|N Nitrogenium|O Oxygenium|F Fluo"
+    "rum|Ne Neon|Na Natrium|Mg Magnesium|Al Aluminium|Si Silicium|P Phosphorus|S Sulfur|Cl Chlorum|Ar Arg"
+    "on|K Kalium|Ca Calcium|Sc Scandium|Ti Titanium|V Vanadium|Cr Chromium|Mn Manganum|Fe Ferrum|Co Cobal"
+    "tum|Ni Niccolum|Cu Cuprum|Zn Zincum|Ga Gallium|Ge Germanium|As Arsenicum|Se Selenium|Br Bromum|Kr Kr"
+    "ypton|Rb Rubidium|Sr Strontium|Y Yttrium|Zr Zirconium|Nb Niobium|Mo Molybdenum|Tc Technetium|Ru Ruth"
+    "enium|Rh Rhodium|Pd Palladium|Ag Argentum|Cd Cadmium|In Indium|Sn Stannum|Sb Stibium|Te Tellurium|I "
+    "Iodum|Xe Xenon|Cs Caesium|Ba Barium|La Lanthanum|Ce Cerium|Pr Praseodymium|Nd Neodymium|Pm Promethiu"
+    "m|Sm Samarium|Eu Europium|Gd Gadolinium|Tb Terbium|Dy Dysprosium|Ho Holmium|Er Erbium|Tm Thulium|Yb "
+    "Ytterbium|Lu Lutetium|Hf Hafnium|Ta Tantalum|W Wolframium|Re Rhenium|Os Osmium|Ir Iridium|Pt Platinu"
+    "m|Au Aurum|Hg Hydrargyrum|Tl Thallium|Pb Plumbum|Bi Bismuthum|Po Polonium|At Astatum|Rn Radon|Fr Fra"
+    "ncium|Ra Radium|Ac Actinium|Th Thorium|Pa Protactinium|U Uranium|Np Neptunium|Pu Plutonium|Am Americ"
+    "ium|Cm Curium|Bk Berkelium|Cf Californium|Es Einsteinium|Fm Fermium|Md Mendelevium|No Nobelium|Lr La"
+    "wrencium|Rf Rutherfordium|Db Dubnium|Sg Seaborgium|Bh Bohrium|Hs Hassium|Mt Meitnerium|Ds Darmstadti"
+    "um|Rg Roentgenium|Cn Copernicium|Nh Nihonium|Fl Flerovium|Mc Moscovium|Lv Livermorium|Ts Tennessium|"
+    "Og Oganesson"
+)
+LATIN_NAMES = dict(item.split(' ', 1) for item in _LATIN.split('|'))

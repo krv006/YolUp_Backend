@@ -99,6 +99,9 @@ class LessonSerializer(serializers.ModelSerializer):
     attendance_rate = serializers.SerializerMethodField()
     joined_count = serializers.SerializerMethodField()
     assignment = serializers.SerializerMethodField()
+    # O'quvchi uchun (boshqa rollarda null): o'zi qo'ygan baho va qatnashgani (faqat tugagan darsda true/false)
+    my_rating = serializers.SerializerMethodField()
+    attended = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -107,6 +110,7 @@ class LessonSerializer(serializers.ModelSerializer):
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
             'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'assignment',
+            'my_rating', 'attended',
         ]
         read_only_fields = ['room_name', 'status', 'recurrence_id']
 
@@ -152,6 +156,12 @@ class LessonSerializer(serializers.ModelSerializer):
         from django.db.models import Avg
         result = obj.card_avg_rating if hasattr(obj, 'card_avg_rating') else obj.ratings.aggregate(avg=Avg('stars'))['avg']
         return round(result, 1) if result else None
+
+    def get_my_rating(self, obj) -> int | None:
+        return getattr(obj, 'my_rating_value', None)
+
+    def get_attended(self, obj) -> bool | None:
+        return getattr(obj, 'my_attended', None)
 
     def get_quiz_id(self, obj) -> str | None:
         if hasattr(obj, 'card_quiz_id'):  # ro'yxat so'rovi oldindan hisoblagan
@@ -221,11 +231,20 @@ class LessonSerializer(serializers.ModelSerializer):
 
 class LessonRatingSerializer(serializers.ModelSerializer):
     student = UserSerializer(read_only=True)
+    # "Mening baholarim" ro'yxati: izoh ostida guruh va dars nomi
+    lesson_title = serializers.SerializerMethodField()
+    course_title = serializers.CharField(source='lesson.course.title', read_only=True)
+    course_id = serializers.UUIDField(source='lesson.course_id', read_only=True)
 
     class Meta:
         model = LessonRating
-        fields = ['id', 'lesson', 'student', 'stars', 'description', 'created_at']
+        fields = [
+            'id', 'lesson', 'lesson_title', 'course_id', 'course_title', 'student', 'stars', 'description', 'created_at',
+        ]
         read_only_fields = ['lesson']
+
+    def get_lesson_title(self, obj) -> str:
+        return obj.lesson.title or obj.lesson.course.title
 
 
 class RateLessonSerializer(serializers.Serializer):

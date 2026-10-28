@@ -63,6 +63,21 @@ def lessons_for(user: User) -> QuerySet[Lesson]:
     return qs
 
 
+def with_student_marks(qs: QuerySet[Lesson], user: User) -> QuerySet[Lesson]:
+    """O'quvchi ro'yxati uchun: `my_rating_value` (o'zi qo'ygan yulduz) va `my_attended` (tugagan darsda true/false,
+    aks holda null) — frontend davomatni alohida so'ramasligi uchun."""
+    from django.db.models import BooleanField, Case, Exists, Value, When
+
+    rating = LessonRating.objects.filter(lesson=OuterRef('pk'), student=user).values('stars')[:1]
+    present = Attendance.objects.filter(lesson=OuterRef('pk'), student=user, joined_at__isnull=False)
+    return qs.annotate(
+        my_rating_value=Subquery(rating, output_field=IntegerField()),
+        my_attended=Case(
+            When(status=Lesson.Status.FINISHED, then=Exists(present)), default=Value(None), output_field=BooleanField(null=True),
+        ),
+    )
+
+
 def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
     """Darslar ro'yxati kartalari uchun hisoblagichlarni BITTA so'rovda qo'shadi (har dars uchun alohida so'rov
     ketmasligi uchun): o'quvchilar soni, qatnashganlar, hozir xonadagilar, seriya oxiri, biriktirilgan vazifa."""

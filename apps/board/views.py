@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm
 
 from . import services
-from .periodic_table_data import PERIODIC_TABLE
+from .periodic_table_data import LATIN_NAMES, PERIODIC_TABLE
 
 
 class PeriodicTableView(APIView):
@@ -17,7 +17,7 @@ class PeriodicTableView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(PERIODIC_TABLE)
+        return Response([{**element, 'latin_name': LATIN_NAMES.get(element['symbol'], element['name'])} for element in PERIODIC_TABLE])
 
 
 class BoardView(APIView):

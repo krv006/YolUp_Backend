@@ -939,9 +939,12 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
         'ended_at': recording.ended_at,
         'error': recording.error,
         'stream_url': None,
+        'thumbnail_url': None,
         **_recording_stats(lesson),
         **_board_extras(lesson, recording),
     }
+    previews = data.get('board_page_previews') or []
+    data['thumbnail_url'] = previews[0].get('image_url') if previews else None  # video muqovasi: doskaning birinchi sahifasi
     if file_ready:
         # Imzolangan, muddatli havola — <video src> uchun (headerlarsiz),
         # 3 soatdan keyin yaroqsiz. Foydalanuvchi tekshiruvi SHU yerda bo'ldi.

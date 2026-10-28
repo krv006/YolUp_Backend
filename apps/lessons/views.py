@@ -263,6 +263,8 @@ class LessonViewSet(viewsets.ModelViewSet):
         qs = selectors.lessons_for(self.request.user)
         if self.action in ('list', 'retrieve'):
             qs = selectors.with_card_stats(qs)
+            if self.request.user.role == 'student':
+                qs = selectors.with_student_marks(qs, self.request.user)
         return qs
 
     def perform_create(self, serializer):
