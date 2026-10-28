@@ -387,6 +387,28 @@ class QuizAttemptListCreateView(APIView):
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
 
+class QuizBankGenerateView(APIView):
+    """O'qituvchi: savollar bankidan test yig'ish (AI'siz) — `POST {topic, count?, course?, title?}` -> qoralama test (201)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request):
+        from apps.lessons.models import Course
+
+        course = None
+        if request.data.get('course'):
+            try:
+                course = Course.objects.get(pk=request.data['course'], teacher=request.user)
+            except (Course.DoesNotExist, ValueError, TypeError):
+                raise NotFound(_('Guruh topilmadi.'))
+        quiz = services.build_from_bank(
+            teacher=request.user, topic=request.data.get('topic'), count=request.data.get('count') or 10, course=course,
+            title=request.data.get('title') or '',
+        )
+        return Response(QuizDetailSerializer(quiz, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+
 class StudentAiExplainView(APIView):
     """O'quvchi: `{question, wrong_answer?, correct_answer?, language?}` -> `{explanation, tip, used, limit}`."""
 

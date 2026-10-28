@@ -8,6 +8,7 @@ urlpatterns = [
     path('ai-generate/', views.QuizAiGenerateView.as_view(), name='quiz-ai-generate'),
     path('ai-generate/<uuid:pk>/', views.QuizAiJobDetailView.as_view(), name='quiz-ai-job'),
     path('ai-generate/mini/', views.QuizMiniTestView.as_view(), name='quiz-ai-mini'),
+    path('ai-generate/bank/', views.QuizBankGenerateView.as_view(), name='quiz-ai-bank'),
     path('import-google-doc/', views.QuizGoogleDocImportView.as_view(), name='quiz-import-google-doc'),
     path('import-google-form/', views.QuizGoogleFormImportView.as_view(), name='quiz-import-google-form'),
     path('template/', views.QuizTemplateView.as_view(), name='quiz-template'),

@@ -516,3 +516,32 @@ def share_results(*, teacher, quiz, to: str = 'group_chat', parents: bool = Fals
             )
             notified = len(parent_ids)
     return {'ok': True, 'message_id': str(message.id), 'students': len(rows), 'parents_notified': notified}
+
+
+def build_from_bank(*, teacher, topic: str, count: int = 10, course=None, title: str = '') -> Quiz:
+    """O'qituvchining savollar bankidan (avvalgi AI testlaridan) mavzu bo'yicha yangi QORALAMA test yig'adi — AI chaqirilmaydi."""
+    import re
+
+    from django.db.models import Q
+
+    from .models import BankQuestion
+
+    topic = (topic or '').strip()
+    if not topic:
+        raise ValidationError({'topic': _('Mavzuni yozing.')})
+    try:
+        count = max(1, min(int(count or 10), 50))
+    except (TypeError, ValueError):
+        raise ValidationError({'count': _("Son bo'lishi kerak.")}) from None
+    words = [word for word in re.split(r'\s+', topic) if len(word) >= 3] or [topic]
+    match = Q()
+    for word in words:
+        match |= Q(text__icontains=word) | Q(exam_key__icontains=word) | Q(subject__icontains=word)
+    picked = list(BankQuestion.objects.filter(teacher=teacher).filter(match).order_by('?')[:count])
+    if not picked:
+        raise ValidationError({'detail': _("Bankda bu mavzuga mos savol topilmadi.")})
+    questions = [dict(row.payload) for row in picked if row.payload]
+    return create_quiz(
+        teacher=teacher, topic=topic[:200], questions=questions, course=course, subject=course.subject if course else 'other',
+        title=(title or f'{topic} — bankdan')[:200], status=Quiz.Status.DRAFT,
+    )

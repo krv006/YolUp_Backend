@@ -92,6 +92,37 @@ class AssignmentFileView(APIView):
         return FileResponse(open(path, 'rb'), as_attachment=True, filename=name)
 
 
+class SubmissionDraftView(APIView):
+    """O'quvchi: topshirish qoralamasi (izoh) — `GET` / `PUT {comment}` / `DELETE`."""
+
+    permission_classes = [RequirePerm('homework.submit')]
+
+    def _get(self, request, assignment_id):
+        from .models import SubmissionDraft
+
+        services._get_assignment(assignment_id)
+        return SubmissionDraft.objects.filter(assignment_id=assignment_id, student=request.user).first()
+
+    def get(self, request, assignment_id):
+        draft = self._get(request, assignment_id)
+        return Response({'comment': draft.comment if draft else '', 'updated_at': draft.updated_at if draft else None})
+
+    def put(self, request, assignment_id):
+        from .models import SubmissionDraft
+
+        self._get(request, assignment_id)
+        draft, _created = SubmissionDraft.objects.update_or_create(
+            assignment_id=assignment_id, student=request.user, defaults={'comment': (request.data.get('comment') or '')[:2000]},
+        )
+        return Response({'comment': draft.comment, 'updated_at': draft.updated_at})
+
+    def delete(self, request, assignment_id):
+        draft = self._get(request, assignment_id)
+        if draft:
+            draft.delete()
+        return Response(status=204)
+
+
 class SubmitView(APIView):
     """O'quvchi faylini yuklaydi — topshiriq o'qituvchiga baholash uchun tushadi."""
 

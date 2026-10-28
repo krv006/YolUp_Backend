@@ -8,6 +8,7 @@ urlpatterns = [
     path('assignments/<uuid:assignment_id>/', views.AssignmentDetailView.as_view(), name='hw-assignment'),
     path('assignments/<uuid:assignment_id>/file/', views.AssignmentFileView.as_view(), name='hw-assignment-file'),
     path('assignments/<uuid:assignment_id>/submit/', views.SubmitView.as_view(), name='hw-submit'),
+    path('assignments/<uuid:assignment_id>/draft/', views.SubmissionDraftView.as_view(), name='hw-draft'),
     path('assignments/<uuid:assignment_id>/board/', views.HomeworkBoardView.as_view(), name='hw-board'),
     path('assignments/<uuid:assignment_id>/board/submit/', views.HomeworkBoardSubmitView.as_view(), name='hw-board-submit'),
     path('submissions/<uuid:submission_id>/', views.SubmissionDetailView.as_view(), name='hw-submission'),

@@ -211,3 +211,14 @@ class SubmissionFile(TimeStampedUUIDModel):
 
     class Meta:
         ordering = ['order', 'created_at']
+
+
+class SubmissionDraft(TimeStampedUUIDModel):
+    """O'quvchining topshirish oldidan yozgan izohi ("Qoralama saqlash") — boshqa qurilmadan ham davom ettirish uchun."""
+
+    assignment = ForeignKey('homework.Assignment', CASCADE, related_name='drafts')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='homework_drafts')
+    comment = TextField(blank=True, default='')
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['assignment', 'student'], name='unique_homework_draft')]
