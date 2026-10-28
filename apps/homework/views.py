@@ -42,6 +42,7 @@ class AssignmentListCreateView(APIView):
             status=request.data.get('status') or 'active',
             announce_in_chat=request.data.get('announce_in_chat'),
             allow_late=request.data.get('allow_late'),
+            ai_check=request.data.get('ai_check'),
             grading=request.data.get('grading') or 'five',
             max_score=request.data.get('max_score'),
         )
@@ -64,7 +65,7 @@ class AssignmentDetailView(APIView):
         kwargs = {}
         for field in (
             'title', 'description', 'body', 'due_at', 'skill_key', 'lesson_id', 'extra_instructions',
-            'status', 'announce_in_chat', 'allow_late', 'grading', 'max_score',
+            'status', 'announce_in_chat', 'allow_late', 'ai_check', 'grading', 'max_score',
         ):
             if field in request.data:
                 kwargs[field] = request.data.get(field)
@@ -98,10 +99,14 @@ class SubmitView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request, assignment_id):
+        # Bitta `file` yoki bir nechta `files` (jami 5 tagacha); `comment` — o'quvchi izohi
+        uploads = [*request.FILES.getlist('file'), *request.FILES.getlist('files'), *request.FILES.getlist('files[]')]
         data = services.submit(
             student=request.user,
             assignment_id=assignment_id,
-            upload=request.FILES.get('file'),
+            upload=uploads[0] if uploads else None,
+            extra_uploads=uploads[1:],
+            comment=request.data.get('comment') or '',
         )
         return Response(data, status=201)
 
@@ -143,7 +148,9 @@ class SubmissionFileView(APIView):
     permission_classes = [RequirePerm('homework.view')]
 
     def get(self, request, submission_id):
-        path, name = services.submission_file(user=request.user, submission_id=submission_id)
+        path, name = services.submission_file(
+            user=request.user, submission_id=submission_id, index=request.query_params.get('index'),
+        )
         return FileResponse(open(path, 'rb'), as_attachment=True, filename=name)
 
 

@@ -26,7 +26,7 @@ from apps.lessons.models import Course, Enrollment, Lesson
 from apps.quizzes import llm
 
 from . import ai_client, ai_grader, rules
-from .models import Assignment, AssignmentFocusEvent, Submission
+from .models import Assignment, AssignmentFocusEvent, Submission, SubmissionFile
 
 logger = logging.getLogger('apps')
 
@@ -179,12 +179,23 @@ def _can_view_course(user: User, course: Course) -> bool:
     ).exists()
 
 
+def _file_size(field) -> int | None:
+    """Fayl hajmi baytda; fayl yo'q yoki diskda topilmasa None."""
+    if not field:
+        return None
+    try:
+        return field.size
+    except (OSError, ValueError):
+        return None
+
+
 def _assignment_dict(a: Assignment) -> dict:
     return {
         'status': a.status,
         'published': a.status == Assignment.Status.ACTIVE,
         'announce_in_chat': a.announce_in_chat,
         'allow_late': a.allow_late,
+        'ai_check': a.ai_check,
         'grading': a.grading,
         'max_score': a.max_score,
         'id': str(a.id),
@@ -195,13 +206,25 @@ def _assignment_dict(a: Assignment) -> dict:
         'description': a.description,
         'body': a.body,
         'attachment_name': a.attachment_name,
+        'attachment_size': _file_size(a.attachment),
         'has_attachment': bool(a.attachment),
         'due_at': a.due_at,
         'skill_key': a.skill_key,
         'lesson_id': str(a.lesson_id) if a.lesson_id else None,
         'lesson_title': (a.lesson.title or a.course.title) if a.lesson_id else None,
+        'lesson_starts_at': a.lesson.starts_at if a.lesson_id else None,
         'created_at': a.created_at,
     }
+
+
+def _submission_files(s: Submission) -> list:
+    """Barcha fayllar (asosiysi birinchi): `[{name, size, mime, index}]` — yuklab olish: `.../submissions/<id>/file/?index=<index>`."""
+    import mimetypes
+
+    files = [{'name': s.original_name, 'size': _file_size(s.file), 'mime': mimetypes.guess_type(s.original_name)[0] or '', 'index': 0}]
+    for i, extra in enumerate(s.extra_files.all(), start=1):
+        files.append({'name': extra.original_name, 'size': extra.size, 'mime': mimetypes.guess_type(extra.original_name)[0] or '', 'index': i})
+    return files
 
 
 def _submission_dict(s: Submission, include_result: bool = True, is_teacher: bool = False, for_parent: bool = False) -> dict:
@@ -221,6 +244,8 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         'student_id': str(s.student_id),
         'student_name': f'{s.student.first_name} {s.student.last_name}'.strip() or s.student.username,
         'file_name': s.original_name,
+        'files': _submission_files(s),
+        'comment': s.comment,
         'status': shown_status,
         'overall_score': None if hide_result else s.overall_score,
         'grade': '' if hide_result else s.grade,
@@ -279,7 +304,7 @@ def _resolve_lesson(*, course: Course, lesson_id) -> Lesson | None:
 def create_assignment(*, teacher: User, course_id, title: str, description: str = '',
                       body: str = '', due_at=None, skill_key: str = '', lesson_id=None,
                       extra_instructions: str = '', attachment=None, status='active', announce_in_chat=True,
-                      allow_late=True, grading='five', max_score=None) -> dict:
+                      allow_late=True, grading='five', max_score=None, ai_check=None) -> dict:
     course = _get_course(course_id)
     if course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifa bera oladi."))
@@ -321,6 +346,7 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
         status=status,
         announce_in_chat=_bool(announce_in_chat, True),
         allow_late=_bool(allow_late, True),
+        ai_check=_bool(ai_check, True),
         grading=grading,
         max_score=top,
     )
@@ -425,6 +451,7 @@ def update_assignment(
     *, teacher: User, assignment_id, title=_UNSET, description=_UNSET, body=_UNSET,
     due_at=_UNSET, skill_key=_UNSET, lesson_id=_UNSET, extra_instructions=_UNSET,
     attachment=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
+    ai_check=_UNSET,
 ) -> dict:
     """Vazifani qisman yangilaydi (PATCH) — faqat yuborilgan maydonlar
     o'zgaradi, `create_assignment` bilan bir xil validatsiya."""
@@ -481,6 +508,9 @@ def update_assignment(
     if allow_late is not _UNSET:
         a.allow_late = _bool(allow_late, True)
         fields.append('allow_late')
+    if ai_check is not _UNSET:
+        a.ai_check = _bool(ai_check, True)
+        fields.append('ai_check')
     if grading is not _UNSET or max_score is not _UNSET:
         new_grading, top = _clean_grading(a.grading if grading is _UNSET else grading, a.max_score if max_score is _UNSET else max_score)
         if (new_grading, top) != (a.grading, a.max_score):
@@ -579,7 +609,10 @@ def get_assignment(*, user: User, assignment_id) -> dict:
 
 
 # ── topshirish va o'qituvchi baholashi ──────────────────────────────────────────────
-def submit(*, student: User, assignment_id, upload) -> dict:
+MAX_SUBMISSION_FILES = 5
+
+
+def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: str = '') -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz — vazifa topshira olmaysiz."))
@@ -588,18 +621,22 @@ def submit(*, student: User, assignment_id, upload) -> dict:
         raise ValidationError({'detail': _("Topshirish muddati tugagan — bu vazifaga endi topshirib bo'lmaydi.")})
     if upload is None:
         raise ValidationError({'file': _('Fayl majburiy.')})
+    extra_uploads = list(extra_uploads or [])
+    if 1 + len(extra_uploads) > MAX_SUBMISSION_FILES:
+        raise ValidationError({'files': _("Bir topshiriqda ko'pi bilan %(n)s ta fayl.") % {'n': MAX_SUBMISSION_FILES}})
 
-    ext = Path(upload.name or '').suffix.lower()
-    if ext not in rules.ALLOWED_EXTENSIONS:
-        raise ValidationError({'file': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
-            'ext': ext, 'allowed': ', '.join(sorted(rules.ALLOWED_EXTENSIONS)),
-        }})
-    if ext in rules.AUDIO_EXTENSIONS and a.skill_key != 'speaking':
-        raise ValidationError({'file': _("Audio faqat Speaking vazifalari uchun.")})
-    if upload.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
-            'size': upload.size / 1024 / 1024, 'max_mb': rules.MAX_FILE_SIZE_MB,
-        }})
+    for item in (upload, *extra_uploads):
+        ext = Path(item.name or '').suffix.lower()
+        if ext not in rules.ALLOWED_EXTENSIONS:
+            raise ValidationError({'file': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
+                'ext': ext, 'allowed': ', '.join(sorted(rules.ALLOWED_EXTENSIONS)),
+            }})
+        if ext in rules.AUDIO_EXTENSIONS and a.skill_key != 'speaking':
+            raise ValidationError({'file': _("Audio faqat Speaking vazifalari uchun.")})
+        if item.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
+                'size': item.size / 1024 / 1024, 'max_mb': rules.MAX_FILE_SIZE_MB,
+            }})
 
     hour_ago = timezone.now() - timedelta(hours=1)
     recent = Submission.objects.filter(student=student, created_at__gte=hour_ago)
@@ -617,9 +654,14 @@ def submit(*, student: User, assignment_id, upload) -> dict:
         student=student,
         file=upload,
         original_name=(upload.name or 'homework')[:255],
+        comment=(comment or '').strip()[:2000],
         status=Submission.Status.PENDING_REVIEW,
     )
-    if not _start_ai_check(submission):
+    for order, extra in enumerate(extra_uploads, start=1):
+        SubmissionFile.objects.create(
+            submission=submission, file=extra, original_name=(extra.name or 'file')[:255], size=extra.size, order=order,
+        )
+    if not a.ai_check or not _start_ai_check(submission):
         # AI sozlanmagan yoki ishlamayapti — o'qituvchi to'g'ridan-to'g'ri baholaydi
         _notify_new_submission(submission)
     return _submission_dict(submission)
@@ -713,7 +755,7 @@ def get_submission(*, user: User, submission_id) -> dict:
     return _submission_dict(s, is_teacher=is_teacher, for_parent=not is_teacher and s.student_id != user.id)
 
 
-def submission_file(*, user: User, submission_id) -> tuple:
+def submission_file(*, user: User, submission_id, index=None) -> tuple:
     s = _get_submission(submission_id)
     allowed = (
         s.student_id == user.id
@@ -722,6 +764,12 @@ def submission_file(*, user: User, submission_id) -> tuple:
     )
     if not allowed:
         raise PermissionDenied(_("Bu faylni ko'rish huquqingiz yo'q."))
+    if index not in (None, '', '0', 0):
+        try:
+            extra = s.extra_files.all()[int(index) - 1]
+        except (ValueError, IndexError):
+            raise NotFound(_('Fayl topilmadi.'))
+        return extra.file.path, extra.original_name
     return s.file.path, s.original_name
 
 

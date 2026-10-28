@@ -22,6 +22,7 @@ from django.db.models import (
     FloatField,
     ForeignKey,
     JSONField,
+    PositiveIntegerField,
     PositiveSmallIntegerField,
     TextChoices,
     TextField,
@@ -64,6 +65,8 @@ class Assignment(TimeStampedUUIDModel):
     # E'lon qilinganda vazifa kartasi guruh chatiga tushadimi; muddatdan keyin topshirish mumkinmi
     announce_in_chat = BooleanField(default=True)
     allow_late = BooleanField(default=True)
+    # AI dastlabki tekshiruv shu vazifa uchun yoqilganmi (o'chirilsa topshiriq to'g'ridan-to'g'ri o'qituvchiga tushadi)
+    ai_check = BooleanField(default=True)
     # Baholash turi: five (1-5), hundred (0..max_score), none (bahosiz, faqat izoh)
     class Grading(TextChoices):
         FIVE = 'five', '5 ballik'
@@ -134,6 +137,8 @@ class Submission(TimeStampedUUIDModel):
     # O'qituvchining izohi (baho bilan birga o'quvchiga ko'rinadi). `result` (AI natijasi) dan ALOHIDA: o'qituvchi
     # "qayta tekshirish"ni bossa AI `result` ni yangidan yozadi, izoh esa saqlanib qoladi.
     teacher_comment = TextField(blank=True)
+    # O'quvchi topshirishda yozgan izoh (o'qituvchi tekshirish sahifasida ko'radi)
+    comment = TextField(blank=True, default='')
     resubmit_comment = TextField(blank=True)
     resubmit_requested_at = DateTimeField(null=True, blank=True)
     error = TextField(blank=True)
@@ -193,3 +198,16 @@ class AssignmentFocusEvent(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.student.username} · {self.kind} @ {self.assignment.title}'
+
+
+class SubmissionFile(TimeStampedUUIDModel):
+    """Topshiriqning QO'SHIMCHA fayllari (asosiy fayl `Submission.file` da; AI shuni tekshiradi). Bir topshiriqda jami 5 tagacha."""
+
+    submission = ForeignKey('homework.Submission', CASCADE, related_name='extra_files')
+    file = FileField(upload_to=homework_submission_path)
+    original_name = CharField(max_length=255)
+    size = PositiveIntegerField(default=0)
+    order = PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ['order', 'created_at']
