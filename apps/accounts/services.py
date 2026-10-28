@@ -59,10 +59,13 @@ def _notify_teacher_approved(teacher: User, request=None) -> None:
 
 
 @transaction.atomic
-def register_user(*, username: str, password: str, role: str, request=None, **extra) -> User:
+def register_user(*, username: str, password: str, role: str, request=None, phone_token: str = '', **extra) -> User:
     if role not in (User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT):
         raise ValidationError({'role': _("Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi.")})
     user = User(username=username, role=role, **extra)
+    if phone_token:
+        user.phone_verified = consume_phone_token(phone_token, user.phone)
+        user.phone_verified_at = timezone.now()
     if role == User.Role.TEACHER:
         # `is_approved` standart True: yangi o'qituvchi darhol ishlay oladi
         # (loyiha egasi qarori, 2026-10-05). Bayroq saqlanib qolgan — admin
@@ -405,9 +408,89 @@ def verify_phone(*, user: User, code: str, request=None) -> dict:
     if payload.get('user') != str(user.id) or payload.get('phone') != user.phone:
         raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
     user.phone_verified = True
-    user.save(update_fields=['phone_verified'])
+    user.phone_verified_at = timezone.now()
+    user.save(update_fields=['phone_verified', 'phone_verified_at'])
     audit.record(action='auth.phone_verified', actor=user, target=user, request=request)
     return {'verified': True}
+
+
+PHONE_TOKEN_TTL = 30 * 60
+
+
+def _clean_phone_input(phone) -> str:
+    from .serializers import clean_phone
+
+    value = clean_phone(phone)
+    if not value:
+        raise ValidationError({'phone': _('Telefon raqamini kiriting.')})
+    return value
+
+
+def register_phone_request(*, phone: str) -> dict:
+    """Ro'yxatdan o'tishdan OLDIN raqamga SMS kod yuboradi (5 xonali, 120 s; qayta yuborish — `retry_after`)."""
+    from apps.core.sms import normalize_phone
+
+    from . import otp
+
+    phone = _clean_phone_input(phone)
+    return otp.issue(scope='register-phone', phone=phone, payload={'phone': normalize_phone(phone)})
+
+
+def register_phone_verify(*, phone: str, code: str) -> dict:
+    """Kod to'g'ri bo'lsa `phone_token` qaytadi: uni `/auth/register/` ga `phone_token` sifatida yuboring (30 daqiqa, bir marta)."""
+    from django.core.cache import cache
+
+    from apps.core.sms import normalize_phone
+
+    from . import otp
+
+    phone = _clean_phone_input(phone)
+    payload = otp.check(scope='register-phone', phone=phone, code=code)
+    if payload.get('phone') != normalize_phone(phone):
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    token = secrets.token_urlsafe(24)
+    cache.set(f'phone-token:{token}', normalize_phone(phone), PHONE_TOKEN_TTL)
+    return {'phone_token': token, 'expires_in': PHONE_TOKEN_TTL}
+
+
+def consume_phone_token(token: str, phone) -> bool:
+    """Tokenni tekshirib BIR MARTA ishlatadi; ro'yxatdan o'tayotgan raqamga mos bo'lishi shart."""
+    from django.core.cache import cache
+
+    from apps.core.sms import normalize_phone
+
+    stored = cache.get(f'phone-token:{token}')
+    if not stored or stored != normalize_phone(phone or ''):
+        raise ValidationError({'phone_token': _("Telefon tasdiqlash tokeni noto'g'ri yoki muddati o'tgan.")})
+    cache.delete(f'phone-token:{token}')
+    return True
+
+
+def phone_change_request(*, user: User, phone: str) -> dict:
+    """Raqamni o'zgartirish: YANGI raqamga kod yuboriladi (raqam tasdiqlangunga qadar eskisi o'zgarmaydi)."""
+    from apps.core.sms import normalize_phone
+
+    from . import otp
+
+    phone = _clean_phone_input(phone)
+    return otp.issue(scope='phone-change', phone=phone, payload={'user': str(user.id), 'phone': normalize_phone(phone)})
+
+
+def phone_change_confirm(*, user: User, phone: str, code: str, request=None) -> User:
+    from apps.core.sms import normalize_phone
+
+    from . import otp
+
+    phone = _clean_phone_input(phone)
+    payload = otp.check(scope='phone-change', phone=phone, code=code)
+    if payload.get('user') != str(user.id) or payload.get('phone') != normalize_phone(phone):
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    user.phone = phone
+    user.phone_verified = True
+    user.phone_verified_at = timezone.now()
+    user.save(update_fields=['phone', 'phone_verified', 'phone_verified_at'])
+    audit.record(action='auth.phone_changed', actor=user, target=user, request=request)
+    return user
 
 
 def me_stats(user: User) -> dict:
@@ -550,8 +633,11 @@ def record_login(*, user: User, request) -> dict:
         .order_by('-created_at')
         .first()
     )
+    from .sessions import city_for_ip
+
     meta = {
         'user_agent': user_agent,
+        'location': city_for_ip(ip) if ip else '',
         'first_login': last is None,
         'new_ip': bool(last and str(last.ip_address or '') != str(ip or '')),
         'new_device': bool(last and (last.meta or {}).get('user_agent', '') != user_agent),
@@ -560,7 +646,7 @@ def record_login(*, user: User, request) -> dict:
     return meta
 
 
-def login_history(*, viewer: User, student_id=None, limit: int = 50) -> list:
+def login_history(*, viewer: User, student_id=None, limit: int = 50, request=None) -> list:
     """Login tarixi: o'zi uchun; ota-ona TASDIQLANGAN bolasi uchun ham."""
     from apps.core.models import AuditLog
 
@@ -582,13 +668,28 @@ def login_history(*, viewer: User, student_id=None, limit: int = 50) -> list:
         .filter(actor=target, action='auth.login')
         .order_by('-created_at')[:limit]
     )
-    return [{
-        'at': r.created_at,
-        'ip': r.ip_address,
-        'user_agent': (r.meta or {}).get('user_agent', ''),
-        'new_ip': (r.meta or {}).get('new_ip', False),
-        'new_device': (r.meta or {}).get('new_device', False),
-    } for r in rows]
+    from .sessions import city_for_ip
+
+    own = target == viewer and request is not None
+    current_ua = (request.META.get('HTTP_USER_AGENT') or '')[:300] if own else None
+    xff = request.META.get('HTTP_X_FORWARDED_FOR') if own else None
+    current_ip = (xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR')) if own else None
+    result, current_marked = [], False
+    for r in rows:
+        agent = (r.meta or {}).get('user_agent', '')
+        is_current = False
+        if own and not current_marked and agent == current_ua and str(r.ip_address or '') == str(current_ip or ''):
+            is_current = current_marked = True  # shu qurilmadagi eng so'nggi kirish
+        result.append({
+            'at': r.created_at,
+            'ip': r.ip_address,
+            'user_agent': agent,
+            'location': (r.meta or {}).get('location') or (city_for_ip(r.ip_address) if r.ip_address else '') or None,
+            'new_ip': (r.meta or {}).get('new_ip', False),
+            'new_device': (r.meta or {}).get('new_device', False),
+            'is_current': is_current,
+        })
+    return result
 
 
 def upload_certificate(*, teacher: User, file, title: str = '') -> TeacherCertificate:

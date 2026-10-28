@@ -97,6 +97,63 @@ class SocialLoginView(APIView):
         return Response(tokens)
 
 
+class RegisterPhoneRequestView(APIView):
+    """`{phone}` -> SMS kod (ro'yxatdan o'tishdan oldin): `{sent, expires_in, retry_after}`."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.register_phone_request(phone=request.data.get('phone')))
+
+
+class RegisterPhoneVerifyView(APIView):
+    """`{phone, code}` -> `{phone_token}`; tokenni `/auth/register/` ga yuboring."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.register_phone_verify(phone=request.data.get('phone'), code=request.data.get('code')))
+
+
+class MePhoneRequestView(APIView):
+    """`{phone}` -> yangi raqamga kod yuboriladi."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.phone_change_request(user=request.user, phone=request.data.get('phone')))
+
+
+class MePhoneConfirmView(APIView):
+    """`{phone, code}` -> raqam almashtiriladi va tasdiqlangan bo'ladi; yangilangan profil qaytadi."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        user = services.phone_change_confirm(
+            user=request.user, phone=request.data.get('phone'), code=request.data.get('code'), request=request,
+        )
+        return Response(MeSerializer(user, context={'request': request}).data)
+
+
+class MeAvatarView(APIView):
+    """`DELETE /auth/me/avatar/` — profil rasmini o'chiradi (fayl ham)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        user = request.user
+        if user.avatar:
+            user.avatar.delete(save=False)
+            user.avatar = None
+            user.save(update_fields=['avatar'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class LoginView(TokenObtainPairView):
     throttle_scope = 'auth'
     serializer_class = sessions.SessionTokenObtainPairSerializer
@@ -125,9 +182,26 @@ class LoginHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(services.login_history(
-            viewer=request.user, student_id=request.query_params.get('student'),
-        ))
+        rows = services.login_history(
+            viewer=request.user, student_id=request.query_params.get('student'), limit=500, request=request,
+        )
+        params = request.query_params
+        if 'page' not in params and 'page_size' not in params:
+            return Response(rows[:50])  # eski mijozlar uchun oddiy massiv
+        try:
+            size = max(1, min(int(params.get('page_size', 10)), 100))
+            page = max(1, int(params.get('page', 1)))
+        except ValueError:
+            raise ValidationError({'page': _("Sahifa raqami son bo'lishi kerak.")}) from None
+        start = (page - 1) * size
+        base = request.build_absolute_uri(request.path)
+        extra = f"&student={params['student']}" if params.get('student') else ''
+        return Response({
+            'count': len(rows),
+            'next': f'{base}?page={page + 1}&page_size={size}{extra}' if start + size < len(rows) else None,
+            'previous': f'{base}?page={page - 1}&page_size={size}{extra}' if page > 1 else None,
+            'results': rows[start:start + size],
+        })
 
 
 class RefreshView(TokenRefreshView):

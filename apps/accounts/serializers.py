@@ -112,10 +112,11 @@ class MeSerializer(UserSerializer):
         fields = UserSerializer.Meta.fields + [
             'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
-            'email_verified', 'phone_verified',
+            'email_verified', 'phone_verified', 'phone_verified_at',
         ]
         read_only_fields = UserSerializer.Meta.read_only_fields + [
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
+            'phone_verified_at',
         ]
 
     def validate_email(self, value):
@@ -129,6 +130,7 @@ class MeSerializer(UserSerializer):
             instance.email_verified = False
         if 'phone' in validated_data and normalize_phone(validated_data['phone'] or '') != normalize_phone(instance.phone or ''):
             instance.phone_verified = False
+            instance.phone_verified_at = None
         return super().update(instance, validated_data)
 
     def validate_birth_date(self, value):
@@ -162,10 +164,12 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     password = serializers.CharField(write_only=True, validators=[validate_password])
     role = serializers.ChoiceField(choices=[User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT])
+    # SMS bilan tasdiqlangan raqam uchun bir martalik token (`/auth/register/phone/verify/`); berilmasa telefon tasdiqlanmagan qoladi
+    phone_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'role', 'phone', 'is_approved']
+        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'role', 'phone', 'phone_token', 'is_approved']
         read_only_fields = ['is_approved']
         extra_kwargs = {'username': {'validators': username_validators()}}
 

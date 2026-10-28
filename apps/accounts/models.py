@@ -87,6 +87,7 @@ class User(AbstractUser):
     # Email/telefon tasdiqlangan (kod orqali). Manzil/raqam o'zgarsa yana `false` bo'ladi.
     email_verified = BooleanField(default=False)
     phone_verified = BooleanField(default=False)
+    phone_verified_at = DateTimeField(null=True, blank=True)
     # Tizim sozlamalari: "Yangi xabarlar" va "Email xabarnomalar" tugmalari
     notify_messages = BooleanField(default=True)
     notify_email = BooleanField(default=False)
