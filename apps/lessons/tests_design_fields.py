@@ -71,3 +71,13 @@ class DesignFieldsTests(TestCase):
         data = self.api(self.teacher).get(f'/api/v1/lessons/{self.done.id}/recording/')
         if data.status_code == 200:
             self.assertIn('thumbnail_url', data.json())
+
+
+class AttendanceOpensTests(DesignFieldsTests):
+    def test_attendance_opens_ten_minutes_before_start(self):
+        row = self.lessons(self.student)['Soon']
+        from datetime import datetime
+
+        opens = datetime.fromisoformat(row['attendance_opens_at'].replace('Z', '+00:00'))
+        starts = datetime.fromisoformat(row['starts_at'].replace('Z', '+00:00'))
+        self.assertEqual(starts - opens, timedelta(minutes=10))

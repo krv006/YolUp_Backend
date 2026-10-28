@@ -9,6 +9,9 @@ from . import selectors
 from .models import Attendance, Course, Enrollment, Lesson, LessonRating
 
 
+ATTENDANCE_OPENS_MINUTES = 10
+
+
 class CourseSerializer(serializers.ModelSerializer):
     teacher = UserSerializer(read_only=True)
     student_count = serializers.SerializerMethodField()
@@ -102,6 +105,11 @@ class LessonSerializer(serializers.ModelSerializer):
     # O'quvchi uchun (boshqa rollarda null): o'zi qo'ygan baho va qatnashgani (faqat tugagan darsda true/false)
     my_rating = serializers.SerializerMethodField()
     attended = serializers.SerializerMethodField()
+    # Jonli darsda yozuv haqiqatan ketyaptimi (REC belgisi shunga qarab); `recording_started_at` — boshlangan vaqt
+    recording_active = serializers.SerializerMethodField()
+    recording_started_at = serializers.SerializerMethodField()
+    # "Davomat ochiq" kartasi chiqadigan vaqt: dars boshlanishidan ATTENDANCE_OPENS_MINUTES oldin
+    attendance_opens_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -110,7 +118,8 @@ class LessonSerializer(serializers.ModelSerializer):
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
             'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'assignment',
-            'my_rating', 'attended',
+            'my_rating', 'attended', 'recording_active', 'recording_started_at',
+            'attendance_opens_at',
         ]
         read_only_fields = ['room_name', 'status', 'recurrence_id']
 
@@ -156,6 +165,25 @@ class LessonSerializer(serializers.ModelSerializer):
         from django.db.models import Avg
         result = obj.card_avg_rating if hasattr(obj, 'card_avg_rating') else obj.ratings.aggregate(avg=Avg('stars'))['avg']
         return round(result, 1) if result else None
+
+    def _recording(self, obj):
+        if obj.status != Lesson.Status.LIVE:
+            return None
+        if hasattr(obj, 'card_recording_started'):  # ro'yxat so'rovi oldindan hisoblagan
+            return obj.card_recording_started
+        recording = getattr(obj, 'recording', None) if obj.pk else None
+        return recording.video_started_at or recording.audio_started_at if recording and recording.status == 'recording' else None
+
+    def get_attendance_opens_at(self, obj):
+        from datetime import timedelta
+
+        return obj.starts_at - timedelta(minutes=ATTENDANCE_OPENS_MINUTES) if obj.starts_at else None
+
+    def get_recording_active(self, obj) -> bool:
+        return self._recording(obj) is not None
+
+    def get_recording_started_at(self, obj):
+        return self._recording(obj)
 
     def get_my_rating(self, obj) -> int | None:
         return getattr(obj, 'my_rating_value', None)

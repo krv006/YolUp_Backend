@@ -79,6 +79,15 @@ def broadcast_mic_denied(lesson_id, student_id: str) -> None:
     _send(lesson_id, {'type': 'mic_denied', 'student_id': student_id})
 
 
+def broadcast_mic_request_cancelled(lesson_id, student_id: str) -> None:
+    """O'quvchi o'z so'rovini bekor qildi — o'qituvchi kutish ro'yxatidan olib tashlaydi."""
+    _send(lesson_id, {'type': 'mic_request_cancelled', 'student_id': student_id})
+
+
+def broadcast_camera_request_cancelled(lesson_id, student_id: str) -> None:
+    _send(lesson_id, {'type': 'camera_request_cancelled', 'student_id': student_id})
+
+
 def broadcast_camera_request(lesson_id, student_id: str, name: str) -> None:
     """O'quvchi kamera so'radi — `broadcast_mic_request` bilan bir xil naqsh."""
     _send(lesson_id, {'type': 'camera_request', 'student_id': student_id, 'name': name})

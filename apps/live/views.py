@@ -71,6 +71,24 @@ class AllowShareView(APIView):
         return Response({'ok': True})
 
 
+class CancelMicRequestView(APIView):
+    """O'quvchi: o'z mikrofon so'rovini bekor qilish — `DELETE /live/lesson/<id>/mic-request/` (idempotent, 204)."""
+
+    permission_classes = [RequirePerm('room.token')]
+
+    def delete(self, request, lesson_id):
+        services.cancel_mic_request(user=request.user, lesson_id=lesson_id, request=request)
+        return Response(status=204)
+
+
+class CancelCameraRequestView(APIView):
+    permission_classes = [RequirePerm('room.token')]
+
+    def delete(self, request, lesson_id):
+        services.cancel_camera_request(user=request.user, lesson_id=lesson_id, request=request)
+        return Response(status=204)
+
+
 class RequestMicView(APIView):
     """O'quvchi: mikrofon so'rash ("qo'l ko'tarish")."""
 

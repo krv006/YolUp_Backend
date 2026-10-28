@@ -350,6 +350,36 @@ def pending_mic_requests(lesson: Lesson) -> list[dict]:
 
 # ── Kamera ruxsati (2026-09-04: mikrofon bilan bir xil naqsh — avval erkin edi) ──
 
+def _cancel_media_request(*, kind: str, user: User, lesson_id, request=None) -> bool:
+    """O'quvchi o'zining kutayotgan mikrofon/kamera so'rovini bekor qiladi (idempotent). Qaytaradi: bekor qilingan-qilinmagani."""
+    from apps.board import realtime as board_realtime
+    from apps.lessons.models import CameraRequest, MicRequest
+
+    model, broadcast = (
+        (MicRequest, board_realtime.broadcast_mic_request_cancelled) if kind == 'mic'
+        else (CameraRequest, board_realtime.broadcast_camera_request_cancelled)
+    )
+    if not _is_uuid(lesson_id):
+        raise NotFound(_('Dars topilmadi.'))
+    deleted, _details = model.objects.filter(lesson_id=lesson_id, student=user).delete()
+    if deleted:
+        try:
+            broadcast(lesson_id, student_id=str(user.id))
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger('apps').exception('%s request cancel broadcast failed', kind)
+        audit.record(action=f'room.{kind}_request_cancel', actor=user, request=request)
+    return bool(deleted)
+
+
+def cancel_mic_request(*, user: User, lesson_id, request=None) -> bool:
+    return _cancel_media_request(kind='mic', user=user, lesson_id=lesson_id, request=request)
+
+
+def cancel_camera_request(*, user: User, lesson_id, request=None) -> bool:
+    return _cancel_media_request(kind='camera', user=user, lesson_id=lesson_id, request=request)
+
+
 def request_camera(*, user: User, lesson_id, request=None) -> None:
     """O'quvchi kamera so'raydi. `request_mic` bilan bir xil naqsh."""
     try:

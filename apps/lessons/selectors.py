@@ -107,6 +107,11 @@ def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
         card_series_end=Subquery(
             Lesson.objects.filter(recurrence_id=OuterRef('recurrence_id')).order_by('-starts_at').values('starts_at')[:1],
         ),
+        # Yozuv hozir ketyaptimi (jonli darsda REC belgisi): boshlangan vaqt yoki null
+        card_recording_started=Subquery(
+            LessonRecording.objects.filter(lesson=OuterRef('pk'), status=LessonRecording.Status.RECORDING)
+            .annotate(started=Coalesce('video_started_at', 'audio_started_at', 'created_at')).values('started')[:1],
+        ),
     ).prefetch_related(Prefetch(
         'assignments', queryset=Assignment.objects.exclude(status=Assignment.Status.DRAFT).order_by('created_at'),
         to_attr='card_assignments',
