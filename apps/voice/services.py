@@ -13,7 +13,7 @@ from apps.accounts.models import User
 from apps.core import audit
 from apps.lessons.models import Course, Enrollment
 
-from .models import VoiceRoom, VoiceRoomJoinRequest, VoiceRoomParticipant
+from .models import VoiceHand, VoiceRoom, VoiceRoomJoinRequest, VoiceRoomParticipant
 
 _ENROLLED = Enrollment.Status.APPROVED
 
@@ -28,6 +28,52 @@ def _is_member(course: Course, user: User) -> bool:
 
 def _is_owner_or_teacher(room: VoiceRoom, user: User) -> bool:
     return user.id == room.created_by_id or user.id == room.course.teacher_id
+
+
+def _hand_dict(hand: VoiceHand) -> dict:
+    return {
+        'user_id': str(hand.user_id), 'name': hand.user.get_full_name() or hand.user.username,
+        'status': hand.status, 'raised_at': hand.created_at,
+    }
+
+
+def raise_hand(*, user: User, room_id) -> dict:
+    room = _get_room(room_id)
+    if room.status != VoiceRoom.Status.LIVE:
+        raise ValidationError({'detail': _('Xona hozir jonli emas.')})
+    if not _is_member(room.course, user):
+        raise PermissionDenied(_("Bu xonaga kirish huquqingiz yo'q."))
+    hand, _created = VoiceHand.objects.get_or_create(room=room, user=user)
+    if hand.status != VoiceHand.Status.RAISED:
+        hand.status = VoiceHand.Status.RAISED
+        hand.save(update_fields=['status', 'updated_at'])
+    return _hand_dict(hand)
+
+
+def lower_hand(*, user: User, room_id) -> None:
+    VoiceHand.objects.filter(room_id=_get_room(room_id).id, user=user).delete()
+
+
+def list_hands(*, user: User, room_id) -> list:
+    room = _get_room(room_id)
+    if not _is_owner_or_teacher(room, user):
+        raise PermissionDenied(_("Qo'l ko'targanlar ro'yxatini faqat xona egasi ko'ra oladi."))
+    return [_hand_dict(h) for h in room.hands.select_related('user')]
+
+
+def answer_hand(*, user: User, room_id, target_user_id, allow: bool) -> list:
+    """Xona egasi: `allow=True` - so'zga chiqishga ruxsat (holat `allowed`), `False` - qo'lni tushirish (ro'yxatdan olib tashlash)."""
+    room = _get_room(room_id)
+    if not _is_owner_or_teacher(room, user):
+        raise PermissionDenied(_("Faqat xona egasi ruxsat bera oladi."))
+    qs = VoiceHand.objects.filter(room=room, user_id=target_user_id)
+    if not qs.exists():
+        raise NotFound(_("Bu a'zo qo'l ko'tarmagan."))
+    if allow:
+        qs.update(status=VoiceHand.Status.ALLOWED)
+    else:
+        qs.delete()
+    return list_hands(user=user, room_id=room_id)
 
 
 def _get_room(room_id) -> VoiceRoom:

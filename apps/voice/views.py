@@ -62,6 +62,24 @@ class VoiceRoomViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         room = services.close_room(user=request.user, room_id=pk, request=request)
         return Response(VoiceRoomSerializer(room).data)
 
+    @action(detail=True, methods=['get', 'post', 'delete'], url_path='raise-hand')
+    def raise_hand(self, request, pk=None):
+        """A'zo: `POST` - qo'l ko'tarish, `DELETE` - tushirish. Xona egasi: `GET` - ko'targanlar ro'yxati."""
+        if request.method == 'POST':
+            return Response(services.raise_hand(user=request.user, room_id=pk), status=status.HTTP_201_CREATED)
+        if request.method == 'DELETE':
+            services.lower_hand(user=request.user, room_id=pk)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(services.list_hands(user=request.user, room_id=pk))
+
+    @action(detail=True, methods=['post'], url_path=fr'raise-hand/(?P<user_id>{_UUID_RE})/allow')
+    def allow_hand(self, request, pk=None, user_id=None):
+        return Response(services.answer_hand(user=request.user, room_id=pk, target_user_id=user_id, allow=True))
+
+    @action(detail=True, methods=['post'], url_path=fr'raise-hand/(?P<user_id>{_UUID_RE})/dismiss')
+    def dismiss_hand(self, request, pk=None, user_id=None):
+        return Response(services.answer_hand(user=request.user, room_id=pk, target_user_id=user_id, allow=False))
+
     @action(detail=True, methods=['post'], url_path='request-join')
     def request_join(self, request, pk=None):
         join_request = services.request_join(user=request.user, room_id=pk, request=request)

@@ -97,3 +97,20 @@ class VoiceRoomParticipant(TimeStampedUUIDModel):
     def __str__(self):
         state = 'ichkarida' if self.left_at is None else 'chiqqan'
         return f'{self.user.username} · {self.room} · {state}'
+
+
+class VoiceHand(TimeStampedUUIDModel):
+    """Ovozli xonada "qo'l ko'tarish": a'zo so'zga chiqishni so'raydi, xona egasi/o'qituvchi ruxsat beradi yoki rad etadi.
+    (Ovozli xonada mikrofon hamma uchun ochiq — ruxsat "navbat" signali: kim gapirishi kerakligini ko'rsatadi.)"""
+
+    class Status(TextChoices):
+        RAISED = 'raised', "Qo'l ko'tardi"
+        ALLOWED = 'allowed', 'Ruxsat berildi'
+
+    room = ForeignKey(VoiceRoom, CASCADE, related_name='hands')
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='+')
+    status = CharField(max_length=8, choices=Status.choices, default=Status.RAISED)
+
+    class Meta:
+        ordering = ['created_at']
+        constraints = [UniqueConstraint(fields=['room', 'user'], name='unique_voice_hand')]
