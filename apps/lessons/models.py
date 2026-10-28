@@ -79,6 +79,17 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
     def __str__(self):
         return f'{self.title} — {self.teacher.username}'
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or 'avatar' in update_fields:
+            # Guruh rasmi kursda va chat xonasida DOIM bir xil bo'lsin (ro'yxat/jadval/chat bir xil rasmni ko'rsatadi)
+            from apps.chat.models import ChatRoom
+
+            ChatRoom.objects.filter(course_id=self.pk, kind=ChatRoom.Kind.COURSE).exclude(
+                image=self.avatar.name or None,
+            ).update(image=self.avatar.name or None)
+
 
 class Enrollment(TimeStampedUUIDModel):
     class Status(TextChoices):

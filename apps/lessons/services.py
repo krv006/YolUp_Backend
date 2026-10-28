@@ -1141,4 +1141,25 @@ def publish_recording_message(lesson: Lesson, title: str):
     # send_message bilan bir xil: WebSocket'ga darhol tarqatamiz, aks holda
     # chat qayta ochilmaguncha (yoki sahifa yangilanmaguncha) ko'rinmay turadi.
     transaction.on_commit(lambda: realtime.broadcast_message(message))
+    _notify_recording_ready(lesson, title)
     return message
+
+
+def _notify_recording_ready(lesson: Lesson, title: str) -> None:
+    """Yozuv tayyor bo'lganda guruh o'quvchilariga bildirishnoma ("Ochish" -> dars yozuvi sahifasi)."""
+    import logging
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    student_ids = list(lesson.course.enrollments.filter(status=Enrollment.Status.APPROVED).values_list('student_id', flat=True))
+    if not student_ids:
+        return
+    try:
+        send_notification(
+            sender=lesson.course.teacher, description=_('Dars yozuvi tayyor: %(title)s') % {'title': title},
+            target_type=Notification.Target.USERS, user_ids=student_ids, kind='recording_ready',
+            link_type='recording', link_id=str(lesson.id),
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma xatosi yozuv e'lonini to'xtatmasin
+        logging.getLogger('apps').exception('recording_ready notification failed')

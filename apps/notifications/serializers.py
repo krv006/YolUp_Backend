@@ -36,6 +36,8 @@ KIND_TITLES = {
     'lesson_cancelled': 'Dars bekor qilindi', 'exam_scheduled': 'Imtihon belgilandi',
     'teacher_approved': 'Hisob tasdiqlandi', 'teacher_pending_approval': 'Tasdiq kutilmoqda',
     'chat_message': 'Yangi xabar',
+    'certificate_verified': 'Sertifikat tasdiqlandi', 'certificate_rejected': 'Sertifikat rad etildi',
+    'certificate_pending': 'Sertifikat tekshiruvi', 'recording_ready': 'Dars yozuvi tayyor', 'disk_alert': 'Disk to\'lmoqda',
 }
 
 

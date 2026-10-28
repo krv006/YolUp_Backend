@@ -264,6 +264,10 @@ def set_group_image(*, teacher: User, room_id, image, request=None) -> ChatRoom:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi guruh rasmini o'zgartira oladi."))
     room.image = image
     room.save(update_fields=['image', 'updated_at'])
+    # Kurs ro'yxatlari ham shu rasmni ko'rsatadi (`/courses/` -> `avatar`) — bir xil fayl
+    from apps.lessons.models import Course
+
+    Course.objects.filter(pk=room.course_id).update(avatar=room.image.name)
     audit.record(action='chat.group_image_set', actor=teacher, target=room, request=request)
     return room
 

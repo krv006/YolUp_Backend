@@ -20,6 +20,9 @@ from apps.core import audit
 from apps.lessons import services as lesson_services
 from apps.lessons.models import AttentionCheck, Enrollment, FocusAlert, FocusEvent, Lesson, LessonBan
 
+# O'qituvchi tokenidagi publish ruxsatlari (LiveKit `canPublishSources`)
+TEACHER_PUBLISH_SOURCES = ('camera', 'microphone', 'screen_share', 'screen_share_audio')
+
 ATTENTION_WINDOW_SEC = 15  # popup ekranda turadigan vaqt (EduTech.docx)
 ATTENTION_GRACE_SEC = 8    # tarmoq kechikishi uchun qo'shimcha imkon
 
@@ -134,7 +137,9 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
                 room_admin=is_teacher,
                 can_publish=is_teacher,
                 can_subscribe=True,
-                can_publish_sources=None if is_teacher else [],
+                # O'qituvchi: manbalar ANIQ yozilgan (bo'sh/None "hammasi mumkin" degani, lekin mobil mijoz
+                # `canPublishSources` ni o'qib mikrofon/kamera tugmalarini o'chirib qo'yardi)
+                can_publish_sources=list(TEACHER_PUBLISH_SOURCES) if is_teacher else [],
             )
         )
     )
