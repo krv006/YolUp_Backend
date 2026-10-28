@@ -226,7 +226,67 @@ def student_own_stats(student: User) -> dict:
         }
         for attempt in attempts[:20]
     ]
-    return {**_attempt_summary(attempts), 'recent_attempts': recent}
+    return {**_attempt_summary(attempts), 'recent_attempts': recent, **_student_overview(student, attempts)}
+
+
+def _student_overview(student: User, attempts) -> dict:
+    """Asosiy sahifa va Tahlil uchun tayyor ko'rsatkichlar (frontend har kurs uchun alohida so'rov yubormasligi uchun):
+    o'rtacha baho, oxirgi 30 kun davomati, vazifani o'z vaqtida topshirish va kurslar kesimi."""
+    from datetime import timedelta
+
+    from apps.homework.models import Assignment, Submission
+
+    now = timezone.now()
+    course_ids = list(Enrollment.objects.filter(student=student, status=_ENROLLED).values_list('course_id', flat=True))
+
+    graded = Submission.objects.filter(
+        student=student, status=Submission.Status.DONE, grade_value__isnull=False, assignment__grading='five',
+    )
+    grade = graded.aggregate(avg=Avg('grade_value'), n=Count('id'))
+    grade_by_course = {row['assignment__course_id']: row['avg'] for row in graded.order_by().values('assignment__course_id').annotate(
+        avg=Avg('grade_value'))}
+
+    month_ago = now - timedelta(days=30)
+    finished = Lesson.objects.filter(course_id__in=course_ids, status=_FINISHED, starts_at__gte=month_ago, starts_at__lte=now)
+    total_lessons = finished.count()
+    attended = Attendance.objects.filter(student=student, lesson__in=finished, joined_at__isnull=False).values('lesson').distinct().count()
+
+    due = Submission.objects.filter(student=student, assignment__due_at__isnull=False).select_related('assignment')
+    due_total = due.count()
+    on_time = sum(1 for item in due if item.created_at <= item.assignment.due_at)
+
+    quiz_by_course = {row['quiz__course_id']: row['avg'] for row in attempts.order_by().annotate(
+        pct=F('score') * 100.0 / F('max_score')).values('quiz__course_id').annotate(avg=Avg('pct'))}
+    titles = dict(Course.objects.filter(pk__in=course_ids).values_list('id', 'title'))
+    return {
+        'avg_grade': round(grade['avg'], 1) if grade['avg'] is not None else None,
+        'grades_count': grade['n'],
+        'attendance_rate_month': round(attended * 100 / total_lessons) if total_lessons else None,
+        'lessons_attended': attended,
+        'lessons_missed': max(total_lessons - attended, 0),
+        'homework_on_time_rate': round(on_time * 100 / due_total) if due_total else None,
+        'courses': [{
+            'course_id': str(course_id), 'course_title': titles.get(course_id, ''),
+            'test_avg': round(quiz_by_course[course_id], 1) if quiz_by_course.get(course_id) is not None else None,
+            'grade_avg': round(grade_by_course[course_id], 1) if grade_by_course.get(course_id) is not None else None,
+        } for course_id in course_ids],
+    }
+
+
+def student_trends(student: User, period: str) -> dict:
+    """O'quvchining test o'rtachasi vaqt qatori (`quiz_avg_score`, har kesim uchun foiz yoki None)."""
+    count = PERIOD_BUCKET_COUNTS[period]
+    now = timezone.localtime(timezone.now())
+    edges = _period_edges(period, count, now)
+    labels = [_format_label(period, edges[i]) for i in range(count)]
+    values = QuizAttempt.objects.filter(
+        student=student, max_score__gt=0, created_at__gte=edges[0], created_at__lt=edges[-1],
+    ).annotate(pct=F('score') * 100.0 / F('max_score')).aggregate(**{
+        f'b{i}': Avg('pct', filter=_bucket('created_at', edges[i], edges[i + 1])) for i in range(count)})
+    return {
+        'period': period, 'labels': labels,
+        'quiz_avg_score': [round(values[f'b{i}'], 1) if values[f'b{i}'] is not None else None for i in range(count)],
+    }
 
 
 def teacher_course_breakdown(teacher: User) -> list[dict]:

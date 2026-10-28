@@ -124,7 +124,7 @@ class TeacherAnalyticsTests(ScheduleBase):
     def test_validation_and_roles(self):
         self.assertEqual(self.api(self.teacher).get('/api/v1/analytics/me/trends/?period=hour').status_code, 400)
         self.assertEqual(self.api(self.teacher).get('/api/v1/analytics/me/trends/').json()['period'], 'week')  # standart
-        self.assertEqual(self.api(self.student).get('/api/v1/analytics/me/trends/').status_code, 403)
+        self.assertEqual(self.api(self.student).get('/api/v1/analytics/me/trends/').status_code, 200)  # o'quvchi ham o'z trendini ko'radi (yangi dizayn)
 
     def test_overall_attendance_rate_in_my_analytics(self):
         lesson = Lesson.objects.create(course=self.course, starts_at=timezone.now() - timedelta(days=1), status=Lesson.Status.FINISHED)

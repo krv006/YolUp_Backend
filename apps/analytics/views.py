@@ -52,11 +52,13 @@ class MyTrendsView(APIView):
     permission_classes = [RequirePerm('stats.view_own')]
 
     def get(self, request):
-        if request.user.role != User.Role.TEACHER:
-            raise PermissionDenied(_("Faqat o'qituvchi uchun."))
+        if request.user.role not in (User.Role.TEACHER, User.Role.STUDENT):
+            raise PermissionDenied(_("Faqat o'qituvchi va o'quvchi uchun."))
         period = request.query_params.get('period', 'week')
         if period not in selectors.PERIOD_BUCKET_COUNTS:
             raise ValidationError({'period': _("Noto'g'ri davr — day/week/month/year bo'lishi kerak.")})
+        if request.user.role == User.Role.STUDENT:
+            return Response(selectors.student_trends(request.user, period))
         return Response(selectors.teacher_trends(request.user, period))
 
 
