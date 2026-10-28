@@ -469,13 +469,23 @@ class AttemptListSerializer(serializers.ModelSerializer):
     attempt_no = serializers.SerializerMethodField()
     correct_count = serializers.SerializerMethodField()
     question_count = serializers.SerializerMethodField()
+    answers = serializers.SerializerMethodField()
 
     class Meta:
         model = QuizAttempt
         fields = [
             'id', 'quiz', 'student', 'student_name', 'student_full_name', 'student_avatar_url', 'attempt_no',
-            'score', 'max_score', 'created_at', 'duration_seconds', 'correct_count', 'question_count',
+            'score', 'max_score', 'created_at', 'duration_seconds', 'correct_count', 'question_count', 'answers',
         ]
+
+    def get_answers(self, obj):
+        """Savol-savol natija (o'quvchi/ota-onada doim; o'qituvchida `?include=answers` bilan)."""
+        if not self.context.get('with_answers'):
+            return None
+        return [{
+            'question_id': str(a.question_id), 'order': a.question.order, 'label': ' '.join((a.question.text or '').split())[:120],
+            'type': a.question.type, 'is_correct': a.is_correct, 'earned_points': a.earned_points, 'given': a.given_display,
+        } for a in obj.answers.all()]
 
     def get_correct_count(self, obj) -> int:
         # View `Subquery` bilan to'ldiradi (har urinish uchun alohida so'rov ketmasligi uchun)

@@ -276,3 +276,15 @@ class AiQuizJob(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.topic} [{self.status}]'
+
+
+class QuizDraft(TimeStampedUUIDModel):
+    """O'quvchining tugallanmagan javoblari ("Keyinroq davom etish") — boshqa qurilmadan ham davom ettirish uchun."""
+
+    quiz = ForeignKey(Quiz, CASCADE, related_name='drafts')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='quiz_drafts')
+    answers = JSONField(default=list)
+    elapsed_seconds = PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['quiz', 'student'], name='unique_quiz_draft')]

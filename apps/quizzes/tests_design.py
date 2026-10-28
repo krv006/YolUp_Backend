@@ -65,7 +65,7 @@ class QuestionStatsTests(DesignBase):
         self.auth(self.teacher_token)
         self.assertEqual(self.client.get(f'/api/v1/quizzes/{self.quiz["id"]}/stats/').json(), [])
         self.auth(self.child_token)
-        self.assertEqual(self.client.get(f'/api/v1/quizzes/{self.quiz["id"]}/stats/').status_code, 403)
+        self.assertEqual(self.client.get(f'/api/v1/quizzes/{self.quiz["id"]}/stats/').status_code, 200)
         self.auth(self.parent_token)
         self.assertEqual(self.client.get(f'/api/v1/quizzes/{self.quiz["id"]}/stats/').status_code, 403)
 

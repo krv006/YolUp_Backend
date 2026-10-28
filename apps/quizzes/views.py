@@ -18,7 +18,7 @@ from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
 from . import ai_jobs, attempts_export, export, selectors, services
-from .models import AiQuizJob, AnswerResponse, Question, Quiz
+from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizDraft
 from .serializers import (
     AiQuizCreateSerializer,
     AiQuizJobSerializer,
@@ -296,9 +296,10 @@ class QuizDetailView(APIView):
     def get(self, request, pk):
         quiz = _get_quiz(request.user, pk)
         context = {'request': request}
-        if request.user.role in _STAFF_ROLES:
-            return Response(QuizDetailSerializer(quiz, context=context).data)
-        return Response(QuizTakeSerializer(quiz, context=context).data)
+        serializer = QuizDetailSerializer if request.user.role in _STAFF_ROLES else QuizTakeSerializer
+        data = dict(serializer(quiz, context=context).data)
+        data['group_avg_percentage'] = services.group_avg_percentage(quiz)
+        return Response(data)
 
     def patch(self, request, pk):
         """Faqat metadata (mavzu/nom/tavsif/muddat/ochilish vaqti) — savollar
@@ -370,7 +371,10 @@ class QuizAttemptListCreateView(APIView):
                 output_field=IntegerField(),
             ), 0),
         )
-        return Response(AttemptListSerializer(attempts, many=True, context={'request': request}).data)
+        with_answers = request.user.role not in _STAFF_ROLES or request.query_params.get('include') == 'answers'
+        if with_answers:
+            attempts = attempts.prefetch_related(Prefetch('answers', queryset=AnswerResponse.objects.select_related('question')))
+        return Response(AttemptListSerializer(attempts, many=True, context={'request': request, 'with_answers': with_answers}).data)
 
     def post(self, request, pk):
         quiz = _get_quiz(request.user, pk)
@@ -383,6 +387,51 @@ class QuizAttemptListCreateView(APIView):
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
 
+class QuizDraftView(APIView):
+    """O'quvchi: tugallanmagan javoblar — `GET` / `PUT {answers, elapsed_seconds}` / `DELETE`."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.attempt')()]
+
+    def get(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        draft = QuizDraft.objects.filter(quiz=quiz, student=request.user).first()
+        if draft is None:
+            return Response({'answers': [], 'elapsed_seconds': 0, 'updated_at': None})
+        return Response({'answers': draft.answers, 'elapsed_seconds': draft.elapsed_seconds, 'updated_at': draft.updated_at})
+
+    def put(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        answers = request.data.get('answers')
+        if not isinstance(answers, list) or len(answers) > 500:
+            raise ValidationError({'answers': _("`answers` ro'yxat bo'lishi kerak (ko'pi bilan 500 ta).")})
+        try:
+            elapsed = max(0, int(request.data.get('elapsed_seconds') or 0))
+        except (TypeError, ValueError):
+            raise ValidationError({'elapsed_seconds': _("Son bo'lishi kerak.")}) from None
+        draft, _created = QuizDraft.objects.update_or_create(
+            quiz=quiz, student=request.user, defaults={'answers': answers, 'elapsed_seconds': elapsed},
+        )
+        return Response({'answers': draft.answers, 'elapsed_seconds': draft.elapsed_seconds, 'updated_at': draft.updated_at})
+
+    def delete(self, request, pk):
+        QuizDraft.objects.filter(quiz=_get_quiz(request.user, pk), student=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QuizShareResultsView(APIView):
+    """O'qituvchi: natijalarni guruh chatiga yuboradi (`{to: "group_chat"}`, ixtiyoriy `parents: true` — ota-onalarga bildirishnoma)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def post(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        return Response(services.share_results(
+            teacher=request.user, quiz=quiz, to=request.data.get('to') or 'group_chat', parents=bool(request.data.get('parents')),
+        ))
+
+
 class QuizStatsView(APIView):
     """O'qituvchi: savollar bo'yicha statistika — `[{question_id, order, label, wrong_rate, attempts_count}]`,
     eng ko'p xato qilinganlari birinchi (`wrong_rate` — foiz). Insho savollari kirmaydi."""
@@ -392,8 +441,8 @@ class QuizStatsView(APIView):
 
     def get(self, request, pk):
         quiz = _get_quiz(request.user, pk)
-        if request.user.role not in _STAFF_ROLES:
-            raise PermissionDenied(_("Savollar statistikasi faqat o'qituvchiga."))
+        if request.user.role not in (*_STAFF_ROLES, User.Role.STUDENT):
+            raise PermissionDenied(_("Savollar statistikasi faqat o'qituvchi va o'quvchiga."))
         questions = list(quiz.questions.exclude(type=Question.Type.ESSAY).order_by('order', 'created_at'))
         rows = {
             row['question']: row for row in AnswerResponse.objects.filter(attempt__quiz=quiz).values('question').annotate(

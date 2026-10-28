@@ -462,3 +462,57 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds
     attempt.max_score = sum(q.points for q in questions if q.type != T.ESSAY)  # insho avtomatik baholanmaydi
     attempt.save(update_fields=['score', 'max_score'])
     return attempt
+
+
+def group_avg_percentage(quiz) -> float | None:
+    """Guruh o'rtachasi: har urinishning foizi (ball / maksimum) o'rtachasi; urinish yo'q bo'lsa None."""
+    from django.db.models import Avg, ExpressionWrapper, F, FloatField
+
+    value = quiz.attempts.filter(max_score__gt=0).aggregate(
+        avg=Avg(ExpressionWrapper(F('score') * 100.0 / F('max_score'), output_field=FloatField())),
+    )['avg']
+    return round(value, 1) if value is not None else None
+
+
+def share_results(*, teacher, quiz, to: str = 'group_chat', parents: bool = False) -> dict:
+    """Test natijalarini (har o'quvchining eng yaxshi urinishi) guruh chatiga yuboradi; `parents` — ota-onalarga ham bildirishnoma."""
+    from django.db.models import Max
+
+    from apps.accounts.models import ParentChildLink
+    from apps.chat import services as chat_services
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    if quiz.course.teacher_id != teacher.id and teacher.role not in ('admin', 'super_admin'):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    if to != 'group_chat':
+        raise ValidationError({'to': _("Hozircha faqat 'group_chat'.")})
+    best = {}
+    for attempt in quiz.attempts.filter(max_score__gt=0).select_related('student'):
+        percent = attempt.score * 100 / attempt.max_score
+        if attempt.student_id not in best or percent > best[attempt.student_id][1]:
+            best[attempt.student_id] = (attempt.student, percent, attempt.score, attempt.max_score)
+    if not best:
+        raise ValidationError({'detail': _("Hali hech kim bu testni topshirmagan.")})
+    rows = sorted(best.values(), key=lambda row: (-row[1], (row[0].get_full_name() or row[0].username).lower()))
+    lines = [f'📊 «{quiz.title}» natijalari']
+    lines += [
+        f"{index}. {student.get_full_name() or student.username} — {score:g}/{max_score:g} ({percent:.0f}%)"
+        for index, (student, percent, score, max_score) in enumerate(rows, 1)
+    ]
+    text = '\n'.join(lines)[:3500]
+    room = chat_services.ensure_course_room(quiz.course)
+    message = chat_services.send_message(user=teacher, room_id=room.id, text=text)
+    notified = 0
+    if parents:
+        parent_ids = list(ParentChildLink.objects.filter(
+            student_id__in=list(best), status=ParentChildLink.Status.APPROVED,
+        ).values_list('student_id', flat=True).distinct())
+        if parent_ids:
+            send_notification(
+                sender=teacher, description=_("«%(title)s» test natijalari e'lon qilindi.") % {'title': quiz.title},
+                target_type=Notification.Target.PARENTS_OF, user_ids=parent_ids, kind='quiz_result', link_type='quiz',
+                link_id=str(quiz.id),
+            )
+            notified = len(parent_ids)
+    return {'ok': True, 'message_id': str(message.id), 'students': len(rows), 'parents_notified': notified}
