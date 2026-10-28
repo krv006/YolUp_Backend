@@ -18,6 +18,7 @@ from apps.core.permissions import RequirePerm
 from . import selectors, services, sessions
 from .models import User, UserSession
 from .serializers import (
+    AdminCertificateSerializer,
     CertificateSerializer,
     ChildCreateSerializer,
     ConsentSerializer,
@@ -645,12 +646,47 @@ class CertificateListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         certificate = services.upload_certificate(
             teacher=request.user, file=serializer.validated_data['file'],
-            title=serializer.validated_data.get('title', ''),
+            title=serializer.validated_data.get('title', ''), issuer=serializer.validated_data.get('issuer', ''),
+            issued_year=serializer.validated_data.get('issued_year'),
         )
         return Response(
             CertificateSerializer(certificate, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class AdminCertificateListView(generics.ListAPIView):
+    """Admin: sertifikatlar ro'yxati — `?status=pending|verified|rejected` (standart: pending)."""
+
+    permission_classes = [RequirePerm('user.manage')]
+    serializer_class = AdminCertificateSerializer
+
+    def get_queryset(self):
+        from .models import TeacherCertificate
+
+        wanted = self.request.query_params.get('status', TeacherCertificate.Status.PENDING)
+        qs = TeacherCertificate.objects.select_related('teacher')
+        return qs if wanted == 'all' else qs.filter(status=wanted)
+
+
+class AdminCertificateVerifyView(APIView):
+    permission_classes = [RequirePerm('user.manage')]
+
+    def post(self, request, pk):
+        certificate = services.review_certificate(admin=request.user, certificate_id=pk, verify=True, request=request)
+        return Response(AdminCertificateSerializer(certificate, context={'request': request}).data)
+
+
+class AdminCertificateRejectView(APIView):
+    """`{reason}` majburiy — o'qituvchi sababni ko'radi."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def post(self, request, pk):
+        certificate = services.review_certificate(
+            admin=request.user, certificate_id=pk, verify=False, reason=request.data.get('reason', ''), request=request,
+        )
+        return Response(AdminCertificateSerializer(certificate, context={'request': request}).data)
 
 
 class CertificateDeleteView(APIView):

@@ -692,8 +692,56 @@ def login_history(*, viewer: User, student_id=None, limit: int = 50, request=Non
     return result
 
 
-def upload_certificate(*, teacher: User, file, title: str = '') -> TeacherCertificate:
-    return TeacherCertificate.objects.create(teacher=teacher, file=file, title=title)
+def upload_certificate(*, teacher: User, file, title: str = '', issuer: str = '', issued_year=None) -> TeacherCertificate:
+    certificate = TeacherCertificate.objects.create(
+        teacher=teacher, file=file, title=title, issuer=issuer, issued_year=issued_year,
+    )
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    for admin in User.objects.filter(role=User.Role.ADMIN, is_active=True):
+        try:
+            send_notification(
+                sender=teacher, description=_("Yangi sertifikat tekshiruvni kutmoqda: %(name)s") % {
+                    'name': teacher.get_full_name() or teacher.username},
+                target_type=Notification.Target.USER, user_id=admin.id, kind='certificate_pending',
+                link_type='certificate', link_id=str(certificate.id),
+            )
+        except Exception:  # noqa: BLE001 — bildirishnoma yuklashni to'xtatmasin
+            pass
+    return certificate
+
+
+@transaction.atomic
+def review_certificate(*, admin: User, certificate_id, verify: bool, reason: str = '', request=None) -> TeacherCertificate:
+    """Admin sertifikatni tasdiqlaydi yoki rad etadi (sabab bilan); egasiga bildirishnoma boradi."""
+    try:
+        certificate = TeacherCertificate.objects.select_related('teacher').get(pk=certificate_id)
+    except (TeacherCertificate.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_('Sertifikat topilmadi.'))
+    reason = (reason or '').strip()
+    if not verify and not reason:
+        raise ValidationError({'reason': _('Rad etish sababini yozing.')})
+    certificate.status = TeacherCertificate.Status.VERIFIED if verify else TeacherCertificate.Status.REJECTED
+    certificate.reject_reason = '' if verify else reason[:1000]
+    certificate.verified_at = timezone.now() if verify else None
+    certificate.reviewed_by = admin
+    certificate.save(update_fields=['status', 'reject_reason', 'verified_at', 'reviewed_by', 'updated_at'])
+    audit.record(
+        action='certificate.verify' if verify else 'certificate.reject', actor=admin, target=certificate,
+        meta={'reason': reason} if not verify else {}, request=request,
+    )
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    text = (_('Sertifikatingiz tasdiqlandi: %(title)s') if verify else _('Sertifikatingiz rad etildi: %(title)s. Sabab: %(reason)s')) % {
+        'title': certificate.title or certificate.file.name.split('/')[-1], 'reason': reason}
+    transaction.on_commit(lambda: send_notification(
+        sender=admin, description=text, target_type=Notification.Target.USER, user_id=certificate.teacher_id,
+        kind='certificate_verified' if verify else 'certificate_rejected', link_type='certificate', link_id=str(certificate.id),
+    ))
+    return certificate
 
 
 def delete_certificate(*, teacher: User, certificate_id) -> None:

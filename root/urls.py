@@ -13,6 +13,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/health/', HealthView.as_view(), name='health'),
     path('api/v1/auth/', include('apps.accounts.urls')),
+    path('api/v1/admin/', include('apps.accounts.admin_urls')),
     path('api/v1/', include('apps.lessons.urls')),
     path('api/v1/live/', include('apps.live.urls')),
     path('api/v1/voice-rooms/', include('apps.voice.urls')),

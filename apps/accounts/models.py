@@ -17,6 +17,7 @@ from django.db.models import (
     Index,
     PositiveIntegerField,
     PositiveSmallIntegerField,
+    SET_NULL,
     TextChoices,
     TextField,
     UniqueConstraint,
@@ -163,6 +164,18 @@ class TeacherCertificate(TimeStampedUUIDModel):
     teacher = ForeignKey('accounts.User', CASCADE, related_name='certificates')
     file = FileField(upload_to=certificate_path)
     title = CharField(max_length=200, blank=True)
+    issuer = CharField(max_length=200, blank=True, default='')
+    issued_year = PositiveSmallIntegerField(null=True, blank=True)
+
+    class Status(TextChoices):
+        PENDING = 'pending', 'Tekshirilmoqda'
+        VERIFIED = 'verified', 'Tasdiqlangan'
+        REJECTED = 'rejected', 'Rad etilgan'
+
+    status = CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
+    reject_reason = TextField(blank=True, default='')
+    verified_at = DateTimeField(null=True, blank=True)
+    reviewed_by = ForeignKey('accounts.User', SET_NULL, null=True, blank=True, related_name='reviewed_certificates')
 
     class Meta:
         ordering = ['-created_at']

@@ -32,10 +32,44 @@ def username_validators():
 
 
 class CertificateSerializer(serializers.ModelSerializer):
+    """`verified` (eski mijozlar uchun) — `status == 'verified'` bilan bir xil."""
+
+    verified = serializers.SerializerMethodField()
+
     class Meta:
         model = TeacherCertificate
-        fields = ['id', 'file', 'title', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = [
+            'id', 'file', 'title', 'issuer', 'issued_year', 'status', 'reject_reason', 'verified', 'verified_at', 'created_at',
+        ]
+        read_only_fields = ['id', 'status', 'reject_reason', 'verified', 'verified_at', 'created_at']
+
+    def get_verified(self, obj) -> bool:
+        return obj.status == TeacherCertificate.Status.VERIFIED
+
+    def validate_issued_year(self, value):
+        from datetime import date
+
+        if value is not None and not (1950 <= value <= date.today().year + 1):
+            raise serializers.ValidationError(_("Yil noto'g'ri."))
+        return value
+
+
+class AdminCertificateSerializer(CertificateSerializer):
+    """Admin tekshiruv ro'yxati: sertifikat + egasi."""
+
+    owner = serializers.SerializerMethodField()
+
+    class Meta(CertificateSerializer.Meta):
+        fields = CertificateSerializer.Meta.fields + ['owner']
+
+    def get_owner(self, obj) -> dict:
+        teacher = obj.teacher
+        request = self.context.get('request')
+        avatar = teacher.avatar.url if teacher.avatar else None
+        return {
+            'id': str(teacher.id), 'name': teacher.get_full_name() or teacher.username, 'username': teacher.username,
+            'role': teacher.role, 'avatar': request.build_absolute_uri(avatar) if (avatar and request) else avatar,
+        }
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -65,9 +99,12 @@ class UserSerializer(serializers.ModelSerializer):
         cache = self.context.setdefault('_teacher_certificates', {})
         if obj.pk not in cache:
             request = self.context.get('request')
-            cache[obj.pk] = CertificateSerializer(
-                obj.certificates.all(), many=True, context={'request': request},
-            ).data
+            certificates = obj.certificates.all()
+            viewer = getattr(request, 'user', None)
+            if getattr(viewer, 'pk', None) != obj.pk:
+                # Boshqalarga (o'quvchi, ota-ona...) faqat TASDIQLANGAN sertifikatlar ko'rinadi; egasi hammasini ko'radi
+                certificates = certificates.filter(status=TeacherCertificate.Status.VERIFIED)
+            cache[obj.pk] = CertificateSerializer(certificates, many=True, context={'request': request}).data
         return cache[obj.pk]
 
     def _rating_stats(self, obj):
