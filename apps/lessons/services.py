@@ -14,7 +14,7 @@ from apps.accounts import selectors as account_selectors
 from apps.accounts.models import User
 from apps.core import audit
 
-from .models import Attendance, Course, Enrollment, Lesson, LessonReminder
+from .models import Attendance, Course, Enrollment, Lesson, LessonReminder, ReminderPref
 
 
 @transaction.atomic
@@ -611,6 +611,82 @@ def auto_finish_expired_lessons(*, now=None) -> int:
     return finished
 
 
+def _can_see_lesson(user: User, lesson: Lesson) -> bool:
+    return lessons_visible_to(user).filter(pk=lesson.pk).exists()
+
+
+def lessons_visible_to(user: User):
+    from . import selectors
+
+    return selectors.lessons_for(user)
+
+
+def set_lesson_reminder(*, user: User, lesson_id, minutes_before=None) -> ReminderPref:
+    """"Eslatma qo'yish": shu dars boshlanishidan `minutes_before` (1-1440) daqiqa oldin shaxsiy bildirishnoma."""
+    try:
+        lesson = Lesson.objects.get(pk=lesson_id)
+    except (Lesson.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_('Dars topilmadi.'))
+    if not _can_see_lesson(user, lesson):
+        raise NotFound(_('Dars topilmadi.'))
+    if lesson.status != Lesson.Status.SCHEDULED:
+        raise ValidationError({'detail': _("Faqat boshlanmagan darsga eslatma qo'yiladi.")})
+    minutes = _reminder_minutes(minutes_before, user)
+    pref, _created = ReminderPref.objects.update_or_create(
+        user=user, kind=ReminderPref.Kind.LESSON, target_id=lesson.id, defaults={'minutes_before': minutes, 'sent_at': None},
+    )
+    return pref
+
+
+def _reminder_minutes(value, user: User) -> int:
+    if value in (None, ''):
+        return user.lesson_reminder_minutes or 15
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        raise ValidationError({'minutes_before': _("Daqiqa son bo'lishi kerak.")})
+    if not 1 <= minutes <= 1440:
+        raise ValidationError({'minutes_before': _("1 dan 1440 gacha (24 soat).")})
+    return minutes
+
+
+def clear_reminder(*, user: User, kind: str, target_id) -> None:
+    ReminderPref.objects.filter(user=user, kind=kind, target_id=target_id).delete()
+
+
+def send_personal_reminders(*, now=None) -> int:
+    """Shaxsiy eslatmalar (dars va imtihon): vaqti kelganlarini yuboradi (bir marta — `sent_at`)."""
+    from apps.exams.models import Exam
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    now = now or timezone.now()
+    sent = 0
+    due = ReminderPref.objects.filter(sent_at__isnull=True).select_related('user')
+    for pref in due:
+        if pref.kind == ReminderPref.Kind.LESSON:
+            target = Lesson.objects.filter(pk=pref.target_id, status=Lesson.Status.SCHEDULED).select_related('course').first()
+            title, link, kind = (target.title or target.course.title) if target else '', 'lesson', 'lesson_reminder'
+            sender = target.course.teacher if target else None
+        else:
+            target = Exam.objects.filter(pk=pref.target_id).select_related('course').first()
+            title, link, kind = target.title if target else '', 'exam', 'exam_reminder'
+            sender = target.course.teacher if target else None
+        starts_at = target.starts_at if target else None
+        if target is None or starts_at <= now:
+            ReminderPref.objects.filter(pk=pref.pk).delete()  # dars/imtihon o'tib ketgan, bekor yoki o'chirilgan
+            continue
+        if now < starts_at - timedelta(minutes=pref.minutes_before):
+            continue
+        send_notification(
+            sender=sender, description=f'«{title}» {pref.minutes_before} daqiqadan keyin boshlanadi.',
+            target_type=Notification.Target.USER, user_id=pref.user_id, kind=kind, link_type=link, link_id=str(pref.target_id),
+        )
+        ReminderPref.objects.filter(pk=pref.pk).update(sent_at=now)
+        sent += 1
+    return sent
+
+
 def send_lesson_reminders(*, now=None) -> int:
     """"Dars N daqiqadan keyin boshlanadi" bildirishnomasi — o'qituvchi va
     kursga APPROVED yozilgan har bir o'quvchi uchun, har biri o'zining
@@ -637,6 +713,9 @@ def send_lesson_reminders(*, now=None) -> int:
         .select_related('course', 'course__teacher')
     )
     sent = 0
+    personal = set(ReminderPref.objects.filter(
+        kind=ReminderPref.Kind.LESSON, target_id__in=[lesson.id for lesson in lessons],
+    ).values_list('target_id', 'user_id'))
     for lesson in lessons:
         participants = [lesson.course.teacher] + list(
             User.objects.filter(
@@ -644,6 +723,8 @@ def send_lesson_reminders(*, now=None) -> int:
             )
         )
         for user in participants:
+            if (lesson.id, user.id) in personal:
+                continue  # shaxsiy eslatma shu dars uchun umumiy sozlamani almashtiradi (pastda yuboriladi)
             remind_at = lesson.starts_at - timedelta(minutes=user.lesson_reminder_minutes)
             if now < remind_at or LessonReminder.objects.filter(lesson=lesson, user=user).exists():
                 continue
@@ -658,7 +739,7 @@ def send_lesson_reminders(*, now=None) -> int:
             )
             LessonReminder.objects.create(lesson=lesson, user=user)
             sent += 1
-    return sent
+    return sent + send_personal_reminders(now=now)
 
 
 def _ensure_recording_finalized(lesson: Lesson) -> None:

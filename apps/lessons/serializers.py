@@ -110,6 +110,9 @@ class LessonSerializer(serializers.ModelSerializer):
     recording_started_at = serializers.SerializerMethodField()
     # "Davomat ochiq" kartasi chiqadigan vaqt: dars boshlanishidan ATTENDANCE_OPENS_MINUTES oldin
     attendance_opens_at = serializers.SerializerMethodField()
+    # Men qo'ygan shaxsiy eslatma (bo'lmasa false/null)
+    has_reminder = serializers.SerializerMethodField()
+    reminder_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -119,7 +122,7 @@ class LessonSerializer(serializers.ModelSerializer):
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
             'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'assignment',
             'my_rating', 'attended', 'recording_active', 'recording_started_at',
-            'attendance_opens_at',
+            'attendance_opens_at', 'has_reminder', 'reminder_minutes',
         ]
         read_only_fields = ['room_name', 'status', 'recurrence_id']
 
@@ -173,6 +176,12 @@ class LessonSerializer(serializers.ModelSerializer):
             return obj.card_recording_started
         recording = getattr(obj, 'recording', None) if obj.pk else None
         return recording.video_started_at or recording.audio_started_at if recording and recording.status == 'recording' else None
+
+    def get_has_reminder(self, obj) -> bool:
+        return getattr(obj, 'my_reminder_minutes', None) is not None
+
+    def get_reminder_minutes(self, obj):
+        return getattr(obj, 'my_reminder_minutes', None)
 
     def get_attendance_opens_at(self, obj):
         from datetime import timedelta

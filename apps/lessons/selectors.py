@@ -63,6 +63,16 @@ def lessons_for(user: User) -> QuerySet[Lesson]:
     return qs
 
 
+def with_my_reminder(qs: QuerySet[Lesson], user: User) -> QuerySet[Lesson]:
+    """`my_reminder_minutes`: shu foydalanuvchi shu darsga qo'ygan shaxsiy eslatma (yo'q bo'lsa null)."""
+    from .models import ReminderPref
+
+    return qs.annotate(my_reminder_minutes=Subquery(
+        ReminderPref.objects.filter(user=user, kind=ReminderPref.Kind.LESSON, target_id=OuterRef('pk')).values('minutes_before')[:1],
+        output_field=IntegerField(),
+    ))
+
+
 def with_student_marks(qs: QuerySet[Lesson], user: User) -> QuerySet[Lesson]:
     """O'quvchi ro'yxati uchun: `my_rating_value` (o'zi qo'ygan yulduz) va `my_attended` (tugagan darsda true/false,
     aks holda null) — frontend davomatni alohida so'ramasligi uchun."""

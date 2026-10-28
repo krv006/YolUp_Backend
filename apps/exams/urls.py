@@ -7,6 +7,7 @@ urlpatterns = [
     path('templates/', views.TemplateListCreateView.as_view(), name='exam-templates'),
     path('templates/<uuid:pk>/', views.TemplateDeleteView.as_view(), name='exam-template-delete'),
     path('<uuid:pk>/', views.ExamDetailView.as_view(), name='exam-detail'),
+    path('<uuid:pk>/reminder/', views.ExamReminderView.as_view(), name='exam-reminder'),
     path('<uuid:pk>/current/', views.ExamCurrentView.as_view(), name='exam-current'),
     path('<uuid:pk>/answers/', views.ExamAnswersView.as_view(), name='exam-answers'),
     path('<uuid:pk>/next-section/', views.ExamNextSectionView.as_view(), name='exam-next-section'),

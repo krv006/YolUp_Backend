@@ -262,7 +262,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = selectors.lessons_for(self.request.user)
         if self.action in ('list', 'retrieve'):
-            qs = selectors.with_card_stats(qs)
+            qs = selectors.with_my_reminder(selectors.with_card_stats(qs), self.request.user)
             if self.request.user.role == 'student':
                 qs = selectors.with_student_marks(qs, self.request.user)
         return qs
@@ -418,6 +418,15 @@ class LessonViewSet(viewsets.ModelViewSet):
         qs = lesson.ratings.select_related('student').order_by('-created_at')
         page = self.paginate_queryset(qs)
         return self.get_paginated_response(LessonRatingSerializer(page, many=True).data)
+
+    @action(detail=True, methods=['post', 'delete'], url_path='reminder')
+    def reminder(self, request, pk=None):
+        """Shaxsiy eslatma: `POST {minutes_before?}` (1-1440, berilmasa umumiy sozlama) / `DELETE` — bekor qilish."""
+        if request.method == 'DELETE':
+            services.clear_reminder(user=request.user, kind='lesson', target_id=pk)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        pref = services.set_lesson_reminder(user=request.user, lesson_id=pk, minutes_before=request.data.get('minutes_before'))
+        return Response({'has_reminder': True, 'minutes_before': pref.minutes_before})
 
     @action(detail=True, methods=['get', 'delete'], url_path='recording')
     def recording(self, request, pk=None):

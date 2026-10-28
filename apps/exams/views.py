@@ -6,7 +6,7 @@ apps.core.permissions registry'sida (`exam.manage` / `exam.view` / `exam.take`).
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -60,6 +60,33 @@ class TemplateDeleteView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class ExamReminderView(APIView):
+    """Shaxsiy eslatma: `POST {minutes_before?}` / `DELETE` — imtihon boshlanishidan oldin bildirishnoma."""
+
+    permission_classes = [RequirePerm('exam.view')]
+
+    def post(self, request, pk):
+        from apps.lessons import services as lesson_services
+        from apps.lessons.models import ReminderPref
+
+        exam = selectors.exams_for(request.user).filter(pk=pk).first()
+        if exam is None:
+            raise NotFound(_('Imtihon topilmadi.'))
+        if exam.starts_at <= timezone.now():
+            raise ValidationError({'detail': _("Faqat boshlanmagan imtihonga eslatma qo'yiladi.")})
+        minutes = lesson_services._reminder_minutes(request.data.get('minutes_before'), request.user)
+        pref, _created = ReminderPref.objects.update_or_create(
+            user=request.user, kind=ReminderPref.Kind.EXAM, target_id=exam.id, defaults={'minutes_before': minutes, 'sent_at': None},
+        )
+        return Response({'has_reminder': True, 'minutes_before': pref.minutes_before})
+
+    def delete(self, request, pk):
+        from apps.lessons.models import ReminderPref
+
+        ReminderPref.objects.filter(user=request.user, kind=ReminderPref.Kind.EXAM, target_id=pk).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ExamListCreateView(APIView):
     def get_permissions(self):
         perm = 'exam.manage' if self.request.method == 'POST' else 'exam.view'
@@ -71,7 +98,16 @@ class ExamListCreateView(APIView):
         course = request.query_params.get('course')
         if course:
             exams = exams.filter(course_id=course)
-        return Response([exam_summary(exam, now) for exam in exams])
+        rows = [exam_summary(exam, now) for exam in exams]
+        from apps.lessons.models import ReminderPref
+
+        mine = dict(ReminderPref.objects.filter(
+            user=request.user, kind=ReminderPref.Kind.EXAM, target_id__in=[exam.id for exam in exams],
+        ).values_list('target_id', 'minutes_before'))
+        for exam, row in zip(exams, rows):
+            row['has_reminder'] = exam.id in mine
+            row['reminder_minutes'] = mine.get(exam.id)
+        return Response(rows)
 
     def post(self, request):
         serializer = ExamCreateSerializer(data=request.data)

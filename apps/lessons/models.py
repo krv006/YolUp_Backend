@@ -403,3 +403,22 @@ class LessonRating(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.student.username} @ {(self.lesson.title or self.lesson.course.title)} · {self.stars}★'
+
+
+class ReminderPref(TimeStampedUUIDModel):
+    """Foydalanuvchining SHAXSIY eslatmasi: shu dars/imtihon boshlanishidan `minutes_before` daqiqa oldin xabar.
+    Umumiy sozlama (`User.lesson_reminder_minutes`) o'rniga shu dars uchun ishlaydi; yuborilgach `sent_at` to'ladi."""
+
+    class Kind(TextChoices):
+        LESSON = 'lesson', 'Dars'
+        EXAM = 'exam', 'Imtihon'
+
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='reminder_prefs')
+    kind = CharField(max_length=8, choices=Kind.choices)
+    target_id = UUIDField()
+    minutes_before = PositiveIntegerField(default=15)
+    sent_at = DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['user', 'kind', 'target_id'], name='unique_reminder_pref')]
+        indexes = [Index(fields=['kind', 'target_id'])]
