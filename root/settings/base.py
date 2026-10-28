@@ -40,6 +40,8 @@ INSTALLED_APPS = [
     'apps.quizzes',
     'apps.analytics',
     'apps.monitoring',
+    'apps.materials',
+    'apps.support',
 ]
 
 MIDDLEWARE = [

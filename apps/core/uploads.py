@@ -34,3 +34,7 @@ def certificate_path(instance, filename: str) -> str:
 
 def ai_quiz_source_path(instance, filename: str) -> str:
     return _dated('ai_quiz_sources', filename)
+
+
+def material_path(instance, filename: str) -> str:
+    return _dated('materials', filename)

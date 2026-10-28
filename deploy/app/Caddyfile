@@ -26,6 +26,9 @@
 	handle /media/homework/* {
 		respond 404
 	}
+	handle /media/materials/* {
+		respond 404
+	}
 	handle /media/ai_quiz_sources/* {
 		respond 404
 	}
