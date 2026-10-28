@@ -79,6 +79,11 @@ def broadcast_mic_denied(lesson_id, student_id: str) -> None:
     _send(lesson_id, {'type': 'mic_denied', 'student_id': student_id})
 
 
+def broadcast_current_sheet(lesson_id, index: int) -> None:
+    """O'qituvchi boshqa sahifaga o'tdi — mobil mijoz doska kartasida "Doska · N-sahifa" ni yangilaydi."""
+    _send(lesson_id, {'type': 'current_sheet', 'sheet': index})
+
+
 def broadcast_mic_request_cancelled(lesson_id, student_id: str) -> None:
     """O'quvchi o'z so'rovini bekor qildi — o'qituvchi kutish ro'yxatidan olib tashlaydi."""
     _send(lesson_id, {'type': 'mic_request_cancelled', 'student_id': student_id})

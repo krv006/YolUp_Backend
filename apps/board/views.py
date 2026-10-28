@@ -41,6 +41,17 @@ class StrokeView(APIView):
         return Response(stroke, status=201)
 
 
+class CurrentSheetView(APIView):
+    """O'qituvchi: `POST {sheet}` — hozir shu sahifada turibman (o'quvchilarga socket `current_sheet` hodisasi boradi)."""
+
+    permission_classes = [RequirePerm('room.token')]
+
+    def post(self, request, lesson_id):
+        return Response({'current_sheet': services.set_current_sheet(
+            user=request.user, lesson_id=lesson_id, index=request.data.get('sheet'),
+        )})
+
+
 class SheetView(APIView):
     permission_classes = [RequirePerm('room.moderate')]
 

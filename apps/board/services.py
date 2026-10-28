@@ -2,6 +2,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -65,6 +66,42 @@ def permission_mode(lesson: Lesson) -> str:
     return 'everyone' if enrolled and granted == enrolled else 'selected'
 
 
+_CURRENT_SHEET_TTL = 12 * 3600
+
+
+def _current_sheet_key(lesson_id) -> str:
+    return f'board:current-sheet:{lesson_id}'
+
+
+def current_sheet(lesson, last_index: int) -> int:
+    """O'qituvchi hozir ochib turgan sahifa (u chizsa yoki `current-sheet/` bilan belgilasa yangilanadi); noma'lum bo'lsa — oxirgisi."""
+    value = cache.get(_current_sheet_key(lesson.id))
+    return value if isinstance(value, int) and 0 <= value <= last_index else last_index
+
+
+def _remember_current_sheet(lesson_id, index: int) -> bool:
+    """Yangi qiymatni eslab qoladi; o'zgargan bo'lsa True (shunda socket orqali tarqatiladi)."""
+    key = _current_sheet_key(lesson_id)
+    changed = cache.get(key) != index
+    cache.set(key, index, _CURRENT_SHEET_TTL)
+    return changed
+
+
+def set_current_sheet(*, user: User, lesson_id, index) -> int:
+    lesson = _get_lesson(lesson_id)
+    if not _is_teacher(user, lesson):
+        raise PermissionDenied(_("Joriy sahifani faqat o'qituvchi belgilaydi."))
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        raise ValidationError({'sheet': _("Sahifa raqami son bo'lishi kerak.")}) from None
+    if not lesson.board_sheets.filter(index=index).exists():
+        raise ValidationError({'sheet': _("Bunday sahifa yo'q.")})
+    if _remember_current_sheet(lesson.id, index):
+        realtime.broadcast_current_sheet(lesson.id, index)
+    return index
+
+
 def get_board(*, user: User, lesson_id) -> dict:
     lesson = _get_lesson(lesson_id)
     if not can_view(user, lesson):
@@ -75,6 +112,7 @@ def get_board(*, user: User, lesson_id) -> dict:
     is_teacher = _is_teacher(user, lesson)
     result = {
         'sheets': [{'index': s.index, 'title': s.title, 'strokes': s.strokes} for s in sheets],
+        'current_sheet': current_sheet(lesson, sheets[-1].index),
         'can_draw': can_draw(user, lesson),
         # Kim chiza oladi: `teacher` (faqat o'qituvchi) | `selected` (ba'zi o'quvchilar) | `everyone` (hamma) —
         # sahifa yangilansa ham yo'qolmaydi (ruxsatlar bazada)
@@ -221,6 +259,9 @@ def add_stroke(*, user: User, lesson_id, sheet_index: int, stroke: dict) -> dict
     transaction.on_commit(
         lambda: realtime.broadcast_stroke(lesson.id, sheet.index, clean)
     )
+    if _is_teacher(user, lesson) and _remember_current_sheet(lesson.id, sheet.index):
+        # chiziq hodisasidan KEYIN (mijozlar `stroke` ni birinchi kutadi)
+        transaction.on_commit(lambda: realtime.broadcast_current_sheet(lesson.id, sheet.index))
     return clean
 
 
