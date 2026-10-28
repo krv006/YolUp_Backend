@@ -170,6 +170,25 @@ class TeacherCertificate(TimeStampedUUIDModel):
         return f'{self.teacher.username} · {self.title or self.file.name}'
 
 
+class SocialIdentity(TimeStampedUUIDModel):
+    """Google/Apple akkaunt bilan bog'lanish: provayderning o'zgarmas `sub` identifikatori bo'yicha."""
+
+    class Provider(TextChoices):
+        GOOGLE = 'google', 'Google'
+        APPLE = 'apple', 'Apple'
+
+    user = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='social_identities')
+    provider = CharField(max_length=10, choices=Provider.choices)
+    subject = CharField(max_length=255)
+    email = CharField(max_length=254, blank=True, default='')
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['provider', 'subject'], name='unique_social_identity')]
+
+    def __str__(self):
+        return f'{self.provider}:{self.user_id}'
+
+
 class UserSession(TimeStampedUUIDModel):
     """Faol seans (qurilma) — `auth/sessions/` ro'yxati. Token ichidagi `sid` shu qatorning id'si
     (qarang `apps.accounts.sessions`). `last_active` token yangilanganda (taxminan soatiga bir) yangilanadi."""

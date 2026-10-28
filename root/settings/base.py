@@ -353,6 +353,10 @@ VAPID_CLAIM_EMAIL = os.getenv('VAPID_CLAIM_EMAIL', 'mailto:admin@thesofmebel.uz'
 # Mobil push (FCM) — PUSH-BACKEND.md. Sozlanmasa (bo'sh yoki fayl mavjud
 # emas) mobil push jim o'chiriladi — Web Push'ga ta'sir qilmaydi.
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+
+# Google / Apple bilan kirish: ruxsat etilgan client ID'lar (vergul bilan). Bo'sh bo'lsa o'sha provayder 503 beradi.
+GOOGLE_CLIENT_IDS = [item.strip() for item in os.getenv('GOOGLE_CLIENT_IDS', '').split(',') if item.strip()]
+APPLE_CLIENT_IDS = [item.strip() for item in os.getenv('APPLE_CLIENT_IDS', '').split(',') if item.strip()]
 FCM_PROJECT_ID = os.getenv('FCM_PROJECT_ID', '')
 
 # 'uz' — manba til: kodda yozilgan xato/tekshiruv matnlarining o'zi shu (izoh

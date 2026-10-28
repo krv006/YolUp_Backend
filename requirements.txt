@@ -37,3 +37,5 @@ requests>=2.33
 firebase-admin>=6.5
 pypdf>=5.0
 geoip2>=4.8
+# Google / Apple bilan kirish: id_token imzosini tekshirish (RS256) — apps.accounts.social
+PyJWT[crypto]>=2.8

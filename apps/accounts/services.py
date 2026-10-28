@@ -12,7 +12,7 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 
 from apps.core import audit
 
-from .models import Consent, ParentChildLink, TeacherCertificate, User
+from .models import Consent, ParentChildLink, SocialIdentity, TeacherCertificate, User
 
 # O'quvchi/ota-ona uchun standart 15 daqiqa (User.lesson_reminder_minutes
 # maydon standarti) yetarli — o'qituvchi esa darsni BOSHLASHI kerak,
@@ -74,6 +74,63 @@ def register_user(*, username: str, password: str, role: str, request=None, **ex
     if role == User.Role.TEACHER:
         transaction.on_commit(lambda: _notify_admins_of_pending_teacher(user, request=request))
     return user
+
+
+def _free_username(email: str) -> str:
+    """Ijtimoiy akkaunt uchun band bo'lmagan login: email boshi + (kerak bo'lsa) tasodifiy raqamlar."""
+    import re
+    import secrets
+
+    base = re.sub(r'[^a-zA-Z0-9._]', '', (email or '').split('@')[0])[:20].lower() or 'user'
+    if len(base) < 3:
+        base = f'user{base}'
+    candidate = base
+    for _attempt in range(30):
+        if not User.objects.filter(username__iexact=candidate).exists():
+            return candidate
+        candidate = f'{base}{secrets.randbelow(9000) + 1000}'
+    return f'{base}{secrets.token_hex(4)}'
+
+
+def social_login(*, provider: str, id_token: str, role=None, first_name: str = '', last_name: str = '', request=None):
+    """Google/Apple bilan kirish. Qaytaradi `(holat, qiymat)`:
+
+    - `('login', user)` — shu provayder akkaunti avval bog'langan yoki TASDIQLANGAN email bo'yicha mavjud akkaunt topildi;
+    - `('created', user)` — yangi akkaunt ochildi (`role` berilgan);
+    - `('signup_required', claims)` — yangi foydalanuvchi, lekin `role` berilmagan: ilova rol tanlatib qayta yuboradi.
+
+    Xavfsizlik: mavjud akkauntga FAQAT ikkala tomonda email tasdiqlangan bo'lsa bog'lanadi (aks holda birovning emailini
+    yozib olib akkauntini egallash mumkin bo'lardi). Parolsiz akkaunt: parol faqat "parolni tiklash" orqali o'rnatiladi."""
+    from . import social
+
+    claims = social.verify_id_token(provider, id_token)
+    identity = SocialIdentity.objects.select_related('user').filter(provider=provider, subject=claims.subject).first()
+    if identity is not None:
+        if not identity.user.is_active:
+            raise PermissionDenied(_('Akkaunt faol emas.'))
+        return 'login', identity.user
+
+    if claims.email and claims.email_verified:
+        matches = list(User.objects.filter(email__iexact=claims.email, email_verified=True, is_active=True)[:2])
+        if len(matches) == 1:
+            SocialIdentity.objects.create(user=matches[0], provider=provider, subject=claims.subject, email=claims.email)
+            audit.record(action='auth.social_link', actor=matches[0], target=matches[0], meta={'provider': provider}, request=request)
+            return 'login', matches[0]
+
+    if not role:
+        return 'signup_required', claims
+
+    with transaction.atomic():
+        user = register_user(
+            username=_free_username(claims.email), password=secrets.token_urlsafe(32), role=role, request=request,
+            first_name=(first_name or claims.first_name)[:150], last_name=(last_name or claims.last_name)[:150],
+            email=claims.email, email_verified=bool(claims.email and claims.email_verified),
+        )
+        user.set_unusable_password()
+        user.save(update_fields=['password'])
+        SocialIdentity.objects.create(user=user, provider=provider, subject=claims.subject, email=claims.email)
+    audit.record(action='auth.social_register', actor=user, target=user, meta={'provider': provider}, request=request)
+    return 'created', user
 
 
 def get_teacher(*, teacher_id) -> User:

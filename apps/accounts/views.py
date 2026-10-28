@@ -16,7 +16,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from apps.core.permissions import RequirePerm
 
 from . import selectors, services, sessions
-from .models import UserSession
+from .models import User, UserSession
 from .serializers import (
     CertificateSerializer,
     ChildCreateSerializer,
@@ -54,6 +54,47 @@ class RegisterView(APIView):
             'access': str(refresh.access_token),
             'refresh': str(refresh),
         }, status=status.HTTP_201_CREATED)
+
+
+class SocialLoginView(APIView):
+    """Google / Apple bilan kirish yoki ro'yxatdan o'tish: `POST /auth/social/<google|apple>/`.
+
+    Tana: `{id_token, role?, first_name?, last_name?}` (Apple ismni faqat birinchi marta mijozga beradi — mijoz uni
+    `first_name`/`last_name` da yuborsin). Javob:
+    - `200 {access, refresh}` — mavjud akkauntga kirdi;
+    - `200 {two_factor_required, challenge_token, ...}` — akkauntda 2FA yoqilgan (odatiy loginniki bilan bir xil);
+    - `201 {...user, access, refresh}` — yangi akkaunt ochildi (`role` berilganda);
+    - `200 {signup_required: true, email, first_name, last_name}` — yangi foydalanuvchi: rol tanlatib qayta yuboring."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request, provider):
+        from .social import APPLE, GOOGLE
+
+        if provider not in (GOOGLE, APPLE):
+            raise NotFound()
+        role = request.data.get('role') or None
+        if role is not None and role not in (User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT):
+            raise ValidationError({'role': _("Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi.")})
+        state, value = services.social_login(
+            provider=provider, id_token=request.data.get('id_token'), role=role,
+            first_name=(request.data.get('first_name') or '').strip(), last_name=(request.data.get('last_name') or '').strip(),
+            request=request,
+        )
+        if state == 'signup_required':
+            return Response({
+                'signup_required': True, 'email': value.email, 'first_name': value.first_name, 'last_name': value.last_name,
+            })
+        user = value
+        if state == 'login' and user.two_factor_enabled:
+            return Response(services.two_factor_challenge(user))
+        refresh = sessions.issue_refresh(user, request)
+        services.record_login(user=user, request=request)
+        tokens = {'access': str(refresh.access_token), 'refresh': str(refresh)}
+        if state == 'created':
+            return Response({**RegisterSerializer(user).data, **tokens}, status=status.HTTP_201_CREATED)
+        return Response(tokens)
 
 
 class LoginView(TokenObtainPairView):

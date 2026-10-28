@@ -5,6 +5,7 @@ from . import views
 urlpatterns = [
     path('register/', views.RegisterView.as_view(), name='register'),
     path('login/', views.LoginView.as_view(), name='login'),
+    path('social/<str:provider>/', views.SocialLoginView.as_view(), name='social-login'),
     path('logout/', views.LogoutView.as_view(), name='logout'),
     path('logins/', views.LoginHistoryView.as_view(), name='login-history'),
     path('token/refresh/', views.RefreshView.as_view(), name='token-refresh'),
