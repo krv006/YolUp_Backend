@@ -104,9 +104,12 @@ class ExamListCreateView(APIView):
         mine = dict(ReminderPref.objects.filter(
             user=request.user, kind=ReminderPref.Kind.EXAM, target_id__in=[exam.id for exam in exams],
         ).values_list('target_id', 'minutes_before'))
+        is_student = request.user.role == 'student'
         for exam, row in zip(exams, rows):
             row['has_reminder'] = exam.id in mine
             row['reminder_minutes'] = mine.get(exam.id)
+            if is_student:
+                row['my_total'] = services.my_total(exam, request.user) if row.get('state') == 'finished' else None
         return Response(rows)
 
     def post(self, request):
@@ -210,6 +213,54 @@ class ExamResultsView(APIView):
     def get(self, request, pk):
         exam = _get_exam(request.user, pk)
         return Response(services.list_results(user=request.user, exam=exam))
+
+
+class ExamResultPdfView(APIView):
+    """`GET /exams/{id}/results/{student_id}/pdf/` — o'quvchi natijasi PDF (o'quvchi o'zi, ota-onasi, o'qituvchi)."""
+
+    permission_classes = [RequirePerm('exam.view')]
+
+    def get(self, request, pk, student_id):
+        from django.http import HttpResponse
+
+        from . import report
+
+        exam = _get_exam(request.user, pk)
+        item = services.student_detail(user=request.user, exam=exam, student_id=student_id)
+        if item.get('hidden'):
+            raise ValidationError({'detail': _("Natijalar imtihon tugagach ko'rinadi.")})
+        if not item.get('participated'):
+            raise NotFound(_("Bu o'quvchi imtihonda qatnashmagan."))
+        response = HttpResponse(report.build_pdf(exam, item), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="natija-{exam.id}.pdf"'
+        return response
+
+
+class ExamMistakesPracticeView(APIView):
+    """O'quvchi: imtihondagi xato savollar bo'yicha AI mashq (`POST {count?, language?}`) — saqlanmaydi, to'g'ridan-to'g'ri qaytadi."""
+
+    permission_classes = [RequirePerm('exam.take')]
+
+    def post(self, request, pk):
+        from apps.quizzes import student_ai
+
+        exam = _get_exam(request.user, pk)
+        attempt = exam.attempts.filter(student=request.user).first()
+        if attempt is None or services.list_results(user=request.user, exam=exam)['results'][0].get('hidden'):
+            raise ValidationError({'detail': _("Natijalar imtihon tugagach ko'rinadi.")})
+        wrong = [
+            answer.question for answer in attempt.answers.select_related('question').prefetch_related('question__options')
+            if answer.earned_points < answer.question.points
+        ]
+        if not wrong:
+            raise ValidationError({'detail': _("Xato savol topilmadi — mashq kerak emas.")})
+        material = '\n'.join(
+            f"{index}. {' '.join(question.text.split())}" for index, question in enumerate(wrong[:15], 1)
+        )
+        return Response(student_ai.practice(
+            request.user, topic=f'{exam.title}: xato qilingan mavzular', count=request.data.get('count') or 5,
+            material=material, language=request.data.get('language') or '',
+        ))
 
 
 class ExamShareResultsView(APIView):

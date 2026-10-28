@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/v1/board/', include('apps.board.urls')),
     path('api/v1/homework/', include('apps.homework.urls')),
     path('api/v1/quizzes/', include('apps.quizzes.urls')),
+    path('api/v1/ai/student/', include('apps.quizzes.student_ai_urls')),
     path('api/v1/notifications/', include('apps.notifications.urls')),
     path('api/v1/analytics/', include('apps.analytics.urls')),
     path('api/v1/dashboard/', include('apps.analytics.dashboard_urls')),

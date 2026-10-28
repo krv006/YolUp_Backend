@@ -11,6 +11,7 @@ from django.db.models import (
     DateField,
     DateTimeField,
     FileField,
+    FloatField,
     ForeignKey,
     GenericIPAddressField,
     ImageField,
@@ -89,6 +90,11 @@ class User(AbstractUser):
     email_verified = BooleanField(default=False)
     phone_verified = BooleanField(default=False)
     phone_verified_at = DateTimeField(null=True, blank=True)
+    # Mock imtihon maqsadi (IELTS band, SAT ball va h.k.) — o'quvchi o'zi belgilaydi
+    target_band = FloatField(null=True, blank=True)
+    # Interfeys sozlamalari (qurilmalar orasida saqlanadi)
+    theme = CharField(max_length=8, default='system', blank=True)  # light | dark | system
+    text_size = CharField(max_length=8, default='medium', blank=True)  # small | medium | large
     # Tizim sozlamalari: "Yangi xabarlar" va "Email xabarnomalar" tugmalari
     notify_messages = BooleanField(default=True)
     notify_email = BooleanField(default=False)

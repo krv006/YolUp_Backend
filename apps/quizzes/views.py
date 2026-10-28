@@ -387,6 +387,36 @@ class QuizAttemptListCreateView(APIView):
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
 
 
+class StudentAiExplainView(APIView):
+    """O'quvchi: `{question, wrong_answer?, correct_answer?, language?}` -> `{explanation, tip, used, limit}`."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.attempt')()]
+
+    def post(self, request):
+        from . import student_ai
+
+        return Response(student_ai.explain(
+            request.user, question=request.data.get('question'), wrong_answer=request.data.get('wrong_answer') or '',
+            correct_answer=request.data.get('correct_answer') or '', language=request.data.get('language') or '',
+        ))
+
+
+class StudentAiPracticeView(APIView):
+    """O'quvchi: `{topic, count?, material?, language?}` -> `{questions: [{text, options, correct_index, explanation}], used, limit}`."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.attempt')()]
+
+    def post(self, request):
+        from . import student_ai
+
+        return Response(student_ai.practice(
+            request.user, topic=request.data.get('topic'), count=request.data.get('count') or 5,
+            material=request.data.get('material') or '', language=request.data.get('language') or '',
+        ))
+
+
 class QuizDraftView(APIView):
     """O'quvchi: tugallanmagan javoblar — `GET` / `PUT {answers, elapsed_seconds}` / `DELETE`."""
 

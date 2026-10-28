@@ -482,7 +482,10 @@ def _section_inputs(exam: Exam, attempt_ids: list) -> dict:
 
 def _student_info(student: User) -> dict:
     full_name = f'{student.first_name} {student.last_name}'.strip()
-    return {'id': student.id, 'username': student.username, 'name': full_name or student.username}
+    return {
+        'id': student.id, 'username': student.username, 'name': full_name or student.username,
+        'avatar': student.avatar.url if student.avatar else None,
+    }
 
 
 FOCUS_KINDS = ('blur', 'paste')
@@ -581,8 +584,29 @@ def list_results(*, user: User, exam: Exam) -> dict:
             items.append(computed[student.id])
     return {
         'exam': exam.id, 'engine': exam.scoring.get('type') or 'percent',
-        'state': exam_state(exam, now), 'results': items,
+        'state': exam_state(exam, now), 'group_average': group_average(exam, now), 'results': items,
     }
+
+
+def group_average(exam: Exam, now=None):
+    """Guruh o'rtachasi, foizda (qatnashgan o'quvchilar bo'yicha). Imtihon tugamaguncha yoki natija yo'q bo'lsa None."""
+    if exam_state(exam, now or timezone.now()) != 'finished':
+        return None
+    attempts = list(ExamAttempt.objects.filter(exam=exam).select_related('student'))
+    percents = [
+        item['total']['score'] * 100 / item['total']['max']
+        for item in build_results(exam, attempts, True)
+        if item.get('total') and item['total'].get('max')
+    ]
+    return round(sum(percents) / len(percents), 1) if percents else None
+
+
+def my_total(exam: Exam, user: User):
+    """O'quvchining o'z natijasi ro'yxat kartasi uchun: `{score, max, label}` yoki None (yashirin/qatnashmagan)."""
+    for item in list_results(user=user, exam=exam)['results']:
+        if item.get('participated') and not item.get('hidden') and item.get('total'):
+            return {key: item['total'].get(key) for key in ('score', 'max', 'label')}
+    return None
 
 
 SHARE_LIMIT = 3900

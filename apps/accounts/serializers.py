@@ -149,7 +149,7 @@ class MeSerializer(UserSerializer):
         fields = UserSerializer.Meta.fields + [
             'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
-            'email_verified', 'phone_verified', 'phone_verified_at',
+            'email_verified', 'phone_verified', 'phone_verified_at', 'target_band', 'theme', 'text_size',
         ]
         read_only_fields = UserSerializer.Meta.read_only_fields + [
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
@@ -158,6 +158,21 @@ class MeSerializer(UserSerializer):
 
     def validate_email(self, value):
         return (value or '').strip().lower()
+
+    def validate_target_band(self, value):
+        if value is not None and not 0 <= value <= 1600:
+            raise serializers.ValidationError(_("Maqsad ball 0 dan 1600 gacha bo'lishi kerak."))
+        return value
+
+    def validate_theme(self, value):
+        if value not in ('light', 'dark', 'system'):
+            raise serializers.ValidationError(_("light, dark yoki system."))
+        return value
+
+    def validate_text_size(self, value):
+        if value not in ('small', 'medium', 'large'):
+            raise serializers.ValidationError(_("small, medium yoki large."))
+        return value
 
     def update(self, instance, validated_data):
         """Email yoki telefon o'zgarsa yangi manzil/raqam tasdiqlanmagan hisoblanadi."""
