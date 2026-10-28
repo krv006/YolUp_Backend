@@ -1863,12 +1863,13 @@ class MicPermissionTests(APITestCase):
         self.assertNotIn('camera', sources)
         self.assertNotIn('microphone', sources)
 
-    def test_teacher_token_unrestricted(self):
+    def test_teacher_token_lists_all_sources(self):
         resp = self.api(self.teacher).post('/api/v1/live/token/', {'lesson_id': str(self.lesson.id)})
         self.assertEqual(resp.status_code, 200)
         video_claim = self._decode(resp.data['token'])['video']
         self.assertTrue(video_claim.get('canPublish'))
-        self.assertNotIn('canPublishSources', video_claim)
+        # O'qituvchi manbalari ANIQ yoziladi (mobil mijoz `canPublishSources` ni o'qiydi) — hammasi ochiq
+        self.assertEqual(sorted(video_claim['canPublishSources']), ['camera', 'microphone', 'screen_share', 'screen_share_audio'])
 
     def test_request_mic_requires_enrollment(self):
         resp = self.api(self.stranger).post(
