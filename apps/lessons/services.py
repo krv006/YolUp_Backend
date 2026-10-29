@@ -1118,19 +1118,21 @@ def _append_chunk(*, kind: str, teacher: User, lesson: Lesson, chunk, started_at
 
     file_field, started_field = f'{kind}_file_name', f'{kind}_started_at'
     session_field, next_field = f'{kind}_session', f'{kind}_next_index'
+    sessions_field = f'{kind}_sessions'
+    parsed = parse_datetime(started_at) if started_at else None
+    if parsed and timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, dt_timezone.utc)
     with transaction.atomic():
         recording, _created = LessonRecording.objects.select_for_update().get_or_create(lesson=lesson)
         fields = []
         if not getattr(recording, file_field):
-            parsed = parse_datetime(started_at) if started_at else None
-            if parsed and timezone.is_naive(parsed):
-                parsed = timezone.make_aware(parsed, dt_timezone.utc)
             setattr(recording, file_field, f'{lesson.room_name}-{kind}.webm')
             setattr(recording, started_field, parsed or timezone.now())
             fields += [file_field, started_field]
             if recording.status == LessonRecording.Status.PENDING:
                 recording.status = LessonRecording.Status.RECORDING
                 fields.append('status')
+        path = settings.RECORDINGS_DIR / getattr(recording, file_field)
         if session and index is not None:
             if getattr(recording, session_field) == session:
                 if index < getattr(recording, next_field):
@@ -1138,11 +1140,20 @@ def _append_chunk(*, kind: str, teacher: User, lesson: Lesson, chunk, started_at
             else:
                 setattr(recording, session_field, session)
                 fields.append(session_field)
+                # Yangi yozuv sessiyasi (ekran ulashish qayta yoqildi, sahifa yangilandi...): xom faylning qaerida va
+                # brauzer soatida qachon boshlangani saqlanadi — birlashtirishda oradagi tanaffus shu bilan to'ldiriladi.
+                started = list(getattr(recording, sessions_field) or [])
+                started.append({
+                    'session': session,
+                    'offset': path.stat().st_size if path.exists() else 0,
+                    'started_at': parsed.isoformat() if parsed else None,
+                })
+                setattr(recording, sessions_field, started)
+                fields.append(sessions_field)
             setattr(recording, next_field, index + 1)
             fields.append(next_field)
         if fields:
             recording.save(update_fields=[*fields, 'updated_at'])
-        path = settings.RECORDINGS_DIR / getattr(recording, file_field)
         with open(path, 'ab') as handle:
             for part in chunk.chunks():
                 handle.write(part)

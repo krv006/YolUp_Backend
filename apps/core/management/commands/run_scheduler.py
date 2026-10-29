@@ -33,6 +33,7 @@ JOBS = [
     ('send_lesson_reminders', 'send_lesson_reminders', (), 60),
     ('sync_homework_ai', 'sync_homework_ai', (), 60),
     ('check_disk', 'check_disk', (), 1800),
+    ('check_failed_recordings', 'check_failed_recordings', (), 1800),
 ]
 # Standart ro'yxatga KIRMAYDI (fayl o'chiradi) — faqat `--only` bilan aniq so'ralganda ishga tushadi
 OPTIONAL_JOBS = [

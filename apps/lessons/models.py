@@ -274,6 +274,11 @@ class LessonRecording(TimeStampedUUIDModel):
     audio_next_index = PositiveIntegerField(default=0)
     video_session = CharField(max_length=64, blank=True)
     video_next_index = PositiveIntegerField(default=0)
+    # Har yozuv sessiyasi qaerda boshlangan: `[{"session", "offset" (fayldagi bayt), "started_at" (brauzer vaqti)}]`.
+    # O'qituvchi ekran ulashishni o'chirib-yoqsa yoki sahifani yangilasa, yangi sessiya xom faylga ulanadi va oradagi
+    # tanaffus yo'qolardi (video va ovoz siljirdi). Birlashtirishda shu ma'lumot bilan tanaffus to'ldiriladi.
+    video_sessions = JSONField(default=list, blank=True)
+    audio_sessions = JSONField(default=list, blank=True)
     # `recover_recordings` (cron) shu yozuvni necha marta qayta birlashtirishga urindi (cheksiz takrorlamaslik uchun)
     merge_attempts = PositiveSmallIntegerField(default=0)
 

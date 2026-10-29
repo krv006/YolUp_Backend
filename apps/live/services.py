@@ -1061,9 +1061,9 @@ def finalize_single_side(lesson_id) -> None:
     if recording is None:
         return
     if recording.video_file_name and not recording.audio_file_name:
-        source, label = recording.video_file_name, "video-only (audio yo'q)"
+        source, label, kind, sessions = recording.video_file_name, "video-only (audio yo'q)", 'video', recording.video_sessions
     elif recording.audio_file_name and not recording.video_file_name:
-        source, label = recording.audio_file_name, "audio-only (video yo'q)"
+        source, label, kind, sessions = recording.audio_file_name, "audio-only (video yo'q)", 'audio', recording.audio_sessions
     else:
         return
     path = settings.RECORDINGS_DIR / source
@@ -1071,7 +1071,7 @@ def finalize_single_side(lesson_id) -> None:
         return
     # Merge bo'lmasa ham (yagona tomon) ko'p-segmentli fayl bo'lishi mumkin
     # — u qidirish/pauzada qotib qolmasin deb shu yerda ham to'g'rilanadi.
-    normalized_path = _normalize_webm(path)
+    normalized_path = _normalize_webm(path, sessions, kind)
     file_name = normalized_path.name
     updated = LessonRecording.objects.filter(
         pk=recording.pk, status=LessonRecording.Status.RECORDING,
@@ -1083,123 +1083,330 @@ def finalize_single_side(lesson_id) -> None:
 
 
 _EBML_MAGIC = b'\x1a\x45\xdf\xa3'
+_SCAN_BLOCK = 4 * 1024 * 1024
+GAP_MIN_SECONDS = 0.5      # bundan qisqa tanaffus ahamiyatsiz (soat/kodlash farqi)
+TAIL_MIN_SECONDS = 1.0     # video va ovoz oxiri orasidagi farq shundan oshsa, qisqasi to'ldiriladi
+GAP_MAX_SECONDS = 4 * 3600  # bundan katta "tanaffus" — soat xatosi, to'ldirilmaydi
 
 
-def _find_ebml_segment_offsets(data: bytes) -> list[int]:
-    """Faylda nechta mustaqil EBML (WebM) hujjat borligini bayt
-    offsetlari bo'yicha topadi. Odatda faqat bitta (0-offsetda)."""
-    positions = []
-    start = 0
-    while True:
-        idx = data.find(_EBML_MAGIC, start)
-        if idx == -1:
-            break
-        positions.append(idx)
-        start = idx + 1
-    return positions
+def _scan_ebml_offsets(path) -> list[int]:
+    """Faylda nechta mustaqil EBML (WebM) hujjat borligini bayt offsetlari bo'yicha topadi. Fayl bo'laklab o'qiladi
+    (butun fayl xotiraga yuklanmaydi: 90 daqiqalik dars ~800 MB). Odatda faqat bitta (0-offsetda)."""
+    offsets, tail, position = [], b'', 0
+    with open(path, 'rb') as handle:
+        while True:
+            block = handle.read(_SCAN_BLOCK)
+            if not block:
+                break
+            data = tail + block
+            base = position - len(tail)
+            start = 0
+            while True:
+                idx = data.find(_EBML_MAGIC, start)
+                if idx == -1:
+                    break
+                offsets.append(base + idx)
+                start = idx + 1
+            tail = data[-(len(_EBML_MAGIC) - 1):]  # chegaradan o'tgan sarlavhani ham topish uchun
+            position += len(block)
+    return offsets
 
 
-def _normalize_webm(path):
-    """Brauzer tarmoq uzilib-ulanganda yoki ekran ulashish o'chirib-
-    yoqilganda MediaRecorder sessiyasi qayta boshlanadi — natijada bir
-    nechta MUSTAQIL WebM hujjati serverda xom baytlarda ketma-ket
-    ulanib qoladi (`upload_recording_video_chunk`/`..._audio_chunk`
-    shunchaki 'ab' bilan qo'shib boradi). Oddiy demuxer/muxerlar BITTA
-    Segment kutadi: ikkinchi hujjatdan keyingi qism vaqt belgisi buzilgan
-    holda o'qiladi (production'da topilgan xato: 6 daqiqalik yozuvdan
-    atigi ~30 soniyasi tiklangan, qidiruv/pauza umuman ishlamagan).
+def _copy_range(source, target, start: int, end: int) -> None:
+    with open(source, 'rb') as src, open(target, 'wb') as dst:
+        src.seek(start)
+        remaining = end - start
+        while remaining > 0:
+            block = src.read(min(_SCAN_BLOCK, remaining))
+            if not block:
+                break
+            dst.write(block)
+            remaining -= len(block)
 
-    `mkvmerge --append` (MKVToolNix) ishlatiladi — u bir xil kodekli
-    Matroska/WebM segmentlarini QAYTA KODLAMASDAN, vaqt belgilarini
-    to'g'irlab ulaydi (lossless append). Bu — CPU tejash rejasiga mos:
-    server ffmpeg bilan dekodlab-qayta kodlashga (sezilarli CPU) emas,
-    faqat konteyner darajasidagi bitta arzon buyruqqa muhtoj. (Avval
-    ffmpeg `-f concat` DEMUXERI bilan sinalgan edi — ishonchsiz chiqdi,
-    Cues'siz bo'laklarning o'z ichidagi davomiyligiga ishonib keyingi
-    segmentni jimgina tashlab yuborgan edi, production'da topilgan xato,
-    2026-09-01.) Bitta hujjatli (normal) fayllarga tegilmaydi —
-    o'zgarishsiz qaytariladi.
 
-    DIQQAT (production'da topilgan, 2026-09-01): `1A45DFA3` baytlari
-    siqilgan video ma'lumotlari ICHIDA ham TASODIFAN uchrashi mumkin —
-    bu haqiqiy segment chegarasi emas, va shu nomzoddan bo'lingan qism
-    mustaqil EBML hujjat sifatida ochilmaydi. Shuning uchun har bir
-    nomzod (birinchisidan tashqari) ffprobe bilan haqiqatan mustaqil
-    WebM sifatida ochilishi tasdiqlanadi; soxtasi oldingi segmentga
-    qo'shib yuboriladi (bo'linish nuqtasi sifatida e'tiborga olinmaydi)."""
-    import logging
+def _has_ebml_at(path, offset: int) -> bool:
+    with open(path, 'rb') as handle:
+        handle.seek(offset)
+        return handle.read(len(_EBML_MAGIC)) == _EBML_MAGIC
+
+
+def _is_standalone_webm(path) -> bool:
     import subprocess
+
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=format_name',
+         '-of', 'default=noprint_wrappers=1:nokey=1', str(path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    return probe.returncode == 0 and 'matroska' in probe.stdout.lower()
+
+
+def _media_duration(path) -> float | None:
+    """Fayl davomiyligi (soniya). Brauzer (MediaRecorder) yozgan WebM'da davomiylik sarlavhasi bo'lmaydi (`ffprobe`
+    `N/A` beradi) — shunda paketlar `-c copy` bilan o'qilib, oxirgi vaqt belgisi olinadi (qayta kodlanmaydi)."""
+    import re
+    import subprocess
+
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
+         str(path)], capture_output=True, text=True, timeout=60,
+    )
+    try:
+        value = float(probe.stdout.strip())
+        if value > 0:
+            return value
+    except ValueError:
+        pass
+    result = subprocess.run(
+        ['ffmpeg', '-hide_banner', '-nostats', '-i', str(path), '-c', 'copy', '-f', 'null', '-', '-progress', 'pipe:1'],
+        capture_output=True, text=True, timeout=600,
+    )
+    times = re.findall(r'out_time_us=(\d+)', result.stdout)
+    if result.returncode == 0 and times:
+        return int(times[-1]) / 1_000_000
+    return None
+
+
+def _stream_info(path, kind: str) -> dict | None:
+    import json
+    import subprocess
+
+    selector = 'v:0' if kind == 'video' else 'a:0'
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', selector, '-show_entries',
+         'stream=codec_name,width,height,sample_rate,channels', '-of', 'json', str(path)],
+        capture_output=True, text=True, timeout=60,
+    )
+    if probe.returncode != 0:
+        return None
+    streams = json.loads(probe.stdout or '{}').get('streams') or []
+    return streams[0] if streams else None
+
+
+def _make_filler(kind: str, seconds: float, like, output) -> bool:
+    """`like` faylga o'xshash (kodek, o'lcham/kanallar) `seconds` soniyalik to'ldiruvchi WebM yasaydi:
+    video uchun — oxirgi kadrning qotib turgan nusxasi (ekran ulashish o'chiq turgan payt; kadr topilmasa qora ekran),
+    ovoz uchun — jimlik. Faqat shu qism qayta kodlanadi (juda arzon: kam kadr/past bitreyt). True — tayyor."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    info = _stream_info(like, kind)
+    if not info:
+        return False
+    seconds = f'{seconds:.3f}'
+    if kind == 'video':
+        codec = {'vp8': ['-c:v', 'libvpx'], 'vp9': ['-c:v', 'libvpx-vp9', '-row-mt', '1']}.get(info.get('codec_name'))
+        width, height = info.get('width'), info.get('height')
+        if not (codec and width and height):
+            return False
+        with tempfile.TemporaryDirectory(dir=settings.RECORDINGS_DIR) as tmp:
+            frame = Path(tmp) / 'last.png'
+            subprocess.run(
+                ['ffmpeg', '-y', '-loglevel', 'error', '-sseof', '-2', '-i', str(like), '-an', '-update', '1', str(frame)],
+                capture_output=True, timeout=300,
+            )
+            source = (['-loop', '1', '-framerate', '2', '-i', str(frame)] if frame.exists() and frame.stat().st_size
+                      else ['-f', 'lavfi', '-i', f'color=c=black:s={width}x{height}:r=2'])
+            cmd = ['ffmpeg', '-y', '-loglevel', 'error', *source, '-t', seconds, '-an', *codec,
+                   '-b:v', '60k', '-g', '20', '-deadline', 'realtime', '-cpu-used', '8', '-pix_fmt', 'yuv420p',
+                   '-vf', f'scale={width}:{height}', str(output)]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    else:
+        rate, channels = info.get('sample_rate') or '48000', int(info.get('channels') or 1)
+        layout = 'mono' if channels == 1 else 'stereo'
+        cmd = ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', f'anullsrc=r={rate}:cl={layout}',
+               '-t', seconds, '-c:a', 'libopus', '-b:a', '16k', str(output)]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    return result.returncode == 0 and Path(output).exists() and Path(output).stat().st_size > 0
+
+
+def _mkv_append(parts, output) -> bool:
+    import subprocess
+
+    cmd = ['mkvmerge', '-q', '-o', str(output), str(parts[0])]
+    for part in parts[1:]:
+        cmd += ['+', str(part)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    # mkvmerge chiqish kodlari: 0 — xatosiz, 1 — ogohlantirish bilan (muvaffaqiyatli), 2 — xato.
+    return result.returncode in (0, 1) and output.exists()
+
+
+def _segment_offsets(path, sessions) -> tuple[list[int], bool]:
+    """Fayldagi mustaqil WebM hujjatlarining boshlanish offsetlari. Brauzer yuborgan sessiya ma'lumoti bo'lsa (aniq,
+    tekshirilgan) — shu; bo'lmasa (eski mijoz) — fayldan qidiriladi va har nomzod `ffprobe` bilan tasdiqlanadi.
+    Ikkinchi qiymat: offsetlar sessiya ma'lumotidan olindimi (u holda vaqt belgilari ham bor)."""
+    import tempfile
+    from pathlib import Path
+
+    size = path.stat().st_size
+    if sessions and len(sessions) > 1:
+        offsets = [s.get('offset') for s in sessions]
+        if (all(isinstance(o, int) for o in offsets) and offsets[0] == 0
+                and offsets == sorted(set(offsets)) and offsets[-1] < size
+                and all(_has_ebml_at(path, o) for o in offsets)):
+            return offsets, True
+    raw = _scan_ebml_offsets(path)
+    if len(raw) <= 1:
+        return raw[:1], False
+    bounds = raw + [size]
+    offsets = [raw[0]]
+    with tempfile.TemporaryDirectory(dir=settings.RECORDINGS_DIR) as tmp:
+        for i in range(1, len(raw)):
+            candidate = Path(tmp) / f'candidate-{i}.webm'
+            _copy_range(path, candidate, raw[i], bounds[i + 1])
+            if _is_standalone_webm(candidate):
+                offsets.append(raw[i])
+            candidate.unlink()
+    return offsets, False
+
+
+def _session_start(sessions, index: int):
+    from datetime import timezone as dt_timezone
+
+    from django.utils.dateparse import parse_datetime
+
+    try:
+        value = sessions[index].get('started_at')
+    except (IndexError, AttributeError, TypeError):
+        return None
+    parsed = parse_datetime(value) if value else None
+    if parsed and timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, dt_timezone.utc)
+    return parsed
+
+
+def _normalize_webm(path, sessions=None, kind=None):
+    """Brauzer tarmoq uzilib-ulanganda, ekran ulashish o'chirib-yoqilganda yoki sahifa yangilanganda MediaRecorder
+    sessiyasi qayta boshlanadi — natijada bir nechta MUSTAQIL WebM hujjati serverda xom baytlarda ketma-ket ulanib
+    qoladi (`upload_recording_*_chunk` shunchaki 'ab' bilan qo'shib boradi). Oddiy demuxer/muxerlar BITTA Segment
+    kutadi: ikkinchi hujjatdan keyingi qism vaqt belgisi buzilgan holda o'qiladi (production'da topilgan xato:
+    6 daqiqalik yozuvdan atigi ~30 soniyasi tiklangan, qidirish/pauza umuman ishlamagan).
+
+    `mkvmerge --append` (MKVToolNix) ishlatiladi — u bir xil kodekli segmentlarni QAYTA KODLAMASDAN, vaqt belgilarini
+    to'g'irlab ulaydi (lossless append). (Avval ffmpeg `-f concat` DEMUXERI sinalgan — ishonchsiz chiqdi, Cues'siz
+    bo'laklarning o'z ichidagi davomiyligiga ishonib keyingi segmentni jimgina tashlab yuborgan edi, 2026-09-01.)
+    Bitta hujjatli (normal) fayllarga tegilmaydi — o'zgarishsiz qaytariladi.
+
+    DIQQAT (production'da topilgan, 2026-09-01): `1A45DFA3` baytlari siqilgan video ma'lumotlari ICHIDA ham
+    TASODIFAN uchrashi mumkin. Sessiya ma'lumoti bo'lmasa har nomzod ffprobe bilan haqiqatan mustaqil WebM sifatida
+    tasdiqlanadi; soxtasi oldingi segmentga qo'shib yuboriladi.
+
+    TANAFFUS (2026-10-29): `mkvmerge` segmentlarni orasidagi real vaqt tanaffusisiz ulaydi. Ovoz esa uzluksiz yozilib
+    ketsa, video undan tanaffus uzunligicha oldinga siljib qolardi va `-shortest` darsning oxirini kesardi (lokal
+    tajribada: 10 soniyalik tanaffus -> 10 soniya siljish). `sessions` (har sessiyaning brauzer soatidagi boshlanishi)
+    va `kind` ('video'|'audio') berilsa, har tanaffus o'sha uzunlikdagi to'ldiruvchi bilan (`_make_filler`) to'ldiriladi
+    va vaqt chizig'i haqiqiy dars bilan mos qoladi."""
+    import logging
     import tempfile
     from pathlib import Path
 
     if not path.exists():
         return path
-
-    data = path.read_bytes()
-    raw_offsets = _find_ebml_segment_offsets(data)
-    if len(raw_offsets) <= 1:
+    offsets, from_sessions = _segment_offsets(path, sessions)
+    if len(offsets) <= 1:
         return path
 
-    raw_bounds = raw_offsets + [len(data)]
+    size = path.stat().st_size
+    bounds = offsets + [size]
     normalized_path = path.with_name(f'{path.stem}-normalized{path.suffix}')
+    starts = [_session_start(sessions, i) for i in range(len(offsets))] if from_sessions else []
+    fill = bool(kind and from_sessions and all(starts))
     with tempfile.TemporaryDirectory(dir=settings.RECORDINGS_DIR) as tmp_dir:
         tmp_dir_path = Path(tmp_dir)
-
-        offsets = [raw_offsets[0]]
-        for i in range(1, len(raw_offsets)):
-            candidate_path = tmp_dir_path / f'candidate-{i}.webm'
-            candidate_path.write_bytes(data[raw_offsets[i]:raw_bounds[i + 1]])
-            probe = subprocess.run(
-                ['ffprobe', '-v', 'error', '-show_entries', 'format=format_name',
-                 '-of', 'default=noprint_wrappers=1:nokey=1', str(candidate_path)],
-                capture_output=True, text=True, timeout=30,
-            )
-            candidate_path.unlink()
-            if probe.returncode == 0 and 'matroska' in probe.stdout.lower():
-                offsets.append(raw_offsets[i])
-
-        if len(offsets) <= 1:
-            return path
-
-        bounds = offsets + [len(data)]
         segment_paths = []
         for i in range(len(offsets)):
             segment_path = tmp_dir_path / f'segment-{i}.webm'
-            segment_path.write_bytes(data[bounds[i]:bounds[i + 1]])
+            _copy_range(path, segment_path, bounds[i], bounds[i + 1])
             segment_paths.append(segment_path)
 
-        cmd = ['mkvmerge', '-q', '-o', str(normalized_path), str(segment_paths[0])]
-        for segment_path in segment_paths[1:]:
-            cmd += ['+', str(segment_path)]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        parts = [segment_paths[0]]
+        if fill:
+            elapsed = _media_duration(segment_paths[0])
+            for i in range(1, len(segment_paths)):
+                if elapsed is None:
+                    break
+                gap = (starts[i] - starts[0]).total_seconds() - elapsed
+                if GAP_MIN_SECONDS <= gap <= GAP_MAX_SECONDS:
+                    filler = tmp_dir_path / f'gap-{i}.webm'
+                    if _make_filler(kind, gap, segment_paths[i - 1], filler):
+                        parts.append(filler)
+                        elapsed += gap
+                        logging.getLogger('apps').info('%s: %.1f s tanaffus to\'ldirildi (%s, sessiya %d)',
+                                                       path.name, gap, kind, i)
+                    else:
+                        logging.getLogger('apps').warning('%s: tanaffusni to\'ldirib bo\'lmadi (%s, sessiya %d)',
+                                                          path.name, kind, i)
+                duration = _media_duration(segment_paths[i])
+                elapsed = None if duration is None else elapsed + duration
+                parts.append(segment_paths[i])
+        else:
+            parts += segment_paths[1:]
+        ok = _mkv_append(parts, normalized_path)
+        if not ok and len(parts) > len(segment_paths):
+            # To'ldiruvchi bilan ulanmadi (kodek parametrlari mos kelmadi): avvalgidek tanaffussiz, lekin ulaymiz —
+            # yozuv butunlay yo'qolmasin
+            logging.getLogger('apps').warning("%s: to'ldiruvchi bilan ulanmadi, tanaffussiz ulanmoqda", path.name)
+            normalized_path.unlink(missing_ok=True)
+            ok = _mkv_append(segment_paths, normalized_path)
 
-    # mkvmerge chiqish kodlari: 0 — xatosiz, 1 — ogohlantirish bilan
-    # (muvaffaqiyatli), 2 — xato.
-    if result.returncode not in (0, 1) or not normalized_path.exists():
-        logging.getLogger('apps').error(
-            'webm normalize failed for %s (%d segments): %s',
-            path.name, len(offsets), (result.stdout + result.stderr)[-500:],
-        )
+    if not ok:
+        logging.getLogger('apps').error('webm normalize failed for %s (%d segments)', path.name, len(offsets))
+        normalized_path.unlink(missing_ok=True)
         return path
     return normalized_path
 
 
+def _pad_tail(path, kind: str, seconds: float):
+    """Fayl oxiriga `seconds` soniyalik to'ldiruvchi (oxirgi kadr yoki jimlik) ulaydi; yangi fayl yo'lini qaytaradi
+    (bajarilmasa — o'zgarishsiz `path`)."""
+    import tempfile
+    from pathlib import Path
+
+    output = path.with_name(f'{path.stem}-padded{path.suffix}')
+    with tempfile.TemporaryDirectory(dir=settings.RECORDINGS_DIR) as tmp:
+        filler = Path(tmp) / 'tail.webm'
+        if not _make_filler(kind, seconds, path, filler) or not _mkv_append([path, filler], output):
+            output.unlink(missing_ok=True)
+            return path
+    return output
+
+
+def _equalize_ends(video_path, audio_path, recording, created: list):
+    """Video va ovoz fayllarining OXIRI ham real soatga mos bo'lsin: biri ikkinchisidan qisqa bo'lsa (masalan o'qituvchi
+    brauzerning "Ulashishni to'xtatish" tugmasini bosgan, dars esa davom etgan), qisqasining oxiriga oxirgi kadr/jimlik
+    ulanadi. Aks holda `-shortest` darsning oxirgi qismini (ovozni!) kesib tashlardi. `created` — vaqtinchalik fayllar."""
+    if not (recording.video_started_at and recording.audio_started_at):
+        return video_path, audio_path
+    video_duration, audio_duration = _media_duration(video_path), _media_duration(audio_path)
+    if video_duration is None or audio_duration is None:
+        return video_path, audio_path
+    video_end = recording.video_started_at.timestamp() + video_duration
+    audio_end = recording.audio_started_at.timestamp() + audio_duration
+    end = max(video_end, audio_end)
+    for label, current, missing in (('video', video_path, end - video_end), ('audio', audio_path, end - audio_end)):
+        if TAIL_MIN_SECONDS <= missing <= GAP_MAX_SECONDS:
+            padded = _pad_tail(current, label, missing)
+            if padded != current:
+                created.append(padded)
+                if label == 'video':
+                    video_path = padded
+                else:
+                    audio_path = padded
+    return video_path, audio_path
+
+
 def _merge_recording(recording_pk) -> None:
-    """Video+audio fayllarini vaqt farqiga moslab (`-itsoffset`) bitta
-    WebM faylga birlashtiradi. Ikkalasi ham qayta kodlanmaydi (`-c copy`)
-    — brauzer kamerasi VP8/VP9, mikrofon-mix esa Opus kodlaydi, ikkalasi
-    ham WebM konteynerida TABIIY qo'llab-quvvatlanadi (production'da
-    topilgan xato: MP4 konteynerga VP8'ni yozib bo'lmaydi — "codec not
-    currently supported in container", chiqish fayli umuman
-    yaratilmagan edi).
+    """Video+audio fayllarini vaqt farqiga moslab (`-itsoffset`) bitta WebM faylga birlashtiradi. Ikkalasi ham
+    qayta kodlanmaydi (`-c copy`) — brauzer kamerasi VP8/VP9, mikrofon-mix esa Opus kodlaydi, ikkalasi ham WebM
+    konteynerida TABIIY qo'llab-quvvatlanadi (production'da topilgan xato: MP4 konteynerga VP8'ni yozib bo'lmaydi —
+    "codec not currently supported in container", chiqish fayli umuman yaratilmagan edi).
 
-    Har ikkala kirish ham avval `_normalize_webm` orqali o'tkaziladi —
-    ko'p-segmentli (qayta ulangan sessiya) fayllarni to'g'rilaydi, aks
-    holda natija faylning keyingi qismida qidirish/pauza qotib qolardi.
+    Har ikkala kirish avval `_normalize_webm` orqali o'tkaziladi — ko'p-segmentli (qayta ulangan sessiya) fayllarni
+    to'g'rilaydi va oradagi tanaffusni to'ldiradi; keyin `_equalize_ends` ikkalasining oxirini tenglashtiradi.
 
-    `-fflags +genpts` qo'shimcha himoya — kichik, segment ichidagi vaqt
-    tebranishlarini silliqlaydi. `-cues_to_front 1` chiqish faylini
-    boshidanoq qidirish mumkin (seekable) qiladi."""
+    `-fflags +genpts` qo'shimcha himoya — kichik, segment ichidagi vaqt tebranishlarini silliqlaydi.
+    `-cues_to_front 1` chiqish faylini boshidanoq qidirish mumkin (seekable) qiladi."""
     import logging
     import subprocess
     import uuid as _uuid
@@ -1211,21 +1418,17 @@ def _merge_recording(recording_pk) -> None:
     normalized_paths = []
     try:
         recording = LessonRecording.objects.select_related('lesson').get(pk=recording_pk)
-        video_path = _normalize_webm(settings.RECORDINGS_DIR / recording.video_file_name)
-        audio_path = _normalize_webm(settings.RECORDINGS_DIR / recording.audio_file_name)
         raw_video_path = settings.RECORDINGS_DIR / recording.video_file_name
         raw_audio_path = settings.RECORDINGS_DIR / recording.audio_file_name
+        video_path = _normalize_webm(raw_video_path, recording.video_sessions, 'video')
+        audio_path = _normalize_webm(raw_audio_path, recording.audio_sessions, 'audio')
         if video_path != raw_video_path:
             normalized_paths.append(video_path)
         if audio_path != raw_audio_path:
             normalized_paths.append(audio_path)
-        # .webm, .mp4 EMAS — brauzer kamerasi VP8 (yoki VP9) kodlaydi, va
-        # VP8/VP9 MP4 konteynerida UMUMAN qo'llab-quvvatlanmaydi
-        # (production'da topilgan xato: "Could not find tag for codec vp8
-        # in stream, codec not currently supported in container" — chiqish
-        # fayli butunlay yaratilmay qolgan edi). WebM VP8/VP9 + Opus'ni
-        # ikkalasini ham TABIIY qo'llab-quvvatlaydi — audio uchun ham AAC'ga
-        # aylantirish endi shart emas, to'g'ridan-to'g'ri nusxalanadi.
+        video_path, audio_path = _equalize_ends(video_path, audio_path, recording, normalized_paths)
+        # .webm, .mp4 EMAS — brauzer kamerasi VP8 (yoki VP9) kodlaydi, va VP8/VP9 MP4 konteynerida UMUMAN
+        # qo'llab-quvvatlanmaydi (production'da topilgan xato: "Could not find tag for codec vp8 in stream").
         output_name = f'{recording.lesson.room_name}-{_uuid.uuid4().hex[:6]}-final.webm'
         output_path = settings.RECORDINGS_DIR / output_name
 

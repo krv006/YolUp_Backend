@@ -38,6 +38,7 @@ KIND_TITLES = {
     'chat_message': 'Yangi xabar',
     'certificate_verified': 'Sertifikat tasdiqlandi', 'certificate_rejected': 'Sertifikat rad etildi',
     'certificate_pending': 'Sertifikat tekshiruvi', 'recording_ready': 'Dars yozuvi tayyor', 'disk_alert': 'Disk to\'lmoqda',
+    'recording_failed': 'Yozuv birlashtirilmadi',
 }
 
 
