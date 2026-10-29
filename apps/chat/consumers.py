@@ -6,12 +6,12 @@ Yopilish kodlari: 4401 — token yaroqsiz, 4403 — xonaga a'zo emas.
 Client -> server:
     {"type": "message", "text": "...", "reply_to_id": "...", "client_message_id": "..."}
         — xabar yuborish (REST POST bilan teng; fayl/ovoz faqat REST orqali)
-    {"type": "typing"}                    — "yozmoqda..." signali
+    {"type": "typing", "kind": "text"|"voice"} — "yozmoqda..." signali (`kind` standart `text`: matn yoki ovozli xabar yozilmoqda)
 
 Server -> client:
     {"type": "message", "message": {...}} — yangi xabar (MessageSerializer sxemasi);
         REST orqali yuborilgan xabarlar ham shu kanaldan keladi
-    {"type": "typing", "user_id": "...", "name": "..."} — kimdir yozmoqda
+    {"type": "typing", "user_id": "...", "name": "...", "kind": "text"|"voice"} — kimdir yozmoqda
         (o'zingizni user_id bo'yicha filtrlab tashlang)
     {"type": "lesson_live", "lesson": {"id", "title", "room_name"}} — kurs guruhida
         jonli dars boshlandi (Telegram uslubidagi guruh video chat chizig'i uchun)
@@ -29,6 +29,11 @@ Server -> client:
 """
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
+
+TYPING_KINDS = ('text', 'voice')
+TYPING_FANOUT_SECONDS = 2        # bir kishining "yozmoqda"si chat ro'yxatiga shuncha soniyada bir marta uzatiladi
+TYPING_FANOUT_MAX_MEMBERS = 100  # undan katta guruhlarda ro'yxatga uzatilmaydi
+TYPING_MEMBERS_TTL = 30          # a'zolar ro'yxati keshi (soniya)
 
 
 def group_name(room_id) -> str:
@@ -89,11 +94,22 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         user = self.scope['user']
 
         if kind == 'typing':
+            typing_kind = content.get('kind') if content.get('kind') in TYPING_KINDS else 'text'
+            name = user.first_name or user.username
             await self.channel_layer.group_send(self.group, {
                 'type': 'chat.typing',
                 'user_id': str(user.id),
-                'name': user.first_name or user.username,
+                'name': name,
+                'kind': typing_kind,
             })
+            # Xona ochiq bo'lmagan a'zolarning chat ro'yxatida ham ko'rinsin (`ws/notifications/` orqali)
+            targets = await self._typing_targets(user)
+            if targets:
+                from apps.notifications.realtime import group_name as notice_group
+
+                signal = {'type': 'chat_typing', 'room': str(self.room_id), 'user_id': str(user.id), 'name': name, 'kind': typing_kind}
+                for target in targets:
+                    await self.channel_layer.group_send(notice_group(target), {'type': 'chat.signal', 'event': signal})
             return
 
         if kind == 'message':
@@ -139,7 +155,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def chat_typing(self, event):
         await self.send_json({
-            'type': 'typing', 'user_id': event['user_id'], 'name': event['name'],
+            'type': 'typing', 'user_id': event['user_id'], 'name': event['name'], 'kind': event.get('kind', 'text'),
         })
 
     async def chat_lesson_live(self, event):
@@ -192,6 +208,28 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         room = ChatRoom.objects.select_related('course').get(pk=room_id)
         return selectors.is_room_teacher(user, room), selectors.can_pin(user, room), room.kind == ChatRoom.Kind.DIRECT
+
+    @database_sync_to_async
+    def _typing_targets(self, user) -> list:
+        """Chat ro'yxatiga "yozmoqda" yuboriladigan a'zolar (yozayotgan o'zi chiqarib tashlanadi). "Yozmoqda" tez-tez keladi,
+        shuning uchun bir kishi uchun 2 soniyada ko'pi bilan bir marta uzatiladi; a'zolar ro'yxati qisqa muddat keshlanadi;
+        juda katta guruhlarda (`TYPING_FANOUT_MAX_MEMBERS` dan ko'p) uzatilmaydi — har tugma bosilishi yuzlab yuborishga aylanmasin."""
+        from django.core.cache import cache
+
+        from . import selectors
+        from .models import ChatRoom
+
+        if not cache.add(f'chat:typing:{self.room_id}:{user.id}', 1, TYPING_FANOUT_SECONDS):
+            return []
+        key = f'chat:members:{self.room_id}'
+        ids = cache.get(key)
+        if ids is None:
+            room = ChatRoom.objects.select_related('course').get(pk=self.room_id)
+            ids = [str(i) for i in selectors.member_ids(room)]
+            cache.set(key, ids, TYPING_MEMBERS_TTL)
+        if len(ids) > TYPING_FANOUT_MAX_MEMBERS:
+            return []
+        return [i for i in ids if i != str(user.id)]
 
     @database_sync_to_async
     def _deliver(self, message_id):

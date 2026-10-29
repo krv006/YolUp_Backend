@@ -31,6 +31,38 @@ def broadcast_message(message) -> None:
         'type': 'chat.message',
         'message': message_payload(message),
     })
+    broadcast_activity(message)
+
+
+def notice_group(user_id) -> str:
+    """Foydalanuvchining umumiy (`ws/notifications/`) ulanishlari — xona ochiq bo'lmasa ham ro'yxat/badge yangilanishi uchun."""
+    from apps.notifications.realtime import group_name
+
+    return group_name(user_id)
+
+
+def broadcast_activity(message) -> None:
+    """Yangi xabar haqida QISQA hodisa — xona a'zolarining (yuboruvchining o'zi va boshqa qurilmalari ham) umumiy
+    `ws/notifications/` ulanishiga: `{type:"chat_activity", room, message_id, sender_id, created_at}`. Chat ro'yxati,
+    o'qilmagan soni va sidebar badge'i shu bilan darhol yangilanadi. Xato xabar oqimini buzmaydi."""
+    import logging
+
+    from channels.layers import get_channel_layer
+
+    from . import selectors
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    try:
+        event = json.loads(JSONRenderer().render({
+            'type': 'chat_activity', 'room': str(message.room_id), 'message_id': str(message.id),
+            'sender_id': str(message.sender_id) if message.sender_id else None, 'created_at': message.created_at,
+        }))
+        for user_id in {str(i) for i in selectors.member_ids(message.room)}:
+            async_to_sync(layer.group_send)(notice_group(user_id), {'type': 'chat.signal', 'event': event})
+    except Exception:  # noqa: BLE001
+        logging.getLogger('apps').exception('chat_activity broadcast failed')
 
 
 def broadcast_events(room_id, *events: dict) -> None:

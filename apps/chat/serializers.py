@@ -272,6 +272,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
             'text': _preview_text(msg)[:80],
             'message_type': msg.message_type,
             'sender': msg.sender.first_name or msg.sender.username,
+            'sender_id': str(msg.sender_id),  # "Siz: …" ni ism bo'yicha emas, ID bo'yicha aniqlash uchun (bir xil ismlar bo'lishi mumkin)
             'created_at': msg.created_at,
         }
         if msg.file:

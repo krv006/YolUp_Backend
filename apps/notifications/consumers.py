@@ -5,6 +5,10 @@ Yopilish kodi: 4401 — token yaroqsiz.
 
 Server -> client:
     {"type": "notification", "notification": {...}} — NotificationSerializer sxemasi
+    {"type": "chat_activity", "room": "...", "message_id": "...", "sender_id": "...", "created_at": "..."}
+        — chat xonasida yangi xabar (xona ochiq bo'lmasa ham; yuboruvchining o'ziga ham — boshqa qurilmalari uchun)
+    {"type": "chat_typing", "room": "...", "user_id": "...", "name": "...", "kind": "text"|"voice"}
+        — kimdir shu xonada yozmoqda (yozayotganning o'ziga kelmaydi; saqlanmaydi, 2 soniyada ko'pi bilan bir marta)
 """
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
@@ -34,3 +38,7 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
     async def notification_new(self, event):
         await self.send_json({'type': 'notification', 'notification': event['notification']})
+
+    async def chat_signal(self, event):
+        """Chat ro'yxati uchun qisqa hodisalar (`chat_activity`, `chat_typing`) — tayyor JSON shu holicha uzatiladi."""
+        await self.send_json(event['event'])
