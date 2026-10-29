@@ -68,9 +68,11 @@ def _has_video(path) -> bool:
 def _command(src, dst, *, video: bool) -> list:
     base = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-i', str(src)]
     if video:
-        # Ekran yozuvi: 1280 px gacha, ~15 kadr/s — sifat yetarli, CPU va hajm kam
+        # Ekran yozuvi: 1280 px gacha, ~15 kadr/s — sifat yetarli, CPU va hajm kam.
+        # `-g 30` = har 2 soniyada kalit kadr: standart (250 kadr) har ~17 soniyada edi, o'tkazib yuborganda pleer shuncha
+        # videoni dekod qilib qotardi. `-sc_threshold 0` — sahna o'zgarishida qo'shimcha kalit kadr qo'ymaydi (hajm barqaror).
         codec = ['-vf', "scale='min(1280,iw)':-2,fps=15", '-c:v', 'libx264', '-preset', 'veryfast',
-                 '-crf', '28', '-pix_fmt', 'yuv420p']
+                 '-crf', '28', '-g', '30', '-keyint_min', '30', '-sc_threshold', '0', '-pix_fmt', 'yuv420p']
     else:
         codec = ['-vn']
     cmd = base + codec + ['-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', str(dst)]

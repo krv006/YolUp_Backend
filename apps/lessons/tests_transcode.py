@@ -73,7 +73,7 @@ class ConvertTests(RecordingBase):
         self.assertFalse(list(self.tmp.glob('*.part*')))  # vaqtinchalik fayl qolmaydi
         command = next(c for c in fake.calls if 'ffmpeg' in c[0] or 'ffmpeg' in c)
         flat = ' '.join(command)
-        for expected in ('libx264', 'aac', '+faststart', 'yuv420p'):
+        for expected in ('libx264', 'aac', '+faststart', 'yuv420p', '-g 30'):
             self.assertIn(expected, flat)
 
     def test_an_audio_only_recording_becomes_m4a_without_video_encoding(self):
@@ -192,6 +192,20 @@ class StreamTests(RecordingBase):
         self.assertEqual((ranged.status_code, ranged['Content-Length'], ranged['Content-Range']),
                          (206, '10', 'bytes 10-19/300'))
 
+    def test_an_open_ended_range_is_capped_so_the_server_never_buffers_the_rest_of_the_file(self):
+        recording = self.recording(content=b'W' * 500)
+        (self.tmp / 'lesson-final.mp4').write_bytes(bytes(range(256)) + b'M' * 244)
+        LessonRecording.objects.filter(pk=recording.pk).update(mp4_file_name='lesson-final.mp4')
+        with patch('apps.lessons.views.MAX_VIDEO_CHUNK', 100):
+            open_ended = self.stream(recording, HTTP_RANGE='bytes=10-')
+            too_long = self.stream(recording, HTTP_RANGE='bytes=10-499')
+            tail = self.stream(recording, HTTP_RANGE='bytes=450-')
+        self.assertEqual((open_ended.status_code, open_ended['Content-Length'], open_ended['Content-Range']),
+                         (206, '100', 'bytes 10-109/500'))
+        self.assertEqual(b''.join(open_ended.streaming_content), bytes(range(10, 110)))
+        self.assertEqual((too_long['Content-Length'], too_long['Content-Range']), ('100', 'bytes 10-109/500'))
+        self.assertEqual((tail['Content-Length'], tail['Content-Range']), ('50', 'bytes 450-499/500'))
+
     def test_an_audio_only_copy_is_served_as_audio_mp4(self):
         recording = self.recording(content=b'W' * 500)
         (self.tmp / 'lesson-final.m4a').write_bytes(b'A' * 100)
@@ -250,6 +264,23 @@ class RealFfmpegTests(RecordingBase):
         self.assertTrue(any(line.startswith('h264,video') and 'yuv420p' in line for line in streams), streams)
         data = mp4.read_bytes()
         self.assertLess(data.find(b'moov'), data.find(b'mdat'))  # faststart: pleyer butun faylni kutmaydi
+
+    def test_a_static_screen_still_gets_a_keyframe_every_two_seconds(self):
+        # Tinch ekran (sahna o'zgarishi yo'q) — standart sozlamada kalit kadr ~17 soniyada bir marta chiqar edi
+        subprocess.run(
+            ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=640x360:r=30:d=9',
+             '-f', 'lavfi', '-i', 'sine=frequency=440:duration=9', '-c:v', 'libvpx', '-g', '1000', '-b:v', '200k',
+             '-c:a', 'libopus', str(self.tmp / 'static.webm')], check=True, capture_output=True)
+        recording = self.recording('static.webm', content=(self.tmp / 'static.webm').read_bytes())
+        self.assertEqual(transcode.convert(recording.pk), 'done')
+        recording.refresh_from_db()
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,flags', '-of', 'csv=p=0',
+             str(self.tmp / recording.mp4_file_name)], capture_output=True, text=True, check=True).stdout
+        keyframes = [float(line.split(',')[0]) for line in out.splitlines() if ',K' in line]
+        self.assertGreaterEqual(len(keyframes), 4, keyframes)  # 0, 2, 4, 6, 8
+        gaps = [b - a for a, b in zip(keyframes, keyframes[1:])]
+        self.assertLessEqual(max(gaps), 2.1, keyframes)
 
     def test_an_audio_only_webm_becomes_aac_m4a(self):
         self.make_webm('voice.webm', video=False)

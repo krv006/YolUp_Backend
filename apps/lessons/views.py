@@ -537,6 +537,10 @@ class _FileSlice:
 
 
 _VIDEO_CONTENT_TYPES = {'.mp4': 'video/mp4', '.webm': 'video/webm', '.m4a': 'audio/mp4'}
+# Bir javobda beriladigan eng ko'p bayt. Brauzer o'tkazib yuborganda `bytes=X-` (fayl oxirigacha) so'raydi; ASGI (uvicorn)
+# ostida Django sinxron oqimni to'liq xotiraga yig'ib, keyin yuboradi — butun qoldiq RAMga tushib, birinchi bayt kechikadi
+# va shu ishchi jarayondagi boshqa so'rovlar ham sekinlashadi. Qisqa 206 bo'lak so'rab, pleer qolganini o'zi qayta so'raydi.
+MAX_VIDEO_CHUNK = 4 * 1024 * 1024
 
 
 def _ranged_video_response(request, path):
@@ -556,6 +560,7 @@ def _ranged_video_response(request, path):
         start = int(match.group(1))
         end = min(int(match.group(2)) if match.group(2) else size - 1, size - 1)
         start = min(start, size - 1)
+        end = min(end, start + MAX_VIDEO_CHUNK - 1)
         length = end - start + 1
         f = open(path, 'rb')
         f.seek(start)
