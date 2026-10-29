@@ -189,6 +189,9 @@ JAZZMIN_UI_TWEAKS = {
     'dark_mode_theme': None,
 }
 
+# `/api/docs/` va `/api/schema/` hamma uchun ochiqmi (prod.py da sukut bo'yicha yopiq — apps/core/api_docs.py)
+API_DOCS_PUBLIC = os.getenv('API_DOCS_PUBLIC', '1') == '1'
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Fokus EdTech API',
     'DESCRIPTION': "Onlayn ta'lim platformasi — jonli darslar, davomat, ota-ona paneli",
@@ -218,8 +221,9 @@ CORS_ALLOWED_ORIGINS = [
     "https://edu.thesofmebel.uz",
 ]
 
-# Vercel preview buildlari (har deployda yangi subdomen) ham ishlasin
-CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://[\w.-]+\.vercel\.app$"]
+# Vercel preview buildlari (har deployda yangi subdomen) ham ishlasin — faqat shu loyiha (`edu-front...`), har qanday
+# `*.vercel.app` emas (begona ilova bilan CORS ochilmasin)
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://edu-front[\w-]*\.vercel\.app$"]
 
 CORS_ALLOW_CREDENTIALS = True
 

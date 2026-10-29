@@ -1,7 +1,6 @@
 from django.contrib import admin
 from django.urls import include, path
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-
+from apps.core.api_docs import schema_view, swagger_view
 from apps.core.views import HealthView
 
 # Admin panel sarlavhalari
@@ -31,6 +30,6 @@ urlpatterns = [
     path('api/v1/support/', include('apps.support.urls')),
     path('api/v1/search/', include('apps.search.urls')),
     path('api/v1/help/', include('apps.support.help_urls')),
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/schema/', schema_view, name='schema'),
+    path('api/docs/', swagger_view, name='swagger-ui'),
 ]

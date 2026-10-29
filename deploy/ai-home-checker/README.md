@@ -14,7 +14,7 @@ O'z kompyuteringizda (GitHub'ga kirgan holda), PowerShell:
 ```powershell
 cd C:\Users\mathu\Desktop
 git clone https://github.com/RJalol/AI-home-checker.git
-scp -r AI-home-checker root@75.119.154.71:/var/www/ai-home-checker
+scp -r AI-home-checker deploy@<SERVER_IP>:/var/www/ai-home-checker
 ```
 
 (`scp` serverda `/var/www/ai-home-checker` papkasini yaratadi. `.git` papkasi ham ko'chadi, zarari yo'q.)

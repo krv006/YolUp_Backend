@@ -2,13 +2,13 @@
 # Lokal kompyuterdan bitta buyruq bilan serverga deploy:
 #   bash scripts/deploy-remote.sh
 # Boshqa server/papka kerak bo'lsa:
-#   SERVER=root@1.2.3.4 APP_DIR=/var/www/edu_platform bash scripts/deploy-remote.sh
+#   SERVER=deploy@<SERVER_IP> APP_DIR=/var/www/edu_platform bash scripts/deploy-remote.sh
 #
 # Talab: SSH kalitingiz serverda bo'lishi kerak (bir marta):
-#   ssh-copy-id root@75.119.154.71
+#   ssh-copy-id deploy@<SERVER_IP>   (root bilan kirish o'chirilgan bo'lishi kerak)
 set -euo pipefail
 
-SERVER="${SERVER:-root@75.119.154.71}"
+SERVER="${SERVER:?SERVER=deploy@<SERVER_IP> ni bering (manzil ochiq repoda saqlanmaydi)}"
 APP_DIR="${APP_DIR:-/var/www/edu_platform}"
 
 echo ">> Deploy: $SERVER -> $APP_DIR"

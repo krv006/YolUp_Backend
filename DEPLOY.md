@@ -68,7 +68,7 @@ git pull
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Yoki lokal kompyuterdan bitta buyruq bilan (SSH kalit bir marta `ssh-copy-id root@75.119.154.71`
+Yoki lokal kompyuterdan bitta buyruq bilan (SSH kalit bir marta `ssh-copy-id deploy@<SERVER_IP>`
 bilan sozlangan bo'lishi kerak):
 
 ```bash

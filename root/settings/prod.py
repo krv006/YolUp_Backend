@@ -9,6 +9,14 @@ if os.getenv('SECRET_KEY', '').startswith('django-insecure') or not os.getenv('S
     raise RuntimeError('PROD: haqiqiy SECRET_KEY .env da berilishi shart.')
 if not os.getenv('POSTGRES_DB'):
     raise RuntimeError('PROD: Postgres majburiy (POSTGRES_DB va h.k.).')
+# Dev uchun yozilgan standart sirlar prodda ishlamasin (kod ochiq repoda — kimdir ularni biladi)
+_DEV_LIVEKIT_SECRET = 'devsecret_change_me_32chars_min!'
+if (os.getenv('LIVEKIT_API_SECRET') or _DEV_LIVEKIT_SECRET) == _DEV_LIVEKIT_SECRET or (os.getenv('LIVEKIT_API_KEY') or 'devkey') == 'devkey':
+    raise RuntimeError('PROD: LIVEKIT_API_KEY va LIVEKIT_API_SECRET .env da berilishi shart (dev standarti ishlamaydi).')
+if SERVER_ROLE != 'media' and not os.getenv('VAPID_PRIVATE_KEY'):  # noqa: F405 — media serverda push yo'q
+    raise RuntimeError('PROD: VAPID_PRIVATE_KEY .env da berilishi shart (kod ichidagi standart kalit ochiq repoda).')
+# API hujjati prodda sukut bo'yicha yopiq (xodim /admin/ orqali kirgach ochiladi); ochiq qilish: API_DOCS_PUBLIC=1
+API_DOCS_PUBLIC = os.getenv('API_DOCS_PUBLIC', '0') == '1'
 # ALLOWED_HOSTS = ['*'] — Caddy faqat bizning domenlarni backendga o'tkazadi,
 # host filtri proxy darajasida hal bo'lgan
 

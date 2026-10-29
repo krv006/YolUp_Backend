@@ -85,6 +85,13 @@ services:
              done &) &&
              gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000
                --workers ${WEB_WORKERS:-8} --threads ${WEB_THREADS:-8} --timeout 60 --worker-tmp-dir /dev/shm"
+    healthcheck:
+      # SECURE_SSL_REDIRECT yoqiq: HTTP so'rov HTTPS'ga yo'naltirilmasligi uchun proksi sarlavhasi beriladi
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; r=u.Request('http://127.0.0.1:8000/api/health/', headers={'X-Forwarded-Proto':'https'}); sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 8s
+      retries: 4
+      start_period: 90s
     depends_on:
       db:
         condition: service_healthy

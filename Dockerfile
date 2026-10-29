@@ -14,8 +14,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix gettext \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# constraints.txt — har buildda bir xil versiyalar (qotirilmagan `>=` tufayli kutilmagan yangilanish bo'lmasin)
+COPY requirements.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c constraints.txt
 
 COPY . .
 

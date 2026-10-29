@@ -27,7 +27,7 @@ O'z kompyuteringizda, PowerShell:
 cd C:\Users\mathu\Desktop\Test-creator
 git pull
 cd ..
-scp -r Test-creator root@75.119.154.71:/var/www/test-creator-new
+scp -r Test-creator deploy@<SERVER_IP>:/var/www/test-creator-new
 ```
 
 Serverda eskisini yonida saqlab, yangisini o'rniga qo'ying (`.env` ko'chadi):

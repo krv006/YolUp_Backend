@@ -84,6 +84,13 @@ services:
       # quyidagi qatorni izohdan chiqaring va .env'da
       # GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/firebase-service-account.json qo'shing.
       # - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    healthcheck:
+      # SECURE_SSL_REDIRECT yoqiq: HTTP so'rov HTTPS'ga yo'naltirilmasligi uchun proksi sarlavhasi beriladi
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; r=u.Request('http://127.0.0.1:8000/api/health/', headers={'X-Forwarded-Proto':'https'}); sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 8s
+      retries: 4
+      start_period: 90s
     depends_on:
       db:
         condition: service_healthy
