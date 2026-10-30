@@ -523,6 +523,16 @@ def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', r
     except Exception:  # noqa: BLE001
         import logging
         logging.getLogger('apps').exception('lesson_ended broadcast failed')
+    # Video xonani ham yopamiz: aks holda o'quvchilar o'qituvchi chiqib ketgach ham xonada qolib ketardi (2026-10-30).
+    # Testlarda (BACKGROUND_ASYNC=0) LiveKit yo'q — o'tkazib yuboriladi.
+    from django.conf import settings
+    if getattr(settings, 'BACKGROUND_ASYNC', False):
+        try:
+            from apps.live import services as live_services
+            live_services.schedule_room_close(lesson.room_name)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger('apps').exception('room close scheduling failed')
     # Doska lentasi -> PDF -> guruh chat (EduTech.docx). Xato yakunlashni to'xtatmaydi.
     try:
         from apps.board import services as board_services

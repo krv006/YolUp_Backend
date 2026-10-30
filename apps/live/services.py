@@ -939,6 +939,24 @@ def end_room(lesson: Lesson) -> None:
         logging.getLogger('apps').info('end_room: %s', exc)
 
 
+# O'qituvchi "Yakunlash"ni bosgach xona shuncha soniyadan keyin yopiladi (2026-10-30): o'qituvchining brauzeri shu vaqt ichida
+# yozuvni yakunlab (finalize so'rovlari), sahifadan chiqib ulguradi — aks holda uning o'z ulanishi uzilishi bilan chiqish ikki
+# marta ishga tushardi. O'quvchilar esa xonadan o'zi chiqadi va baho oynasini ko'radi (ROOM_DELETED).
+ROOM_CLOSE_DELAY_SECONDS = 5
+
+
+def schedule_room_close(room_name: str, delay: float = ROOM_CLOSE_DELAY_SECONDS) -> None:
+    """Dars yakunlangach LiveKit xonasini `delay` soniyadan keyin yopadi. Oldin faqat avto-yakunlash xonani yopardi:
+    o'qituvchi qo'lda tugatsa, o'quvchilar xonada qolib ketardi. Alohida yengil taymer (umumiy fon-oqim havzasi push/xatlar
+    uchun — unda uxlab turish ularni kechiktirardi); jarayon shu soniyalarda o'chsa, holat avvalgidek (xona o'zi yopilmaydi)."""
+    import threading
+    from types import SimpleNamespace
+
+    timer = threading.Timer(delay, end_room, args=(SimpleNamespace(room_name=room_name),))
+    timer.daemon = True
+    timer.start()
+
+
 def maybe_start_merge(lesson_id) -> None:
     """Video va audio (ikkalasi ham brauzerdan yuklangan) tayyor bo'lsa —
     belgilangan sondagi worker'li fon navbatiga (`_merge_executor`) qo'yib,
