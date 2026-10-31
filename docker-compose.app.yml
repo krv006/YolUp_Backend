@@ -107,6 +107,12 @@ services:
       DB_POOL_MAX: ${WS_DB_POOL_MAX:-16}   # ASGI jarayon: ulanishlar puli (root/settings/db.py)
     command: >
       sh -c "gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers ${WS_WORKERS:-3} --timeout 60"
+    # Har bir WebSocket ulanishi 1 ta fayl deskriptori (+ Redis/baza). Standart chegara 1024: yuk sinovida ~1000 ulanishdan keyin
+    # "Too many open files" -> Redis'ga ulanib bo'lmay qoldi, Caddy 502 berdi. Chegarani ko'taramiz.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     depends_on:
       db:
         condition: service_healthy
