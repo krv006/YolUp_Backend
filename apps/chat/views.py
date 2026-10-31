@@ -3,7 +3,7 @@ import json
 import re
 from urllib.parse import quote
 
-from django.db.models import Prefetch, Q
+from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.http import FileResponse, HttpResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework import status, viewsets
@@ -41,6 +41,21 @@ def _waveform(raw):
     return raw
 
 
+class _LightCount:
+    """Paginator uchun qatlam: `count()` yengil so'rovdan, kesish (`[a:b]`) esa asl so'rovdan."""
+    ordered = True
+
+    def __init__(self, queryset, count_queryset):
+        self._queryset = queryset
+        self._count_queryset = count_queryset
+
+    def count(self):
+        return self._count_queryset.count()
+
+    def __getitem__(self, key):
+        return self._queryset[key]
+
+
 class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ChatRoomSerializer
 
@@ -60,14 +75,31 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
                 .select_related('message', 'message__sender').order_by('-created_at'),
                 to_attr='pin_list',
             ),
-            Prefetch(
-                'messages',
-                queryset=Message.objects.filter(deleted_at__isnull=True).select_related('sender').order_by('-created_at')[:1],
-                to_attr='last_message_list',
-            ),
+            Prefetch('messages', queryset=self._last_messages(user), to_attr='last_message_list'),
             Prefetch('reads', queryset=RoomRead.objects.filter(user=user), to_attr='my_reads'),
             Prefetch('course__lessons', queryset=Lesson.objects.filter(status=Lesson.Status.LIVE), to_attr='live_lessons'),
         )
+
+    @staticmethod
+    def _last_messages(user):
+        """Har bir xonaning oxirgi (o'chirilmagan) xabari. Avvalgi `Prefetch(...[:1])` Django'da ROW_NUMBER() OVER (PARTITION BY room)
+        bilan HAMMA xabarni o'qirdi (8 xona x 2500 xabarda 56 ms, xabar ko'paygan sari o'sadi); bu yerda har xona uchun
+        (room_id, created_at) indeksidan bitta qidiruv."""
+        last_id = Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True).order_by('-created_at').values('pk')[:1]
+        ids = (
+            ChatRoom.objects.filter(pk__in=selectors.rooms_for(user).order_by().values('pk'))
+            .annotate(last_id=Subquery(last_id)).filter(last_id__isnull=False).values('last_id')
+        )
+        return Message.objects.filter(pk__in=ids).select_related('sender')
+
+    def paginate_queryset(self, queryset):
+        """Sahifalash `COUNT(*)` ni statistikali og'ir so'rovdan emas, yengil so'rovdan oladi (ro'yxat va javob o'zgarmaydi)."""
+        if self.action == 'list':
+            user = self.request.user
+            hidden = selectors.hidden_filter(user).values('room_id')
+            light = selectors.rooms_for(user).exclude(pk__in=hidden).order_by().values('pk')
+            queryset = _LightCount(queryset, light)
+        return super().paginate_queryset(queryset)
 
     def _room_response(self, pk, http_status=status.HTTP_200_OK):
         room = self.get_queryset().get(pk=pk)
