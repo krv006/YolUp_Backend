@@ -3,12 +3,14 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
+from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, serializers, status
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import BaseThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -68,7 +70,7 @@ class SocialLoginView(APIView):
     - `200 {signup_required: true, email, first_name, last_name}` — yangi foydalanuvchi: rol tanlatib qayta yuboring."""
 
     permission_classes = [AllowAny]
-    throttle_scope = 'auth'
+    throttle_scope = 'login'
 
     def post(self, request, provider):
         from .social import APPLE, GOOGLE
@@ -155,12 +157,47 @@ class MeAvatarView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# Brute-force himoyasi: umumiy 'auth' chegarasi IP bo'yicha va yuqori (maktab Wi-Fi'sida bir IP ostida ko'p o'quvchi kirishi uchun),
+# shuning uchun har bir (IP + login) juftligi uchun muvaffaqiyatsiz urinishlar alohida sanaladi.
+LOGIN_FAIL_LIMIT = 10
+LOGIN_FAIL_WINDOW = 600  # soniya
+
+
+def _login_fail_key(request) -> str:
+    data = request.data if hasattr(request.data, 'get') else {}
+    username = str(data.get('username', '')).strip().lower()[:150]
+    return f'login_fail:{BaseThrottle().get_ident(request)}:{username}'
+
+
 class LoginView(TokenObtainPairView):
-    throttle_scope = 'auth'
+    throttle_scope = 'login'
     serializer_class = sessions.SessionTokenObtainPairSerializer
 
+    @staticmethod
+    def _count_failure(fail_key):
+        cache.add(fail_key, 0, LOGIN_FAIL_WINDOW)
+        try:
+            cache.incr(fail_key)
+        except ValueError:
+            cache.set(fail_key, 1, LOGIN_FAIL_WINDOW)
+
     def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
+        fail_key = _login_fail_key(request)
+        if cache.get(fail_key, 0) >= LOGIN_FAIL_LIMIT:
+            return Response(
+                {'detail': _("Juda ko'p muvaffaqiyatsiz urinish. Bir necha daqiqadan keyin qayta urinib ko'ring.")},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        try:
+            response = super().post(request, *args, **kwargs)
+        except APIException as exc:  # noto'g'ri login/parol shu yerda istisno bo'lib chiqadi (DRF uni keyin javobga aylantiradi)
+            if exc.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED):
+                self._count_failure(fail_key)
+            raise
+        if response.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED):
+            self._count_failure(fail_key)
+        elif response.status_code == status.HTTP_200_OK:
+            cache.delete(fail_key)
         if response.status_code != 200 or 'access' not in response.data:
             return response  # 2FA yoqilgan bo'lsa bu yerda hali token yo'q — `two_factor_required`
 
@@ -424,7 +461,7 @@ class TwoFactorLoginView(APIView):
     """Loginning 2-bosqichi: `{challenge_token, code}` -> `{access, refresh}` (odatiy login javobi bilan bir xil)."""
 
     permission_classes = [AllowAny]
-    throttle_scope = 'auth'
+    throttle_scope = 'login'
 
     def post(self, request):
         user = services.two_factor_login(

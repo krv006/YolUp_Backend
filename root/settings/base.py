@@ -128,7 +128,10 @@ REST_FRAMEWORK = {
         # Env bilan sozlanadi: maktab/o'quv markazi Wi-Fi'sidagi ko'p o'quvchi bitta IP'dan kirsa 'auth' chegarasini oshiring
         'anon': os.getenv('THROTTLE_ANON', '60/min'),
         'user': os.getenv('THROTTLE_USER', '240/min'),
-        'auth': os.getenv('THROTTLE_AUTH', '30/min'),   # login / register / OTP — bruteforce himoyasi (IP bo'yicha)
+        'auth': os.getenv('THROTTLE_AUTH', '30/min'),   # register / OTP / SMS / parol tiklash — bruteforce va SMS xarajati himoyasi (IP bo'yicha)
+        # Faqat login (parol/2FA/ijtimoiy): maktab/markaz Wi-Fi'sida ko'p o'quvchi bitta IP'dan kiradi. Brute-force uchun alohida
+        # (IP + login) chegarasi bor (accounts.views.LOGIN_FAIL_LIMIT).
+        'login': os.getenv('THROTTLE_LOGIN', '300/min'),
     },
     'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
 }
