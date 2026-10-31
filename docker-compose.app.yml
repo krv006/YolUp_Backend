@@ -83,8 +83,9 @@ services:
                python manage.py record_resource_sample;
                sleep 300;
              done &) &&
-             gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000
-               --workers ${WEB_WORKERS:-8} --threads ${WEB_THREADS:-8} --timeout 60 --worker-tmp-dir /dev/shm"
+             gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000 --workers ${WEB_WORKERS:-8} --threads ${WEB_THREADS:-8} --timeout 60 --worker-tmp-dir /dev/shm"
+    # DIQQAT: gunicorn buyrug'i BITTA qatorda bo'lishi shart. `>` blokida chuqurroq yozilgan qator YANGI qator bo'lib qoladi,
+    # shell uni alohida buyruq deb o'qiydi va `--workers/--threads` gunicorn'ga yetib bormaydi (1 worker x 1 thread ishlab qoladi).
     healthcheck:
       # SECURE_SSL_REDIRECT yoqiq: HTTP so'rov HTTPS'ga yo'naltirilmasligi uchun proksi sarlavhasi beriladi
       test: ["CMD", "python", "-c", "import urllib.request as u,sys; r=u.Request('http://127.0.0.1:8000/api/health/', headers={'X-Forwarded-Proto':'https'}); sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)"]
@@ -105,8 +106,7 @@ services:
       <<: *backend-env
       DB_POOL_MAX: ${WS_DB_POOL_MAX:-16}   # ASGI jarayon: ulanishlar puli (root/settings/db.py)
     command: >
-      sh -c "gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-               --workers ${WS_WORKERS:-3} --timeout 60"
+      sh -c "gunicorn root.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers ${WS_WORKERS:-3} --timeout 60"
     depends_on:
       db:
         condition: service_healthy

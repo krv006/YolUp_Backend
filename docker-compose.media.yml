@@ -62,8 +62,7 @@ services:
     ports:
       - "${MEDIA_WG_IP:-10.10.0.2}:8000:8000"
     command: >
-      sh -c "gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000
-               --workers ${REC_WORKERS:-4} --threads ${REC_THREADS:-16} --timeout 120 --worker-tmp-dir /dev/shm"
+      sh -c "gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000 --workers ${REC_WORKERS:-4} --threads ${REC_THREADS:-16} --timeout 120 --worker-tmp-dir /dev/shm"
 
   # Yozuv serveridagi davriy vazifalar: qotib qolgan yozuvni tiklash, yetim fayllarni tozalash, disk ogohlantirishi.
   # (Faylsiz vazifalar — eslatmalar, AI va h.k. — APP serverda.) REC_JOBS dan prune_orphan_recordings ni olib tashlasangiz,
