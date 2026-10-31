@@ -34,10 +34,14 @@ JOBS = [
     ('sync_homework_ai', 'sync_homework_ai', (), 60),
     ('check_disk', 'check_disk', (), 1800),
     ('check_failed_recordings', 'check_failed_recordings', (), 1800),
+    ('watchdog', 'watchdog', (), 60),  # ikkinchi serverni tekshiradi, yiqilsa/tiklansa Telegram/webhook (apps/monitoring/.../watchdog.py)
 ]
 # Standart ro'yxatga KIRMAYDI (fayl o'chiradi) — faqat `--only` bilan aniq so'ralganda ishga tushadi
 OPTIONAL_JOBS = [
     ('prune_orphan_recordings', 'prune_orphan_recordings', ('--apply',), 3600),
+    # Disk to'lmasligi uchun: 7 kundan eski TAYYOR yozuvlarning xom qismlari va (MP4 tekshirib o'qilgach) asl WebM'i. Yozuv bazada va MP4
+    # ko'rinishida qoladi; xavfsizlik tekshiruvlari buyruqning ichida (apps/lessons/management/commands/prune_recordings.py).
+    ('prune_recordings', 'prune_recordings', ('--apply', '--drop-webm', '--older-than-days', '7'), 6 * 3600),
 ]
 
 

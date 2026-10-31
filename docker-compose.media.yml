@@ -64,12 +64,13 @@ services:
       sh -c "gunicorn root.wsgi:application -k gthread --bind 0.0.0.0:8000 --workers ${REC_WORKERS:-4} --threads ${REC_THREADS:-16} --timeout 120 --worker-tmp-dir /dev/shm"
 
   # Yozuv serveridagi davriy vazifalar: qotib qolgan yozuvni tiklash, yetim fayllarni tozalash, disk ogohlantirishi.
-  # (Faylsiz vazifalar — eslatmalar, AI va h.k. — APP serverda.) REC_JOBS dan prune_orphan_recordings ni olib tashlasangiz,
-  # fayl o'chirish o'chadi.
+  # (Faylsiz vazifalar — eslatmalar, AI va h.k. — APP serverda.) REC_JOBS dan prune_orphan_recordings / prune_recordings ni olib
+  # tashlasangiz, tegishli fayl o'chirish o'chadi. prune_recordings: 7 kundan eski tayyor yozuvlarning xom qismlari va MP4 tayyor
+  # bo'lgan asl WebM'i (disk to'lib qolmasligi uchun: kuniga 13–100 GB yozuv, qarang STRESS_TEST_NATIJALARI_2026-10-31.md).
   rec-cron:
     <<: *backend
     cpu_shares: 256
-    command: python manage.py run_scheduler --startup-delay 30 --only ${REC_JOBS:-recover_recordings,prune_orphan_recordings,check_disk}
+    command: python manage.py run_scheduler --startup-delay 30 --only ${REC_JOBS:-recover_recordings,prune_orphan_recordings,prune_recordings,check_disk,watchdog}
 
   # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish: yadro soni va ustuvorligi cheklangan, bitta-bitta ishlaydi.
   transcoder:
