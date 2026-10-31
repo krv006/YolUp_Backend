@@ -38,12 +38,11 @@ services:
     environment:
       # Format muhim: "kalit: sekret" (ikki nuqtadan keyin probel). APP serverdagi .env bilan AYNAN bir xil bo'lishi shart.
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?}: ${LIVEKIT_API_SECRET:?}"
-    ports:
-      - "7881:7881"         # WebRTC TCP fallback
-      - "7882:7882/udp"     # WebRTC media (UDP mux — bitta port)
-      # TURN yoqilganda (deploy/media/livekit.yaml dagi blok) quyidagilarni ham oching va ufw'da ruxsat bering:
-      # - "3478:3478/udp"
-      # - "5349:5349/tcp"
+    # HOST tarmog'i: Docker NAT'siz. Yuk sinovi (2026-10-31): xuddi shu mashinada 800 ta yuqori sifatli tomoshabin —
+    # Docker tarmog'ida 177 Mbit/s va 26% paket yo'qotish, host tarmog'ida 592 Mbit/s va 1.9%. Bonus: portlar endi `ufw` orqali
+    # boshqariladi (Docker o'zi ochgan portlar ufw'ni chetlab o'tadi): kerakli portlar ufw'da ochiq bo'lishi shart:
+    # 7881/tcp (TCP fallback), 7882/udp (WebRTC media, UDP mux). TURN yoqilsa: 3478/udp va 5349/tcp'ni ufw'da oching.
+    network_mode: host
     ulimits:
       nofile:
         soft: 65535
@@ -75,24 +74,23 @@ services:
   # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish: yadro soni va ustuvorligi cheklangan, bitta-bitta ishlaydi.
   transcoder:
     <<: *backend
-    cpus: ${TRANSCODER_CPUS:-3}
+    # Yuk sinovi (2026-10-31, 30 daqiqalik 720p dars): 1 ish/3 yadro = 12.8x real vaqt (2 soatlik dars ~9 daqiqa), 1 ish/6 yadro = 26.5x,
+    # 2 ish/6 yadrodan = umumiy 39.5x (3x ko'p dars). Shuning uchun standart: 10 yadro, 2 ta parallel ish. Jonli dars baribir ustun
+    # (cpu_shares 256 va nice 15): LiveKit CPU so'rasa, o'tkazish unga joy beradi.
+    cpus: ${TRANSCODER_CPUS:-10}
     cpu_shares: 256         # CPU talashganda eng pasti: avval jonli dars, keyin yozuvni o'tkazish
+    # DIQQAT: buyruq BITTA qatorda bo'lishi shart (`>` blokida chuqurroq qator yangi qator bo'lib qoladi). Yozuvni "converting" deb
+    # belgilash atomik (apps/lessons/transcode.py), shuning uchun parallel ishlar bir yozuvni ikki marta olmaydi.
     command: >
-      sh -c "sleep 60 &&
-             while true; do
-               nice -n 15 python manage.py convert_recordings --limit 1;
-               sleep 30;
-             done"
+      sh -c "sleep 60 && for i in $$(seq 1 ${TRANSCODER_WORKERS:-2}); do (while true; do nice -n 15 python manage.py convert_recordings --limit 1; sleep 10; done) & sleep 7; done; wait"
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
       LK_DOMAIN: ${LK_DOMAIN:?LK_DOMAIN .env da berilishi shart}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+    # HOST tarmog'i: LiveKit ham host'da, Caddy 127.0.0.1:7880 ga ulanadi. 80/443 (tcp+udp) ufw'da ochiq.
+    network_mode: host
     volumes:
       - ./deploy/media:/etc/caddy:ro
       - caddy_data:/data

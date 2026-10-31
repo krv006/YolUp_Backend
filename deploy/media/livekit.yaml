@@ -1,12 +1,19 @@
 # LiveKit — MEDIA server (bitta tugun). Kalitlar LIVEKIT_KEYS env orqali beriladi (docker-compose.media.yml).
 # Signaling (7880) tashqariga ochilmaydi — Caddy (HTTPS) proxy qiladi.
+# LiveKit `network_mode: host` da ishlaydi (docker-compose.media.yml): signaling faqat shu mashinaning ichida (Caddy 127.0.0.1:7880 ga proksi qiladi).
 port: 7880
+bind_addresses:
+  - 127.0.0.1
 rtc:
   tcp_port: 7881
   # UDP mux — barcha WebRTC media BITTA portdan (minglab ulanish uchun port oralig'i kerak emas)
   udp_port: 7882
   # Serverning tashqi IP'sini STUN orqali avtomatik aniqlaydi (netcup'da IP to'g'ridan-to'g'ri serverda)
   use_external_ip: true
+  # Faqat tashqi interfeys: WireGuard (wg0) va Docker ko'priklarining IP'lari klientlarga nomzod sifatida berilmasin
+  interfaces:
+    includes:
+      - eth0
 # Resurs tejash: bo'sh xona 5 daqiqada yopiladi, hamma chiqib ketgach 20 soniyada yakunlanadi
 room:
   empty_timeout: 300
