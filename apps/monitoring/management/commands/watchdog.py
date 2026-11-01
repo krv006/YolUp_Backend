@@ -38,20 +38,27 @@ def check_url(url: str, headers=None, expect_status=(200,)) -> tuple:
         return False, type(exc).__name__
 
 
+def site_domain() -> str:
+    """Saytning domeni: `DOMAIN` env, yo'qsa ALLOWED_HOSTS dagi birinchi haqiqiy nom (`*` va `.nuqta` bilan boshlanganlarsiz)."""
+    domain = os.getenv('DOMAIN', '').strip()
+    if domain:
+        return domain
+    return next((h for h in settings.ALLOWED_HOSTS if h and h != '*' and not h.startswith('.')), '')
+
+
 def targets() -> list:
     """Shu serverdan tekshiriladigan narsalar: [(nom, url, sarlavhalar)]."""
     result = []
     if settings.SERVER_ROLE == 'media':
-        domain = os.getenv('DOMAIN') or (settings.ALLOWED_HOSTS[0] if settings.ALLOWED_HOSTS else '')
-        if domain and domain != '*':
+        domain = site_domain()
+        if domain:
             result.append(('APP (sayt va API)', f'https://{domain}/api/health/', {}))
     else:
         livekit = settings.LIVEKIT_URL.replace('wss://', 'https://').replace('ws://', 'http://')
         result.append(('MEDIA: LiveKit (jonli dars)', livekit, {}))
         upstream = os.getenv('REC_UPSTREAM')  # APP'dagi Caddy ham shu manzilga yozuvlarni yuboradi (WireGuard orqali)
         if upstream:
-            host = (settings.ALLOWED_HOSTS or [''])[0]
-            result.append(('MEDIA: yozuv xizmati', f'http://{upstream}/api/health/', {'Host': host, 'X-Forwarded-Proto': 'https'}))
+            result.append(('MEDIA: yozuv xizmati', f'http://{upstream}/api/health/', {'Host': site_domain(), 'X-Forwarded-Proto': 'https'}))
     return result
 
 

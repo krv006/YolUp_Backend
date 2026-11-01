@@ -58,6 +58,15 @@ class WatchdogTests(SimpleTestCase):
             urls = [t[1] for t in watchdog.targets()]
         self.assertEqual(urls, ['https://lk.example', 'http://10.10.0.2:8000/api/health/'])
 
+    @override_settings(SERVER_ROLE='', LIVEKIT_URL='wss://lk.example', ALLOWED_HOSTS=['*', '.example', 'backend.example'])
+    def test_host_header_never_uses_a_wildcard(self):
+        # production had ALLOWED_HOSTS[0] == '*' -> Host: '*' -> HTTP 400 from the recording service
+        with mock.patch.dict(os.environ, {'REC_UPSTREAM': '10.10.0.2:8000', 'DOMAIN': ''}):
+            headers = watchdog.targets()[1][2]
+        self.assertEqual(headers['Host'], 'backend.example')
+        with mock.patch.dict(os.environ, {'REC_UPSTREAM': '10.10.0.2:8000', 'DOMAIN': 'site.example'}):
+            self.assertEqual(watchdog.targets()[1][2]['Host'], 'site.example')
+
     def test_send_alert_without_configuration_is_a_noop(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             for key in ('ALERT_TELEGRAM_BOT_TOKEN', 'ALERT_TELEGRAM_CHAT_ID', 'ALERT_WEBHOOK_URL'):
