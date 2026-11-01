@@ -10,7 +10,7 @@ from rest_framework import generics, serializers, status
 from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import BaseThrottle
+from rest_framework.throttling import BaseThrottle, ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -71,6 +71,9 @@ class SocialLoginView(APIView):
 
     permission_classes = [AllowAny]
     throttle_scope = 'login'
+    # Faqat 'login' chegarasi: umumiy AnonRateThrottle (60/min, bitta IP) bu yo'llarga qo'llanmasin — maktab Wi-Fi'sida
+    # bir IP ostida ko'p o'quvchi kiradi / tokenini yangilaydi (yuk sinovi 2026-11-01: 250 loginning 190 tasi 429 olgan).
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request, provider):
         from .social import APPLE, GOOGLE
@@ -171,6 +174,9 @@ def _login_fail_key(request) -> str:
 
 class LoginView(TokenObtainPairView):
     throttle_scope = 'login'
+    # Faqat 'login' chegarasi: umumiy AnonRateThrottle (60/min, bitta IP) bu yo'llarga qo'llanmasin — maktab Wi-Fi'sida
+    # bir IP ostida ko'p o'quvchi kiradi / tokenini yangilaydi (yuk sinovi 2026-11-01: 250 loginning 190 tasi 429 olgan).
+    throttle_classes = [ScopedRateThrottle]
     serializer_class = sessions.SessionTokenObtainPairSerializer
 
     @staticmethod
@@ -243,7 +249,10 @@ class LoginHistoryView(APIView):
 
 
 class RefreshView(TokenRefreshView):
-    throttle_scope = 'auth'
+    throttle_scope = 'login'
+    # Faqat 'login' chegarasi: umumiy AnonRateThrottle (60/min, bitta IP) bu yo'llarga qo'llanmasin — maktab Wi-Fi'sida
+    # bir IP ostida ko'p o'quvchi kiradi / tokenini yangilaydi (yuk sinovi 2026-11-01: 250 loginning 190 tasi 429 olgan).
+    throttle_classes = [ScopedRateThrottle]
     serializer_class = sessions.SessionTokenRefreshSerializer
 
     def post(self, request, *args, **kwargs):
@@ -462,6 +471,9 @@ class TwoFactorLoginView(APIView):
 
     permission_classes = [AllowAny]
     throttle_scope = 'login'
+    # Faqat 'login' chegarasi: umumiy AnonRateThrottle (60/min, bitta IP) bu yo'llarga qo'llanmasin — maktab Wi-Fi'sida
+    # bir IP ostida ko'p o'quvchi kiradi / tokenini yangilaydi (yuk sinovi 2026-11-01: 250 loginning 190 tasi 429 olgan).
+    throttle_classes = [ScopedRateThrottle]
 
     def post(self, request):
         user = services.two_factor_login(

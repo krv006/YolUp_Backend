@@ -55,3 +55,30 @@ class LoginGuardTests(APITestCase):
         self.assertEqual(rates['login'], '300/min')
         self.assertEqual(rates['auth'], '30/min')  # register / OTP / SMS stay strict (SMS costs money)
         self.assertEqual(views.LoginView.throttle_scope, 'login')
+
+
+class LoginThrottleNotSharedWithAnonTests(APITestCase):
+    """Bitta IP ostidagi ko'p o'quvchi (maktab Wi-Fi'si): umumiy anon chegarasi (60/min) login va yangilashni to'smasin."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_login_and_refresh_use_only_the_login_scope(self):
+        from rest_framework.throttling import ScopedRateThrottle
+        for view in (views.LoginView, views.RefreshView, views.TwoFactorLoginView, views.SocialLoginView):
+            self.assertEqual(view.throttle_scope, 'login', view)
+            self.assertEqual(view.throttle_classes, [ScopedRateThrottle], view)
+
+    def test_70_logins_from_one_ip_are_not_throttled(self):
+        statuses = {
+            APIClient().post(URL, {'username': f'nobody{i}', 'password': 'x'}, HTTP_X_FORWARDED_FOR='10.9.9.9').status_code
+            for i in range(70)
+        }
+        self.assertEqual(statuses, {401})  # wrong credentials, never 429 (the anon limit is 60/min)
+
+    def test_70_refreshes_from_one_ip_are_not_throttled(self):
+        statuses = {
+            APIClient().post('/api/v1/auth/token/refresh/', {'refresh': 'garbage'}, HTTP_X_FORWARDED_FOR='10.9.9.8').status_code
+            for i in range(70)
+        }
+        self.assertEqual(statuses, {401})  # garbage refresh token: 401, never 429
