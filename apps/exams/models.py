@@ -115,6 +115,8 @@ class ExamAttempt(TimeStampedUUIDModel):
     # {bo'lim_kaliti: ISO vaqt} - o'quvchi bo'limni muddatidan oldin tugatib keyingisiga o'tgan payt.
     # Shu o'quvchining jadvali shundan keyin siljiydi, boshqalarniki o'zgarmaydi.
     advances = JSONField(default=dict, blank=True)
+    # O'qituvchining umumiy izohi (masalan "Writing Task 2 da...") — ota-onaga ham ko'rinadi
+    teacher_comment = TextField(blank=True, default='')
 
     class Meta:
         ordering = ['-created_at']

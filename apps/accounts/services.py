@@ -8,7 +8,7 @@ import secrets
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, Throttled, ValidationError
 
 from apps.core import audit
 
@@ -179,7 +179,8 @@ def create_child(*, creator: User, username: str, password: str, request=None, c
             raise NotFound(_('Kurs topilmadi.'))
         if course.teacher_id != creator.id:
             raise PermissionDenied(_("Faqat o'z kursingizga o'quvchi biriktira olasiz."))
-    child = User(username=username, role=User.Role.STUDENT, **extra)
+    # Ota-ona yaratgan hisob: bola birinchi kirishda parolni o'zi almashtirishi shart (frontend `must_change_password` ni tekshiradi)
+    child = User(username=username, role=User.Role.STUDENT, must_change_password=creator.role == User.Role.PARENT, **extra)
     child.set_password(password)
     child.save()
     if course is not None:
@@ -211,7 +212,8 @@ def change_password(*, user: User, current_password: str, new_password: str, req
         raise ValidationError({'new_password': list(exc.messages)}) from None
     user.set_password(new_password)
     user.password_changed_at = timezone.now()
-    user.save(update_fields=['password', 'password_changed_at'])
+    user.must_change_password = False
+    user.save(update_fields=['password', 'password_changed_at', 'must_change_password'])
     audit.record(action='auth.password_change', actor=user, request=request)
     return user.password_changed_at
 
@@ -584,13 +586,150 @@ def respond_link(*, student: User, link_id, action: str, request=None) -> Parent
         link = ParentChildLink.objects.get(pk=link_id, student=student)
     except ParentChildLink.DoesNotExist:
         raise NotFound(_("So'rov topilmadi."))
+    previous = link.status
     link.status = (
         ParentChildLink.Status.APPROVED if action == 'approve' else ParentChildLink.Status.DECLINED
     )
     link.responded_at = timezone.now()
     link.save(update_fields=['status', 'responded_at'])
     audit.record(action=f'link.{action}', actor=student, target=link, request=request)
+    if action == 'decline':
+        _notify_link_revoked(link, by=student, previous=previous, request=request)
     return link
+
+
+def _display_name(user: User) -> str:
+    return (f'{user.first_name} {user.last_name}'.strip()) or user.username
+
+
+def _notify_link_revoked(link: ParentChildLink, *, by: User, previous: str, request=None) -> None:
+    """Bog'lanish uzilganda (o'quvchi rad etdi/uzdi yoki ota-ona uzdi) ikkinchi tomonga `link.revoked` bildirishnomasi.
+    Xato asosiy amalni to'xtatmaydi."""
+    from apps.notifications import services as notification_services
+
+    to_parent = by.pk == link.student_id
+    other = link.parent if to_parent else link.student
+    who = link.student if to_parent else link.parent
+    try:
+        notification_services.send_event(
+            sender=by, recipients=[other], kind='link.revoked',
+            description=(
+                f"{_display_name(who)} bog'lanishni uzdi." if previous == ParentChildLink.Status.APPROVED
+                else f"{_display_name(who)} bog'lanish so'rovini rad etdi."
+            ),
+            data={'student_id': str(link.student_id), 'parent_id': str(link.parent_id), 'name': _display_name(who),
+                  'previous_status': previous},
+            request=request,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger('apps').exception('link.revoked bildirishnomasi yuborilmadi')
+
+
+def _own_link(*, parent: User, link_id) -> ParentChildLink:
+    try:
+        return ParentChildLink.objects.select_related('parent', 'student').get(pk=link_id, parent=parent)
+    except (ParentChildLink.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_("So'rov topilmadi."))
+
+
+@transaction.atomic
+def cancel_link(*, parent: User, link_id, request=None) -> None:
+    """Ota-ona o'zi yuborgan, hali javob berilmagan (PENDING) so'rovni bekor qiladi — yozuv o'chadi."""
+    link = _own_link(parent=parent, link_id=link_id)
+    if link.status != ParentChildLink.Status.PENDING:
+        raise ValidationError({'detail': _("Faqat javob kutilayotgan so'rovni bekor qilish mumkin.")})
+    audit.record(action='link.cancel', actor=parent, target=link, request=request)
+    link.delete()
+
+
+LINK_REMIND_INTERVAL_SECONDS = 24 * 3600
+
+
+@transaction.atomic
+def remind_link(*, parent: User, link_id, request=None) -> ParentChildLink:
+    """Kutilayotgan so'rov bo'yicha o'quvchiga qayta bildirishnoma (sutkasiga 1 marta; oshsa 429 + `retry_after`)."""
+    link = _own_link(parent=parent, link_id=link_id)
+    if link.status != ParentChildLink.Status.PENDING:
+        raise ValidationError({'detail': _("Eslatma faqat javob kutilayotgan so'rov uchun yuboriladi.")})
+    now = timezone.now()
+    if link.reminded_at is not None:
+        elapsed = (now - link.reminded_at).total_seconds()
+        if elapsed < LINK_REMIND_INTERVAL_SECONDS:
+            raise Throttled(wait=LINK_REMIND_INTERVAL_SECONDS - elapsed, detail=str(_("Eslatma sutkasiga bir marta yuboriladi.")))
+    link.reminded_at = now
+    link.save(update_fields=['reminded_at', 'updated_at'])
+    from apps.notifications import services as notification_services
+
+    try:
+        notification_services.send_event(
+            sender=parent, recipients=[link.student], kind='link.remind', link_type='link', link_id=str(link.pk),
+            description=f"{_display_name(parent)} bog'lanish so'rovini tasdiqlashingizni kutmoqda.",
+            data={'parent_id': str(parent.pk), 'link_id': str(link.pk), 'name': _display_name(parent)}, request=request,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger('apps').exception('link.remind bildirishnomasi yuborilmadi')
+    audit.record(action='link.remind', actor=parent, target=link, request=request)
+    return link
+
+
+@transaction.atomic
+def unlink_child(*, parent: User, link_id, request=None) -> None:
+    """Ota-ona tasdiqlangan bog'lanishni o'zi uzadi: bog'lanish o'chadi, shu ota-ona bergan rozilik yozuvlari bekor qilinadi,
+    o'quvchiga xabar boradi. Qayta ulash uchun yangi so'rov kerak."""
+    link = _own_link(parent=parent, link_id=link_id)
+    if link.status != ParentChildLink.Status.APPROVED:
+        raise ValidationError({'detail': _("Faqat tasdiqlangan bog'lanishni uzish mumkin (kutilayotganini bekor qiling).")})
+    Consent.objects.filter(student=link.student, granted_by=parent).delete()
+    audit.record(action='link.unlink', actor=parent, target=link, request=request)
+    _notify_link_revoked(link, by=parent, previous=ParentChildLink.Status.APPROVED, request=request)
+    link.delete()
+
+
+def expire_link_requests(*, now=None) -> int:
+    """Muddati o'tgan (LINK_REQUEST_TTL_DAYS) PENDING so'rovlarni o'chiradi. Qaytaradi: nechtasi."""
+    from datetime import timedelta
+
+    from django.conf import settings
+
+    cutoff = (now or timezone.now()) - timedelta(days=settings.LINK_REQUEST_TTL_DAYS)
+    deleted, _details = ParentChildLink.objects.filter(status=ParentChildLink.Status.PENDING, created_at__lt=cutoff).delete()
+    return deleted
+
+
+USERNAME_SUGGESTION_COUNT = 3
+
+
+def username_availability(username: str) -> dict:
+    """Login bandligini tekshiradi; band yoki yaroqsiz bo'lsa serverda bo'shligi tekshirilgan takliflar beradi."""
+    import re
+
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    from django.contrib.auth.validators import UnicodeUsernameValidator
+
+    username = (username or '').strip()
+    if not username:
+        raise ValidationError({'username': _('Login kiriting.')})
+    valid = len(username) <= 150
+    try:
+        UnicodeUsernameValidator()(username)  # faqat format (band-emasligi pastda alohida tekshiriladi)
+    except DjangoValidationError:
+        valid = False
+    taken = valid and User.objects.filter(username__iexact=username).exists()
+    result = {'username': username, 'valid': valid, 'available': valid and not taken, 'suggestions': []}
+    if result['available']:
+        return result
+    base = re.sub(r'[^A-Za-z0-9_.]', '', username)[:24] or 'user'
+    candidates = [f'{base}{sep}{suffix}' for suffix in ('2', '3', '7', '10', '21', '99') for sep in ('_', '')]
+    candidates += [f'{base}.{secrets.randbelow(900) + 100}' for _i in range(4)]
+    lowered = [c.lower() for c in candidates]
+    existing = {u.lower() for u in User.objects.filter(username__iregex='^(' + '|'.join(re.escape(c) for c in candidates) + ')$').values_list('username', flat=True)}
+    result['suggestions'] = [c for c in dict.fromkeys(candidates) if c.lower() not in existing][:USERNAME_SUGGESTION_COUNT]
+    return result
 
 
 @transaction.atomic
@@ -601,6 +740,7 @@ def set_consent(*, parent: User, student: User, kind: str, granted: bool, reques
     ).exists()
     if not is_linked:
         raise PermissionDenied(_("Bu o'quvchi sizga bog'lanmagan."))
+    previous = Consent.objects.filter(student=student, kind=kind).values_list('granted', flat=True).first()
     consent, _created = Consent.objects.update_or_create(
         student=student, kind=kind,
         defaults={'granted': granted, 'granted_by': parent},
@@ -609,12 +749,44 @@ def set_consent(*, parent: User, student: User, kind: str, granted: bool, reques
         action='consent.set', actor=parent, target=consent,
         meta={'kind': kind, 'granted': granted}, request=request,
     )
+    if previous is None or previous != granted:
+        _notify_teachers_consent_changed(parent=parent, student=student, kind=kind, granted=granted, request=request)
     return consent
+
+
+CONSENT_LABELS = {
+    Consent.Kind.RECORDING: 'dars yozib olish', Consent.Kind.CAMERA: 'kamera', Consent.Kind.ANALYTICS: 'faollik tahlili',
+}
+
+
+def _notify_teachers_consent_changed(*, parent: User, student: User, kind: str, granted: bool, request=None) -> None:
+    """Rozilik o'zgarganda shu o'quvchi qatnashadigan kurslarning o'qituvchilariga `consent.changed` bildirishnomasi."""
+    from apps.lessons.models import Enrollment
+    from apps.notifications import services as notification_services
+
+    teacher_ids = set(
+        Enrollment.objects.filter(student=student, status=Enrollment.Status.APPROVED).values_list('course__teacher_id', flat=True)
+    )
+    teachers = list(User.objects.filter(pk__in=teacher_ids))
+    if not teachers:
+        return
+    state = 'ruxsat berildi' if granted else "o'chirildi"
+    try:
+        notification_services.send_event(
+            sender=parent, recipients=teachers, kind='consent.changed',
+            description=f"{_display_name(student)}: {CONSENT_LABELS.get(kind, kind)} uchun rozilik {state}.",
+            data={'student_id': str(student.pk), 'kind': kind, 'granted': granted, 'name': _display_name(student)},
+            request=request,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger('apps').exception('consent.changed bildirishnomasi yuborilmadi')
 
 
 # ── Login jurnali: IP/qurilma o'zgarishini aniqlash (EduTech nazorat) ───────
 
-def record_login(*, user: User, request) -> dict:
+def record_login(*, user: User, request, session_id=None) -> dict:
     """Har muvaffaqiyatli logindan keyin chaqiriladi (LoginView).
 
     Oxirgi login bilan solishtiradi: IP yoki qurilma (User-Agent) o'zgargan
@@ -641,55 +813,197 @@ def record_login(*, user: User, request) -> dict:
         'first_login': last is None,
         'new_ip': bool(last and str(last.ip_address or '') != str(ip or '')),
         'new_device': bool(last and (last.meta or {}).get('user_agent', '') != user_agent),
+        'session_id': str(session_id) if session_id else '',
     }
+    if meta['new_device'] and AuditLog.objects.filter(  # ota-ona "Bu farzandim" deb tanigan qurilma qayta "yangi" hisoblanmaydi
+        actor=user, action='auth.login', meta__user_agent=user_agent, meta__recognized=True,
+    ).exists():
+        meta['new_device'] = False
+        meta['recognized'] = True
     audit.record(action='auth.login', actor=user, meta=meta, request=request)
+    if meta['new_device'] and user.role == User.Role.STUDENT:
+        _notify_parents_new_device(user, user_agent=user_agent, ip=ip, request=request)
     return meta
 
 
-def login_history(*, viewer: User, student_id=None, limit: int = 50, request=None) -> list:
-    """Login tarixi: o'zi uchun; ota-ona TASDIQLANGAN bolasi uchun ham."""
+def _notify_parents_new_device(student: User, *, user_agent: str, ip, request=None) -> None:
+    """Farzand yangi qurilmadan kirganda bog'langan (tasdiqlangan) ota-onalarga `security.new_device` (ota-ona uni sozlamalarda
+    o'chirib qo'ygan bo'lsa yuborilmaydi)."""
+    from apps.notifications import services as notification_services
+
+    from .sessions import parse_device
+
+    parents = list(User.objects.filter(
+        child_links__student=student, child_links__status=ParentChildLink.Status.APPROVED, notify_child_new_device=True,
+    ).distinct())
+    if not parents:
+        return
+    device = parse_device(user_agent, request.META.get('HTTP_X_DEVICE_NAME', '') if request is not None else '')
+    try:
+        notification_services.send_event(
+            sender=student, recipients=parents, kind='security.new_device', link_type='login', link_id='',
+            description=f"{_display_name(student)} yangi qurilmadan kirdi: {device}" + (f' · {ip}' if ip else '') + '. Bu farzandingizmi?',
+            data={'student_id': str(student.pk), 'device': device, 'ip': str(ip or ''), 'at': timezone.now().isoformat(),
+                  'name': _display_name(student)},
+            request=request,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger('apps').exception('security.new_device bildirishnomasi yuborilmadi')
+
+
+def login_history(
+    *, viewer: User, student_id=None, limit: int = 50, request=None, date_from=None, date_to=None, device_type=None,
+) -> list:
+    """Login tarixi: o'zi uchun; ota-ona TASDIQLANGAN bolasi uchun ham (`analytics` roziligi o'chiq bo'lsa 403 `consent_required`).
+    Har yozuvda: qurilma (`device`, `browser`, `os`, `device_type`), joylashuv, `session_id`/`session_active`/`duration_seconds`
+    (seans bog'langan bo'lsa), `recognized`. Filtrlar: `date_from`/`date_to` (vaqt), `device_type` (phone|tablet|computer)."""
     from apps.core.models import AuditLog
+
+    from . import consent
 
     target = viewer
     if student_id:
-        allowed = ParentChildLink.objects.filter(
-            parent=viewer, student_id=student_id,
-            status=ParentChildLink.Status.APPROVED,
-        ).exists()
-        if not allowed:
-            raise PermissionDenied(_("Bu foydalanuvchi login tarixini ko'rish huquqingiz yo'q."))
-        try:
-            target = User.objects.get(pk=student_id)
-        except (User.DoesNotExist, ValueError, TypeError):
-            raise NotFound(_('Foydalanuvchi topilmadi.'))
+        target = consent.approved_child(viewer, student_id)
+        consent.require(target, 'analytics')
 
-    rows = (
-        AuditLog.objects
-        .filter(actor=target, action='auth.login')
-        .order_by('-created_at')[:limit]
-    )
-    from .sessions import city_for_ip
+    rows = AuditLog.objects.filter(actor=target, action='auth.login').order_by('-created_at')
+    if date_from:
+        rows = rows.filter(created_at__gte=date_from)
+    if date_to:
+        rows = rows.filter(created_at__lte=date_to)
+    rows = list(rows[: limit if not device_type else limit * 5])
+    from .models import UserSession
+    from .sessions import city_for_ip, country_for_ip, parse_device, parse_ua
 
+    sessions_by_id = {
+        str(s.pk): s for s in UserSession.objects.filter(pk__in=[r.meta.get('session_id') for r in rows if (r.meta or {}).get('session_id')])
+    }
     own = target == viewer and request is not None
     current_ua = (request.META.get('HTTP_USER_AGENT') or '')[:300] if own else None
     xff = request.META.get('HTTP_X_FORWARDED_FOR') if own else None
     current_ip = (xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR')) if own else None
     result, current_marked = [], False
     for r in rows:
-        agent = (r.meta or {}).get('user_agent', '')
+        meta = r.meta or {}
+        agent = meta.get('user_agent', '')
+        parsed = parse_ua(agent)
+        if device_type and parsed['device_type'] != device_type:
+            continue
         is_current = False
         if own and not current_marked and agent == current_ua and str(r.ip_address or '') == str(current_ip or ''):
             is_current = current_marked = True  # shu qurilmadagi eng so'nggi kirish
+        session = sessions_by_id.get(meta.get('session_id') or '')
+        duration = None
+        if session is not None:
+            stop = session.revoked_at or session.last_active
+            duration = max(0, int((stop - session.created_at).total_seconds()))
         result.append({
+            'id': str(r.pk),
             'at': r.created_at,
             'ip': r.ip_address,
             'user_agent': agent,
-            'location': (r.meta or {}).get('location') or (city_for_ip(r.ip_address) if r.ip_address else '') or None,
-            'new_ip': (r.meta or {}).get('new_ip', False),
-            'new_device': (r.meta or {}).get('new_device', False),
+            'device': parse_device(agent),
+            'browser': parsed['browser'],
+            'os': parsed['os'],
+            'device_type': parsed['device_type'],
+            'location': meta.get('location') or (city_for_ip(r.ip_address) if r.ip_address else '') or None,
+            'country': (country_for_ip(r.ip_address) if r.ip_address else '') or None,
+            'new_ip': meta.get('new_ip', False),
+            'new_device': meta.get('new_device', False),
+            'recognized': bool(meta.get('recognized')),
             'is_current': is_current,
+            'session_id': meta.get('session_id') or None,
+            'session_active': (session.revoked_at is None) if session is not None else None,
+            'duration_seconds': duration,
         })
+        if len(result) >= limit:
+            break
     return result
+
+
+@transaction.atomic
+def recognize_login(*, parent: User, login_id, request=None) -> dict:
+    """"Bu farzandim": shu kirish qurilmasi tanish deb belgilanadi — keyingi kirishlar "yangi qurilma" xabarini bermaydi."""
+    from apps.core.models import AuditLog
+
+    from . import consent
+
+    try:
+        row = AuditLog.objects.select_related('actor').get(pk=login_id, action='auth.login')
+    except (AuditLog.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_('Kirish topilmadi.'))
+    if row.actor is None:
+        raise NotFound(_('Kirish topilmadi.'))
+    consent.approved_child(parent, row.actor_id)
+    row.meta = {**(row.meta or {}), 'recognized': True, 'recognized_by': str(parent.pk), 'new_device': False}
+    row.save(update_fields=['meta', 'updated_at'])
+    audit.record(action='auth.login_recognized', actor=parent, target=row, request=request)
+    return {'id': str(row.pk), 'recognized': True}
+
+
+def child_sessions(*, parent: User, student_id) -> list:
+    """Farzandning seanslari (faol va yaqinda tugaganlar): ota-ona "Sessiyani tugatish" tugmasi uchun."""
+    from . import consent
+    from .models import UserSession
+    from .sessions import parse_ua
+
+    student = consent.approved_child(parent, student_id)
+    rows = []
+    for session in UserSession.objects.filter(user=student).order_by('-last_active')[:30]:
+        parsed = parse_ua(session.user_agent)
+        rows.append({
+            'id': str(session.pk), 'device': session.device, 'browser': parsed['browser'], 'os': parsed['os'],
+            'device_type': parsed['device_type'], 'ip': session.ip, 'city': session.city or None,
+            'created_at': session.created_at, 'last_active': session.last_active, 'active': session.revoked_at is None,
+            'revoked_at': session.revoked_at,
+        })
+    return rows
+
+
+def _notify_child_sessions_ended(parent: User, student: User, *, count: int, request=None) -> None:
+    from apps.notifications import services as notification_services
+
+    try:
+        notification_services.send_event(
+            sender=parent, recipients=[student], kind='security.session_ended',
+            description=f"{_display_name(parent)} qurilmalaringizdagi {count} ta seansni tugatdi.",
+            data={'parent_id': str(parent.pk), 'count': count}, request=request,
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger('apps').exception('security.session_ended bildirishnomasi yuborilmadi')
+
+
+@transaction.atomic
+def end_child_session(*, parent: User, student_id, session_id, request=None) -> None:
+    from . import consent, sessions
+    from .models import UserSession
+
+    student = consent.approved_child(parent, student_id)
+    session = UserSession.objects.filter(pk=session_id, user=student, revoked_at__isnull=True).first()
+    if session is None:
+        raise NotFound(_('Seans topilmadi.'))
+    sessions.revoke(session)
+    audit.record(action='auth.child_session_end', actor=parent, target=session, request=request)
+    _notify_child_sessions_ended(parent, student, count=1, request=request)
+
+
+@transaction.atomic
+def end_all_child_sessions(*, parent: User, student_id, request=None) -> int:
+    from . import consent, sessions
+    from .models import UserSession
+
+    student = consent.approved_child(parent, student_id)
+    active = list(UserSession.objects.filter(user=student, revoked_at__isnull=True))
+    for session in active:
+        sessions.revoke(session)
+    if active:
+        audit.record(action='auth.child_sessions_end_all', actor=parent, target=student, meta={'count': len(active)}, request=request)
+        _notify_child_sessions_ended(parent, student, count=len(active), request=request)
+    return len(active)
 
 
 def upload_certificate(*, teacher: User, file, title: str = '', issuer: str = '', issued_year=None) -> TeacherCertificate:

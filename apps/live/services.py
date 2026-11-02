@@ -391,6 +391,9 @@ def request_camera(*, user: User, lesson_id, request=None) -> None:
     ).exists()
     if not is_enrolled:
         raise PermissionDenied(_("Bu darsga kirish huquqingiz yo'q."))
+    from apps.accounts import consent
+
+    consent.require(user, 'camera')  # ota-ona kamerani o'chirgan bo'lsa so'rov ham yuborib bo'lmaydi (403 consent_required)
 
     from apps.lessons.models import CameraRequest
     CameraRequest.objects.get_or_create(lesson=lesson, student=user)
@@ -426,6 +429,10 @@ def grant_camera(*, teacher: User, lesson_id, student_id, request=None) -> bool:
         student = User.objects.get(pk=student_id, role=User.Role.STUDENT)
     except (User.DoesNotExist, ValueError, TypeError):
         raise NotFound(_("O'quvchi topilmadi."))
+
+    from apps.accounts import consent
+
+    consent.require(student, 'camera')  # o'qituvchi ham ota-ona taqiqlagan kamerani ochib bera olmaydi
 
     identity = f'user-{student.id}'
 

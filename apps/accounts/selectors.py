@@ -8,9 +8,13 @@ from .models import Consent, ParentChildLink, User
 
 
 def links_for_user(user: User) -> QuerySet[ParentChildLink]:
+    from django.db.models import Count
+
     return ParentChildLink.objects.filter(
         Q(parent=user) | Q(student=user)
-    ).select_related('parent', 'student')
+    ).select_related('parent', 'student').annotate(
+        _courses_count=Count('student__enrollments', filter=Q(student__enrollments__status='approved'), distinct=True),
+    ).order_by('-created_at')
 
 
 def approved_children(parent: User) -> QuerySet[User]:

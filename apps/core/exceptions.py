@@ -7,6 +7,7 @@ Kutilmagan (500) xatolar log'ga to'liq yoziladi, mijozga ichki tafsilot chiqmayd
 import logging
 
 from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import Throttled
 from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
@@ -58,4 +59,6 @@ def custom_exception_handler(exc, context):
             'details': response.data,
         },
     }
+    if isinstance(exc, Throttled) and exc.wait is not None:
+        wrapped['error']['retry_after'] = int(-(-exc.wait // 1))  # soniya, yuqoriga yaxlitlangan (Retry-After bilan bir xil)
     return Response(wrapped, status=response.status_code, headers=dict(response.headers.items()))

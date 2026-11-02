@@ -1,8 +1,10 @@
 """Bildirishnoma views — yupqa qatlam: HTTP <-> service/selector."""
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext_lazy as _
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -33,7 +35,7 @@ class CanSendNotifications(IsAuthenticated):
         )
 
 
-class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class NotificationViewSet(mixins.ListModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
     """GET /notifications/ — mening inbox'im. Admin uchun qo'shimcha action'lar."""
 
     def get_permissions(self):
@@ -91,6 +93,19 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     def read(self, request, pk=None):
         services.mark_read(user=request.user, notification_id=pk)
         return Response({'ok': True})
+
+    @action(detail=False, methods=['post'], url_path='mark-unread')
+    def mark_unread(self, request):
+        """`{ids: [...]}` — shu bildirishnomalarni qayta o'qilmagan qiladi ("Bekor qilish" uchun)."""
+        ids = request.data.get('ids')
+        if not isinstance(ids, list) or not ids or len(ids) > 500:
+            raise ValidationError({'ids': _("1 tadan 500 tagacha bildirishnoma id'si ro'yxati kerak.")})
+        return Response({'updated': services.mark_unread(user=request.user, ids=ids)})
+
+    def destroy(self, request, pk=None):
+        """DELETE /notifications/<id>/ — faqat o'zining inbox'idan o'chiradi."""
+        services.delete_for_user(user=request.user, notification_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['post'], url_path='read-all')
     def read_all(self, request):

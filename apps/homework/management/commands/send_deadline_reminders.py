@@ -19,5 +19,5 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         sent = services.send_deadline_reminders()
         self.stdout.write(self.style.SUCCESS(
-            f"Yuborildi: yarim-vaqt={sent['halfway']}, 1-soat={sent['1h']}"
+            f"Yuborildi: yarim-vaqt={sent['halfway']}, 1-soat={sent['1h']}, ota-onalarga 24-soat={sent['parents']}"
         ))

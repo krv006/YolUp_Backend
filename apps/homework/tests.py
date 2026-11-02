@@ -568,7 +568,7 @@ class DeadlineReminderTests(TestCase):
             due_at=timezone.now() - timedelta(hours=1),
         )
         sent = services.send_deadline_reminders()
-        self.assertEqual(sent, {'halfway': 0, '1h': 0})
+        self.assertEqual(sent, {'halfway': 0, '1h': 0, 'parents': 0})
 
 
 class ProgressReportTests(TestCase):

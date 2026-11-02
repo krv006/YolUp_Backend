@@ -516,6 +516,12 @@ def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', r
     lesson.status = Lesson.Status.FINISHED
     lesson.save(update_fields=['status'])
     lesson.attendances.filter(left_at__isnull=True).update(left_at=timezone.now())
+    try:  # dars tugadi, hali kirmagan o'quvchilarning ota-onalariga "darsga kelmadi" (takrorlanmaydi)
+        if lesson.live_started_at:
+            notify_absent_students(lesson)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger('apps').exception('attendance.missed notify failed')
     # Guruh chatga "jonli dars tugadi" signali (Telegram uslubidagi chiziq yo'qoladi)
     try:
         from apps.chat import realtime as chat_realtime
@@ -784,13 +790,113 @@ def _ensure_recording_finalized(lesson: Lesson) -> None:
     live_services.finalize_single_side(lesson.id)
 
 
+LATE_AFTER_MINUTES = 5      # darsning haqiqiy boshlanishidan shuncha o'tib kirsa — "kechikdi"
+ABSENT_AFTER_MINUTES = 10   # jonli dars boshlanib shuncha o'tsa va o'quvchi kirmagan bo'lsa — "kelmadi"
+
+
 @transaction.atomic
 def mark_joined(*, lesson: Lesson, student: User) -> Attendance:
     attendance, _created = Attendance.objects.get_or_create(lesson=lesson, student=student)
     if attendance.joined_at is None:
         attendance.joined_at = timezone.now()
         attendance.save(update_fields=['joined_at'])
+        joined_at = attendance.joined_at
+        transaction.on_commit(lambda: notify_parents_attendance(lesson=lesson, student=student, at=joined_at))
     return attendance
+
+
+def _lesson_real_start(lesson: Lesson):
+    return lesson.live_started_at or lesson.starts_at
+
+
+def _attendance_recipients(student: User, *, absence_like: bool) -> list:
+    """Farzandning tasdiqlangan ota-onalari. `analytics` roziligi o'chiq bo'lsa davomat xabari yuborilmaydi; `absence_like`
+    (kechikdi/kelmadi) uchun ota-ona `notify_child_absent` ni o'chirib qo'ygan bo'lsa ham."""
+    from apps.accounts import consent
+    from apps.accounts.models import ParentChildLink
+
+    if consent.is_denied(student, 'analytics'):
+        return []
+    parents = User.objects.filter(child_links__student=student, child_links__status=ParentChildLink.Status.APPROVED)
+    if absence_like:
+        parents = parents.filter(notify_child_absent=True)
+    return list(parents.distinct())
+
+
+def _attendance_event(*, lesson: Lesson, student: User, kind: str, text: str, data: dict) -> bool:
+    from apps.accounts.services import _display_name
+    from apps.notifications import services as notification_services
+
+    recipients = _attendance_recipients(student, absence_like=kind in ('attendance.late', 'attendance.missed'))
+    if not recipients:
+        return False
+    try:
+        notification = notification_services.send_event(
+            sender=student, recipients=recipients, kind=kind, link_type='lesson', link_id=str(lesson.pk),
+            description=text,
+            data={'student_id': str(student.pk), 'lesson_id': str(lesson.pk), 'course_id': str(lesson.course_id),
+                  'course_title': lesson.course.title, 'name': _display_name(student), **data},
+        )
+        return notification is not None
+    except Exception:  # noqa: BLE001 — bildirishnoma xatosi davomatni to'xtatmasin
+        import logging
+
+        logging.getLogger('apps').exception('%s bildirishnomasi yuborilmadi', kind)
+        return False
+
+
+def notify_parents_attendance(*, lesson: Lesson, student: User, at) -> None:
+    """Farzand darsga birinchi marta kirganda ota-onalarga: `attendance.joined`, yoki dars haqiqiy boshlanishidan
+    LATE_AFTER_MINUTES dan keyin kirgan bo'lsa `attendance.late`."""
+    from apps.accounts.services import _display_name
+
+    late_minutes = int((at - _lesson_real_start(lesson)).total_seconds() // 60) if lesson.live_started_at else 0
+    clock = timezone.localtime(at).strftime('%H:%M')
+    name, course = _display_name(student), lesson.course.title
+    if late_minutes > LATE_AFTER_MINUTES:
+        _attendance_event(
+            lesson=lesson, student=student, kind='attendance.late', data={'joined_at': at.isoformat(), 'late_minutes': late_minutes},
+            text=f"{name} darsga {late_minutes} daqiqa kechikdi · {course} · {clock} da qo'shildi",
+        )
+    else:
+        _attendance_event(
+            lesson=lesson, student=student, kind='attendance.joined', data={'joined_at': at.isoformat()},
+            text=f"{name} darsga kirdi · {course} · {clock} da qo'shildi",
+        )
+
+
+def notify_absent_students(lesson: Lesson) -> int:
+    """Dars bo'yicha hali kirmagan (tasdiqlangan yozilgan) o'quvchilarning ota-onalariga `attendance.missed` — har o'quvchi
+    uchun faqat BIR marta (qayta chaqirilsa takrorlanmaydi). Qaytaradi: nechta o'quvchi uchun yuborildi."""
+    from apps.accounts.services import _display_name
+    from apps.notifications.models import Notification
+
+    joined = Attendance.objects.filter(lesson=lesson, joined_at__isnull=False).values('student_id')
+    absent = User.objects.filter(
+        enrollments__course=lesson.course, enrollments__status=Enrollment.Status.APPROVED,
+    ).exclude(pk__in=joined).distinct()
+    sent = 0
+    for student in absent:
+        if Notification.objects.filter(
+            kind='attendance.missed', link_type='lesson', link_id=str(lesson.pk), data__student_id=str(student.pk),
+        ).exists():
+            continue
+        sent += _attendance_event(
+            lesson=lesson, student=student, kind='attendance.missed', data={},
+            text=f"{_display_name(student)} darsga kelmadi · {lesson.course.title}",
+        )
+    return sent
+
+
+def send_absence_alerts(*, now=None) -> int:
+    """Jonli dars boshlanib ABSENT_AFTER_MINUTES o'tgan, hali davom etayotgan darslar bo'yicha kelmaganlar haqida ota-onaga xabar
+    (rejalashtiruvchi har daqiqada). Qaytaradi: yuborilgan xabarlar soni."""
+    now = now or timezone.now()
+    lessons = Lesson.objects.filter(
+        status=Lesson.Status.LIVE, live_started_at__isnull=False,
+        live_started_at__lte=now - timedelta(minutes=ABSENT_AFTER_MINUTES), live_started_at__gte=now - timedelta(hours=6),
+    ).select_related('course')
+    return sum(notify_absent_students(lesson) for lesson in lessons)
 
 
 @transaction.atomic

@@ -128,7 +128,7 @@ def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
     ))
 
 
-def focus_summary(lesson, student) -> dict:
+def focus_summary(lesson, student, end=None) -> dict:
     """Fokus jurnalidan chiqish-qaytish TAHLILI (EduTech.docx: ota-ona nazorati).
 
     Har bir `exit` keyingi `return` bilan juftlanadi:
@@ -143,7 +143,7 @@ def focus_summary(lesson, student) -> dict:
         .values_list('kind', 'created_at')
     )
     att = lesson.attendances.filter(student=student).first()
-    return focus_summary_from(events, att.left_at if att and att.left_at else None)
+    return focus_summary_from(events, end or (att.left_at if att and att.left_at else None))
 
 
 def focus_summary_from(events, left_at) -> dict:

@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
+from apps.accounts import consent
 from apps.accounts.models import ParentChildLink, User
 
 from .models import Attendance, Enrollment, FocusEvent, Lesson
@@ -38,7 +39,10 @@ def _students_for(course, viewer: User) -> list:
     elif viewer.role == User.Role.PARENT:
         students = students.filter(
             parent_links__parent=viewer, parent_links__status=ParentChildLink.Status.APPROVED,
-        )
+        ).exclude(pk__in=consent.denied_student_ids(  # `analytics` roziligi o'chiq farzand ota-ona hisobotida ko'rinmaydi
+            ParentChildLink.objects.filter(parent=viewer, status=ParentChildLink.Status.APPROVED).values_list('student_id', flat=True),
+            'analytics',
+        ))
     return sorted(students, key=lambda u: _name(u).lower())
 
 

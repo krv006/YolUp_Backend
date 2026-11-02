@@ -11,6 +11,7 @@ from django.db.models import (
     CharField,
     DateTimeField,
     ForeignKey,
+    JSONField,
     TextChoices,
     TextField,
     URLField,
@@ -44,6 +45,8 @@ class Notification(TimeStampedUUIDModel):
     # naqsh (CharField, FK emas — turli modellarga ishora qilishi mumkin).
     link_type = CharField(max_length=32, blank=True)
     link_id = CharField(max_length=64, blank=True)
+    # Hodisaning tuzilgan ma'lumoti (masalan {student_id, device, ip, at}) — frontend matnni qayta tahlil qilmasligi uchun
+    data = JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-created_at']

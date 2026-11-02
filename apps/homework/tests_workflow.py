@@ -108,7 +108,7 @@ class DraftTests(WorkflowBase):
         due = timezone.now() + timedelta(minutes=30)
         draft = self.create(status='draft', due_at=due.isoformat())
         Assignment.objects.filter(pk=draft['id']).update(created_at=timezone.now() - timedelta(hours=5))
-        self.assertEqual(services.send_deadline_reminders(), {'halfway': 0, '1h': 0})
+        self.assertEqual(services.send_deadline_reminders(), {'halfway': 0, '1h': 0, 'parents': 0})
 
 
 class AnnounceAndLateTests(WorkflowBase):

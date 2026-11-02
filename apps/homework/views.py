@@ -20,6 +20,11 @@ class AssignmentListCreateView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
+        student = request.query_params.get('student')
+        if student and request.user.role == 'parent':  # ota-ona: `?student=<farzand>` — farzandning hamma kurslari vazifalari
+            return Response(services.list_child_assignments(
+                parent=request.user, student_id=student, course_id=request.query_params.get('course'),
+            ))
         return Response(services.list_assignments(
             user=request.user, course_id=request.query_params.get('course'),
             status=request.query_params.get('status'),
@@ -294,3 +299,17 @@ class ProgressReportView(APIView):
             user=request.user, student_id=request.query_params.get('student_id'),
         )
         return Response(report)
+
+
+class RemindChildView(APIView):
+    """POST /homework/assignments/<id>/remind-child/ `{student}` — ota-ona farzandga vazifani eslatadi (soatiga 1 marta)."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def post(self, request, assignment_id):
+        student = request.data.get('student')
+        if not student:
+            return Response({'student': ['Farzand majburiy.']}, status=400)
+        return Response(services.remind_child(
+            parent=request.user, assignment_id=assignment_id, student_id=student, request=request,
+        ))

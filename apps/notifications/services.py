@@ -59,7 +59,7 @@ def strip_html(html: str) -> str:
 @transaction.atomic
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
-    link_type: str = '', link_id: str = '', kind: str = '', user_ids=None,
+    link_type: str = '', link_id: str = '', kind: str = '', user_ids=None, data=None,
 ) -> Notification:
     if target_type not in Notification.Target.values:
         raise ValidationError({'target_type': _("'user', 'users', 'parents_of' yoki 'all' bo'lishi kerak.")})
@@ -77,9 +77,12 @@ def send_notification(
     else:
         recipients = list(User.objects.exclude(pk=sender.pk))
 
+    if kind:  # foydalanuvchi o'chirib qo'ygan turdagi xabar unga yaratilmaydi (auth/me `muted_kinds`)
+        recipients = [u for u in recipients if kind not in (u.muted_kinds or [])]
+
     notification = Notification.objects.create(
         sender=sender, description=clean, target_type=target_type,
-        link_type=link_type, link_id=link_id, kind=kind,
+        link_type=link_type, link_id=link_id, kind=kind, data=data or {},
     )
     NotificationRecipient.objects.bulk_create([
         NotificationRecipient(notification=notification, user=u) for u in recipients
@@ -94,6 +97,33 @@ def send_notification(
         meta={'target_type': target_type, 'recipient_count': len(recipients)}, request=request,
     )
     return notification
+
+
+def send_event(
+    *, sender: User, recipients, description: str, kind: str, data=None, link_type: str = '', link_id: str = '', request=None,
+):
+    """Tizim hodisasi (davomat, xavfsizlik, bog'lanish, rozilik) — berilgan foydalanuvchilarga. Turini o'chirib qo'ygan
+    foydalanuvchilarga yuborilmaydi; hech kim qolmasa xabar yaratilmaydi (`None`). Xato asosiy amalni to'xtatmasin deb
+    chaqiruvchi `try/except` ichida ishlatadi."""
+    users = [u for u in dict.fromkeys(recipients) if kind not in (u.muted_kinds or [])]
+    if not users:
+        return None
+    return send_notification(
+        sender=sender, description=description, target_type=Notification.Target.USERS, user_ids=[u.id for u in users],
+        kind=kind, data=data or {}, link_type=link_type, link_id=link_id, request=request,
+    )
+
+
+def delete_for_user(*, user: User, notification_id) -> None:
+    """Bildirishnomani FAQAT shu foydalanuvchining inbox'idan o'chiradi (boshqa qabul qiluvchilarniki qoladi)."""
+    deleted, _details = NotificationRecipient.objects.filter(notification_id=notification_id, user=user).delete()
+    if not deleted:
+        raise NotFound(_('Bildirishnoma topilmadi.'))
+
+
+def mark_unread(*, user: User, ids) -> int:
+    """"O'qilgan" belgisini bekor qiladi (masalan "Barchasi o'qildi · Bekor qilish"). Qaytaradi: nechtasi o'zgardi."""
+    return NotificationRecipient.objects.filter(user=user, notification_id__in=ids or []).update(read_at=None)
 
 
 def _resolve_group(target_type: str, user_ids) -> list:

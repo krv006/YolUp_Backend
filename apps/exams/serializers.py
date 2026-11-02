@@ -59,6 +59,8 @@ class AnswersSerializer(serializers.Serializer):
 
 class ManualScoresSerializer(serializers.Serializer):
     scores = serializers.DictField(child=serializers.FloatField(), allow_empty=False)
+    # Ixtiyoriy umumiy izoh (masalan "Writing Task 2 da..."): natijada o'quvchi va ota-onaga ko'rinadi
+    comment = serializers.CharField(required=False, allow_blank=True, max_length=2000)
 
 
 def exam_summary(exam: Exam, now=None) -> dict:

@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
-from . import dashboard, selectors
+from . import child, dashboard, selectors
 
 
 class DashboardSummaryView(APIView):
@@ -74,3 +74,40 @@ class MyAnalyticsView(APIView):
         if request.user.role == User.Role.STUDENT:
             return Response(selectors.student_own_stats(request.user))
         return Response(selectors.teacher_own_stats(request.user))
+
+
+class ChildSummaryView(APIView):
+    """GET /analytics/child/<student_id>/summary/ — ota-ona uchun farzand kartochkalari (davomat, ball, vazifalar, "darsda"
+    vaqti) va 6 haftalik ball dinamikasi. Faqat tasdiqlangan farzand; `analytics` roziligi o'chiq bo'lsa 403 `consent_required`."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def get(self, request, student_id):
+        return Response(child.child_summary(viewer=request.user, student_id=student_id))
+
+
+class ChildRankView(APIView):
+    """GET /analytics/child/<student_id>/rank/?course=<uuid>&month=YYYY-MM — farzandning guruhdagi o'rni (rank, total,
+    top_percent, percentile, delta)."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def get(self, request, student_id):
+        course_id = request.query_params.get('course')
+        if not course_id:
+            raise ValidationError({'course': _('Kurs majburiy.')})
+        return Response(child.child_rank(
+            viewer=request.user, student_id=student_id, course_id=course_id, month=request.query_params.get('month'),
+        ))
+
+
+class ChildrenSummaryView(APIView):
+    """GET /analytics/children/summary/?period=week|month — barcha farzandlar kesimidagi statistika bitta javobda."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def get(self, request):
+        period = request.query_params.get('period', 'month')
+        if period not in ('week', 'month'):
+            raise ValidationError({'period': _("week yoki month bo'lishi kerak.")})
+        return Response(child.children_summary(viewer=request.user, period=period))

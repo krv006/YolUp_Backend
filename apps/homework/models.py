@@ -84,6 +84,8 @@ class Assignment(TimeStampedUUIDModel):
     # davriy chaqirilganda takror yubormasin) — apps/homework/services.py
     reminder_halfway_sent_at = DateTimeField(null=True, blank=True)
     reminder_1h_sent_at = DateTimeField(null=True, blank=True)
+    # Ota-onalarga "muddatga 24 soat qoldi" xabari bir marta yuborilgani (notify_homework_due sozlamasi)
+    reminder_parents_sent_at = DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

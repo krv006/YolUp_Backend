@@ -537,7 +537,7 @@ def build_results(exam: Exam, attempts: list, staff: bool = False) -> list:
         data = scoring_engines.compute(exam.scoring, inputs[attempt.id])
         data.update({
             'student': _student_info(attempt.student), 'participated': True,
-            'finished_at': attempt.finished_at,
+            'finished_at': attempt.finished_at, 'teacher_comment': attempt.teacher_comment,
         })
         if staff:  # halollik jurnali va progress faqat o'qituvchiga
             data['integrity'] = _integrity(attempt)
@@ -599,6 +599,26 @@ def group_average(exam: Exam, now=None):
         if item.get('total') and item['total'].get('max')
     ]
     return round(sum(percents) / len(percents), 1) if percents else None
+
+
+def child_result(exam: Exam, parent: User, student: User):
+    """Ota-ona ro'yxati uchun farzandning natijasi: `{participated, score, max, band, label, teacher_comment}`; imtihon
+    tugamagan/natija yashirin bo'lsa `None`. `band` — faqat IELTS (umumiy band), boshqa dvigatellarda `None`."""
+    for item in list_results(user=parent, exam=exam)['results']:
+        if item['student']['id'] != student.id:
+            continue
+        if item.get('hidden'):
+            return None
+        if not item.get('participated') or not item.get('total'):
+            return {'participated': bool(item.get('participated')), 'score': None, 'max': None, 'band': None, 'label': None,
+                    'teacher_comment': item.get('teacher_comment') or ''}
+        total = item['total']
+        return {
+            'participated': True, 'score': total.get('score'), 'max': total.get('max'),
+            'band': total.get('score') if (exam.scoring.get('type') == 'ielts') else None,
+            'label': total.get('label'), 'teacher_comment': item.get('teacher_comment') or '',
+        }
+    return None
 
 
 def my_total(exam: Exam, user: User):
@@ -769,7 +789,7 @@ def _review(exam: Exam, student_id) -> list:
     return rows
 
 
-def set_manual_scores(*, teacher: User, exam: Exam, student_id, scores: dict) -> dict:
+def set_manual_scores(*, teacher: User, exam: Exam, student_id, scores: dict, comment=None) -> dict:
     if not _is_owner(exam, teacher):
         raise PermissionDenied(_('Bu imtihon sizga tegishli emas.'))
     student = selectors.enrolled_students(exam).filter(pk=student_id).first()
@@ -786,5 +806,9 @@ def set_manual_scores(*, teacher: User, exam: Exam, student_id, scores: dict) ->
             raise ValidationError({'scores': f'{key}: {exc}'})
     attempt, _created = ExamAttempt.objects.get_or_create(exam=exam, student=student)
     attempt.manual_scores = {**(attempt.manual_scores or {}), **cleaned}
-    attempt.save(update_fields=['manual_scores', 'updated_at'])
+    fields = ['manual_scores', 'updated_at']
+    if comment is not None:  # o'qituvchi izohi (ota-ona/o'quvchi natijada ko'radi)
+        attempt.teacher_comment = str(comment).strip()[:2000]
+        fields.append('teacher_comment')
+    attempt.save(update_fields=fields)
     return student_detail(user=teacher, exam=exam, student_id=student.id)

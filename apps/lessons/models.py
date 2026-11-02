@@ -296,6 +296,9 @@ class Attendance(TimeStampedUUIDModel):
     student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='attendances')
     joined_at = DateTimeField(null=True, blank=True)
     left_at = DateTimeField(null=True, blank=True)
+    # O'qituvchining izohi (masalan "Darsda faol qatnashdi") va kechikish sababi ("Transport tufayli")
+    teacher_note = TextField(blank=True, default='')
+    late_reason = CharField(max_length=200, blank=True, default='')
 
     class Meta:
         ordering = ['-joined_at']

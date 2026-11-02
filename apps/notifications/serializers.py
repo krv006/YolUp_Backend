@@ -39,6 +39,9 @@ KIND_TITLES = {
     'certificate_verified': 'Sertifikat tasdiqlandi', 'certificate_rejected': 'Sertifikat rad etildi',
     'certificate_pending': 'Sertifikat tekshiruvi', 'recording_ready': 'Dars yozuvi tayyor', 'disk_alert': 'Disk to\'lmoqda',
     'recording_failed': 'Yozuv birlashtirilmadi',
+    'security.new_device': 'Yangi qurilmadan kirish', 'attendance.joined': 'Darsga kirdi', 'attendance.late': 'Darsga kechikdi',
+    'attendance.missed': 'Darsga kelmadi', 'link.revoked': "Bog'lanish uzildi", 'consent.changed': "Rozilik o'zgardi",
+    'security.session_ended': 'Seans tugatildi', 'homework_due_soon': 'Vazifa muddati yaqin', 'link.request': "Bog'lanish so'rovi", 'link.remind': "Bog'lanish eslatmasi",
 }
 
 
@@ -55,13 +58,18 @@ class NotificationSerializer(serializers.ModelSerializer):
     category = serializers.SerializerMethodField()
     title = serializers.SerializerMethodField()
     body = serializers.SerializerMethodField()
+    link = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
         fields = [
             'id', 'sender', 'description', 'title', 'body', 'target_type', 'kind', 'category', 'link_type', 'link_id',
-            'created_at',
+            'link', 'data', 'created_at',
         ]
+
+    def get_link(self, obj) -> dict | None:
+        """`link_type`/`link_id` ning tuzilgan ko'rinishi: `{kind, id}` (yo'q bo'lsa `null`)."""
+        return {'kind': obj.link_type, 'id': obj.link_id} if obj.link_type else None
 
     def get_category(self, obj) -> str:
         return category_of(obj.kind, obj.link_type)

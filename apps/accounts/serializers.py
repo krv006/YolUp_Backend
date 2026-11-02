@@ -150,11 +150,18 @@ class MeSerializer(UserSerializer):
             'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
             'email_verified', 'phone_verified', 'phone_verified_at', 'target_band', 'theme', 'text_size',
+            'grade', 'must_change_password', 'notify_child_absent', 'notify_child_new_device', 'notify_homework_due',
+            'muted_kinds',
         ]
         read_only_fields = UserSerializer.Meta.read_only_fields + [
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
-            'phone_verified_at',
+            'phone_verified_at', 'must_change_password',
         ]
+
+    def validate_muted_kinds(self, value):
+        if not isinstance(value, list) or len(value) > 50 or any(not isinstance(k, str) or not 0 < len(k) <= 32 for k in value):
+            raise serializers.ValidationError(_("Bildirishnoma turlari ro'yxati (har biri 1-32 belgi, ko'pi bilan 50 ta) kerak."))
+        return list(dict.fromkeys(value))
 
     def validate_email(self, value):
         return (value or '').strip().lower()
@@ -234,8 +241,8 @@ class ChildCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'parent_phone', 'course_id', 'invite_code']
-        read_only_fields = ['invite_code']
+        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'parent_phone', 'course_id', 'invite_code', 'grade', 'must_change_password']
+        read_only_fields = ['invite_code', 'must_change_password']
         extra_kwargs = {'username': {'validators': username_validators()}}
 
     def validate_parent_phone(self, value):
@@ -261,13 +268,59 @@ class PasswordChangeSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
 
+ONLINE_WINDOW_SECONDS = 300
+
+
 class LinkSerializer(serializers.ModelSerializer):
+    """Bog'lanish + farzand haqida qisqa ma'lumot. `last_seen_at` / `is_online` faqat TASDIQLANGAN bog'lanishda (so'rov
+    kutilayotganda ota-ona o'quvchining onlayn holatini ko'rmaydi); `expires_at` — faqat PENDING so'rovda."""
+
     parent = UserSerializer(read_only=True)
     student = UserSerializer(read_only=True)
+    grade = serializers.SerializerMethodField()
+    courses_count = serializers.SerializerMethodField()
+    last_seen_at = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    expires_at = serializers.DateTimeField(read_only=True)
+    reminded_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = ParentChildLink
-        fields = ['id', 'parent', 'student', 'status', 'created_at', 'responded_at']
+        fields = [
+            'id', 'parent', 'student', 'status', 'created_at', 'responded_at', 'grade', 'courses_count',
+            'last_seen_at', 'is_online', 'expires_at', 'reminded_at',
+        ]
+
+    def get_grade(self, obj) -> str:
+        return obj.student.grade
+
+    def get_courses_count(self, obj) -> int | None:
+        if obj.status != ParentChildLink.Status.APPROVED:
+            return None
+        annotated = getattr(obj, '_courses_count', None)
+        if annotated is not None:
+            return annotated
+        from apps.lessons.models import Enrollment
+
+        return Enrollment.objects.filter(student_id=obj.student_id, status=Enrollment.Status.APPROVED).count()
+
+    def get_last_seen_at(self, obj):
+        if obj.status != ParentChildLink.Status.APPROVED or self.context.get('request') is None:
+            return None
+        if self.context['request'].user.pk != obj.parent_id:
+            return None  # o'quvchining o'zi ham, boshqalar ham bu maydonni ota-ona sifatida ko'rmaydi
+        return obj.student.last_seen_at
+
+    def get_is_online(self, obj) -> bool | None:
+        request = self.context.get('request')
+        if obj.status != ParentChildLink.Status.APPROVED or request is None or request.user.pk != obj.parent_id:
+            return None  # faqat tasdiqlangan bog'lanishdagi ota-onaga ko'rinadi
+        seen = obj.student.last_seen_at
+        if seen is None:
+            return False
+        from django.utils import timezone
+
+        return (timezone.now() - seen).total_seconds() <= ONLINE_WINDOW_SECONDS
 
 
 class LinkRequestSerializer(serializers.Serializer):
@@ -294,3 +347,6 @@ class ConsentSerializer(serializers.ModelSerializer):
         model = Consent
         fields = ['id', 'student', 'kind', 'granted', 'updated_at']
         read_only_fields = ['updated_at']
+        # (student, kind) yagona: POST mavjud rozilikni YANGILAYDI (services.set_consent: update_or_create). Model cheklovidan
+        # kelgan UniqueTogetherValidator ni o'chiramiz, aks holda rozilikni ikkinchi marta o'zgartirib bo'lmasdi (400).
+        validators = []

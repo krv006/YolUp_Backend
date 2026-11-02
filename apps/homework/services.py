@@ -255,7 +255,7 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         'share_with_parent': s.share_with_parent,
         'teacher_comment': '' if hide_result else s.teacher_comment,
         'resubmit_comment': s.resubmit_comment if s.status == Submission.Status.RESUBMIT_REQUESTED else '',
-        'error': s.error,
+        'error': '' if for_parent else s.error,  # ichki xato matni ("AI baholay olmadi") ota-onaga ko'rsatilmaydi
         'is_late': bool(due and s.created_at and s.created_at > due),
         'created_at': s.created_at,
         'checked_at': s.checked_at,
@@ -375,6 +375,33 @@ def _notify_new_assignment(assignment: Assignment) -> None:
         )
 
 
+def _notify_parents_due_soon(assignment: Assignment, pending_students: list, now) -> int:
+    """Topshirmagan o'quvchilarning ota-onalariga "muddatga 24 soat qoldi" (`notify_homework_due` o'chirilgan bo'lsa yuborilmaydi).
+    Qaytaradi: yuborilgan xabarlar soni."""
+    from apps.accounts.services import _display_name
+    from apps.notifications import services as notification_services
+
+    count = 0
+    for student in pending_students:
+        parents = list(User.objects.filter(
+            child_links__student=student, child_links__status=ParentChildLink.Status.APPROVED, notify_homework_due=True,
+        ).distinct())
+        if not parents:
+            continue
+        try:
+            notification = notification_services.send_event(
+                sender=assignment.course.teacher, recipients=parents, kind='homework_due_soon',
+                link_type='assignment', link_id=str(assignment.pk),
+                description=f"{_display_name(student)}: «{assignment.title}» topshirish muddatiga 24 soat qoldi.",
+                data={'student_id': str(student.pk), 'assignment_id': str(assignment.pk), 'name': _display_name(student),
+                      'due_at': assignment.due_at.isoformat()},
+            )
+            count += 1 if notification else 0
+        except Exception:  # noqa: BLE001 — bitta ota-ona xatosi qolganlarga xalaqit bermasin
+            logging.getLogger('apps').exception('homework_due_soon bildirishnomasi yuborilmadi')
+    return count
+
+
 def send_deadline_reminders(*, now=None) -> dict:
     """Deadline yaqinlashganda hali topshirmagan o'quvchilarga eslatma.
 
@@ -390,13 +417,13 @@ def send_deadline_reminders(*, now=None) -> dict:
     from apps.notifications.services import send_notification
 
     now = now or timezone.now()
-    sent = {'halfway': 0, '1h': 0}
+    sent = {'halfway': 0, '1h': 0, 'parents': 0}
 
     from django.db.models import Q
 
     assignments = (
         Assignment.objects.filter(due_at__isnull=False, due_at__gt=now, status=Assignment.Status.ACTIVE)
-        .filter(Q(reminder_halfway_sent_at__isnull=True) | Q(reminder_1h_sent_at__isnull=True))
+        .filter(Q(reminder_halfway_sent_at__isnull=True) | Q(reminder_1h_sent_at__isnull=True) | Q(reminder_parents_sent_at__isnull=True))
         .select_related('course', 'course__teacher')
     )
     for a in assignments:
@@ -408,6 +435,11 @@ def send_deadline_reminders(*, now=None) -> dict:
         pending = [s for s in _enrolled_students(a.course) if s.id not in submitted_ids]
         if not pending:
             continue
+
+        if a.reminder_parents_sent_at is None and now >= a.due_at - timedelta(hours=24):
+            sent['parents'] += _notify_parents_due_soon(a, pending, now)
+            a.reminder_parents_sent_at = now
+            a.save(update_fields=['reminder_parents_sent_at'])
 
         halfway_at = a.created_at + (a.due_at - a.created_at) / 2
         if a.reminder_halfway_sent_at is None and now >= halfway_at:
@@ -543,6 +575,97 @@ def assignment_file(*, user: User, assignment_id) -> tuple:
     if not a.attachment:
         raise NotFound(_("Bu vazifada biriktirilgan fayl yo'q."))
     return a.attachment.path, a.attachment_name or 'vazifa'
+
+
+def _group_stats(assignment_ids, child: User) -> dict:
+    """{assignment_id: {average, rank, total}} — faqat shu farzandning TASDIQLANGAN natijasi bor vazifalar uchun. O'rtacha 10 ballik
+    (overall_score / 10), o'rin — ball bo'yicha (teng ballar bir xil o'rin). Boshqa o'quvchilarning ballari chiqmaydi."""
+    rows = Submission.objects.filter(
+        assignment_id__in=assignment_ids, status=Submission.Status.DONE, overall_score__isnull=False,
+    ).order_by('assignment_id', 'student_id', '-created_at').values('assignment_id', 'student_id', 'overall_score')
+    latest: dict = {}
+    for row in rows:
+        latest.setdefault((row['assignment_id'], row['student_id']), row['overall_score'])
+    by_assignment: dict = {}
+    for (assignment_id, student_id), score in latest.items():
+        by_assignment.setdefault(assignment_id, {})[student_id] = score
+    result = {}
+    for assignment_id, scores in by_assignment.items():
+        mine = scores.get(child.id)
+        if mine is None:
+            continue
+        result[assignment_id] = {
+            'average': round(sum(scores.values()) / len(scores) / 10, 1),
+            'rank': 1 + sum(1 for value in scores.values() if value > mine),
+            'total': len(scores),
+        }
+    return result
+
+
+def list_child_assignments(*, parent: User, student_id, course_id=None, status=None) -> list:
+    """Ota-ona: farzandning BARCHA kurslaridagi faol vazifalar + shu farzandning topshirig'i (`my_submission`) va guruh statistikasi.
+    Bir necha farzand bir kursda bo'lsa ham aniq (so'rov bitta farzand bo'yicha); N+1 yo'q."""
+    from apps.accounts import consent
+
+    child = consent.approved_child(parent, student_id)
+    qs = Assignment.objects.filter(
+        course__enrollments__student=child, course__enrollments__status=Enrollment.Status.APPROVED, status=Assignment.Status.ACTIVE,
+    ).select_related('lesson', 'course').distinct().order_by('-created_at')
+    if course_id:
+        qs = qs.filter(course_id=course_id)
+    assignments = list(qs)
+    ids = [a.id for a in assignments]
+    latest: dict = {}
+    for sub in Submission.objects.filter(student=child, assignment_id__in=ids).select_related('assignment', 'student').order_by('assignment_id', '-created_at'):
+        latest.setdefault(sub.assignment_id, sub)
+    stats = _group_stats(ids, child)
+    result = []
+    for a in assignments:
+        item = _assignment_dict(a)
+        sub = latest.get(a.id)
+        item['student_id'] = str(child.id)
+        item['my_submission'] = _submission_dict(sub, include_result=False, for_parent=True) if sub else None
+        shown = sub is not None and sub.status == Submission.Status.DONE and sub.share_with_parent
+        item['group_stats'] = stats.get(a.id) if shown else None  # natija yashirin bo'lsa guruh statistikasi ham yashirin
+        result.append(item)
+    return result
+
+
+REMIND_CHILD_INTERVAL_SECONDS = 3600
+
+
+def remind_child(*, parent: User, assignment_id, student_id, request=None) -> dict:
+    """Ota-ona farzandga vazifa haqida eslatma yuboradi (bir vazifa/farzand uchun soatiga 1 marta; oshsa 429 + `retry_after`).
+    Vazifa farzandning kursida bo'lishi va hali topshirilmagan bo'lishi shart. Qaytaradi: `last_reminded_at`."""
+    from rest_framework.exceptions import Throttled
+
+    from apps.accounts import consent
+    from apps.accounts.services import _display_name
+    from apps.notifications import services as notification_services
+    from apps.notifications.models import Notification
+
+    child = consent.approved_child(parent, student_id)
+    assignment = _get_assignment(assignment_id)
+    if not _is_enrolled(child, assignment.course) or assignment.status != Assignment.Status.ACTIVE:
+        raise NotFound(_('Vazifa topilmadi.'))
+    if Submission.objects.filter(assignment=assignment, student=child).exclude(status=Submission.Status.RESUBMIT_REQUESTED).exists():
+        raise ValidationError({'detail': _('Farzand bu vazifani allaqachon topshirgan.')})
+    previous = (
+        Notification.objects.filter(
+            kind='homework_reminder', sender=parent, link_type='assignment', link_id=str(assignment.pk), recipients__user=child,
+        ).order_by('-created_at').first()
+    )
+    now = timezone.now()
+    if previous is not None and (now - previous.created_at).total_seconds() < REMIND_CHILD_INTERVAL_SECONDS:
+        wait = REMIND_CHILD_INTERVAL_SECONDS - (now - previous.created_at).total_seconds()
+        raise Throttled(wait=wait, detail=str(_('Eslatma soatiga bir marta yuboriladi.')))
+    due = f" Muddat: {timezone.localtime(assignment.due_at).strftime('%d.%m %H:%M')}." if assignment.due_at else ''
+    notification = notification_services.send_event(
+        sender=parent, recipients=[child], kind='homework_reminder', link_type='assignment', link_id=str(assignment.pk),
+        description=f"{_display_name(parent)} sizga \"{assignment.title}\" vazifasini eslatdi.{due}",
+        data={'assignment_id': str(assignment.pk), 'parent_id': str(parent.pk), 'from_parent': True}, request=request,
+    )
+    return {'last_reminded_at': notification.created_at if notification else None, 'sent': notification is not None}
 
 
 def list_assignments(*, user: User, course_id, status=None) -> list:

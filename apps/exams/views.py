@@ -98,6 +98,13 @@ class ExamListCreateView(APIView):
         course = request.query_params.get('course')
         if course:
             exams = exams.filter(course_id=course)
+        child = None
+        student_param = request.query_params.get('student')
+        if student_param and request.user.role == 'parent':  # ota-ona: `?student=<farzand>` — shu farzand kurslari imtihonlari + natijasi
+            from apps.accounts import consent
+
+            child = consent.approved_child(request.user, student_param)
+            exams = exams.filter(course__enrollments__student=child, course__enrollments__status='approved').distinct()
         rows = [exam_summary(exam, now) for exam in exams]
         from apps.lessons.models import ReminderPref
 
@@ -110,6 +117,8 @@ class ExamListCreateView(APIView):
             row['reminder_minutes'] = mine.get(exam.id)
             if is_student:
                 row['my_total'] = services.my_total(exam, request.user) if row.get('state') == 'finished' else None
+            if child is not None:
+                row['child_result'] = services.child_result(exam, request.user, child) if row.get('state') == 'finished' else None
         return Response(rows)
 
     def post(self, request):
@@ -304,6 +313,6 @@ class ExamManualScoreView(APIView):
         serializer.is_valid(raise_exception=True)
         result = services.set_manual_scores(
             teacher=request.user, exam=exam, student_id=student_id,
-            scores=serializer.validated_data['scores'],
+            scores=serializer.validated_data['scores'], comment=serializer.validated_data.get('comment'),
         )
         return Response(result)

@@ -16,6 +16,7 @@ from django.db.models import (
     GenericIPAddressField,
     ImageField,
     Index,
+    JSONField,
     PositiveIntegerField,
     PositiveSmallIntegerField,
     SET_NULL,
@@ -98,6 +99,16 @@ class User(AbstractUser):
     # Tizim sozlamalari: "Yangi xabarlar" va "Email xabarnomalar" tugmalari
     notify_messages = BooleanField(default=True)
     notify_email = BooleanField(default=False)
+    # O'quvchining sinfi (ixtiyoriy matn, masalan "7-sinf") — ota-ona farzand tanlagichida ko'rsatiladi
+    grade = CharField(max_length=32, blank=True, default='')
+    # Ota-ona yaratgan bola hisobi birinchi kirishda parolni almashtirishi shart (`password/change/` bayroqni o'chiradi)
+    must_change_password = BooleanField(default=False)
+    # Ota-ona: farzand haqidagi ogohlantirishlar (apps.notifications / apps.accounts.services)
+    notify_child_absent = BooleanField(default=True)
+    notify_child_new_device = BooleanField(default=True)
+    notify_homework_due = BooleanField(default=True)
+    # O'chirib qo'yilgan bildirishnoma turlari (`kind` qiymatlari): shu turdagi xabarlar bu foydalanuvchiga yaratilmaydi
+    muted_kinds = JSONField(default=list, blank=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 
@@ -131,12 +142,23 @@ class ParentChildLink(TimeStampedUUIDModel):
     student = ForeignKey('accounts.User', CASCADE, related_name='parent_links')
     status = CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
     responded_at = DateTimeField(null=True, blank=True)
+    # Ota-ona o'quvchiga oxirgi marta eslatma yuborgan payt (sutkasiga 1 marta: services.remind_link)
+    reminded_at = DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
         constraints = [
             UniqueConstraint(fields=['parent', 'student'], name='unique_parent_student'),
         ]
+
+    @property
+    def expires_at(self):
+        """PENDING so'rov shu paytdan keyin avtomatik yopiladi (`expire_link_requests`); boshqa holatlarda `None`."""
+        if self.status != self.Status.PENDING:
+            return None
+        from datetime import timedelta
+
+        return self.created_at + timedelta(days=settings.LINK_REQUEST_TTL_DAYS)
 
     def __str__(self):
         return f'{self.parent.username} -> {self.student.username} [{self.status}]'

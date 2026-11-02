@@ -338,7 +338,9 @@ class AttendanceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'lesson', 'lesson_title', 'student', 'joined_at', 'left_at', 'minutes',
             'attention_total', 'attention_answered', 'focus_exits', 'focus', 'focus_alert', 'focus_percent',
+            'teacher_note', 'late_reason',
         ]
+        read_only_fields = ['teacher_note', 'late_reason']  # faqat PATCH /attendance/<id>/ (o'qituvchi) orqali
 
     def get_lesson_title(self, obj) -> str:
         return obj.lesson.title or obj.lesson.course.title
@@ -362,14 +364,21 @@ class AttendanceSerializer(serializers.ModelSerializer):
             student=obj.student, answered_at__isnull=False,
         ).count()
 
+    @staticmethod
+    def _end(obj):
+        """Hisob oxiri: chiqqan vaqt; jonli darsda hali chiqmagan bo'lsa — hozir (diqqat foizi dars davomida ham yangilanib tursin)."""
+        if obj.left_at:
+            return obj.left_at
+        return timezone.now() if obj.joined_at and obj.lesson.status == Lesson.Status.LIVE else None
+
     def _focus(self, obj) -> dict:
         cached = obj.__dict__.get('_focus_summary')
         if cached is None:
             extras = self._extras()
             if extras is not None:
-                cached = selectors.focus_summary_from(extras['events'].get((obj.lesson_id, obj.student_id), []), obj.left_at)
+                cached = selectors.focus_summary_from(extras['events'].get((obj.lesson_id, obj.student_id), []), self._end(obj))
             else:
-                cached = selectors.focus_summary(obj.lesson, obj.student)
+                cached = selectors.focus_summary(obj.lesson, obj.student, end=self._end(obj))
             obj.__dict__['_focus_summary'] = cached
         return cached
 
@@ -385,9 +394,10 @@ class AttendanceSerializer(serializers.ModelSerializer):
     def get_focus_percent(self, obj) -> int | None:
         """Darsda necha foiz vaqt e'tibor bilan o'tirgani: 100 − (oynadan tashqarida bo'lgan vaqt / darsda turgan vaqt).
         Hisoblab bo'lmasa (kirgan/chiqqan vaqt yo'q) — `null`."""
-        if not obj.joined_at or not obj.left_at:
+        end = self._end(obj)
+        if not obj.joined_at or not end:
             return None
-        total = (obj.left_at - obj.joined_at).total_seconds()
+        total = (end - obj.joined_at).total_seconds()
         if total <= 0:
             return None
         away = self._focus(obj).get('away_seconds') or 0

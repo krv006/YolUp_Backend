@@ -212,7 +212,13 @@ class LoginView(TokenObtainPairView):
         # Muvaffaqiyatli login — IP/qurilma jurnaliga yoziladi (auth.login)
         user = User.objects.filter(username=request.data.get('username', '')).first()
         if user is not None:
-            services.record_login(user=user, request=request)
+            try:
+                from rest_framework_simplejwt.tokens import RefreshToken
+
+                session_id = RefreshToken(response.data['refresh']).get('sid')
+            except Exception:  # noqa: BLE001 — seans id'si bo'lmasa ham kirish yozilaveradi
+                session_id = None
+            services.record_login(user=user, request=request, session_id=session_id)
         return response
 
 
@@ -226,10 +232,16 @@ class LoginHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        rows = services.login_history(
-            viewer=request.user, student_id=request.query_params.get('student'), limit=500, request=request,
-        )
+        from apps.lessons.filters import parse_bound  # sana yoki ISO sana-vaqt
+
         params = request.query_params
+        device = params.get('device')
+        if device and device not in ('phone', 'tablet', 'computer'):
+            raise ValidationError({'device': _("phone, tablet yoki computer bo'lishi kerak.")})
+        rows = services.login_history(
+            viewer=request.user, student_id=params.get('student'), limit=500, request=request,
+            date_from=parse_bound(params.get('from'), end=False), date_to=parse_bound(params.get('to'), end=True), device_type=device,
+        )
         if 'page' not in params and 'page_size' not in params:
             return Response(rows[:50])  # eski mijozlar uchun oddiy massiv
         try:
@@ -569,6 +581,87 @@ class LinkRespondView(APIView):
             student=request.user, link_id=pk, action=serializer.validated_data['action'], request=request,
         )
         return Response(LinkSerializer(link).data)
+
+
+class LinkCancelView(APIView):
+    """POST /auth/links/<id>/cancel/ — ota-ona o'zi yuborgan, javob kutilayotgan so'rovni bekor qiladi (yozuv o'chadi)."""
+
+    permission_classes = [RequirePerm('link.request')]
+
+    def post(self, request, pk):
+        services.cancel_link(parent=request.user, link_id=pk, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class LinkRemindView(APIView):
+    """POST /auth/links/<id>/remind/ — kutilayotgan so'rov bo'yicha o'quvchiga eslatma (sutkasiga 1 marta; oshsa 429 + `retry_after`)."""
+
+    permission_classes = [RequirePerm('link.request')]
+
+    def post(self, request, pk):
+        link = services.remind_link(parent=request.user, link_id=pk, request=request)
+        return Response(LinkSerializer(link, context={'request': request}).data)
+
+
+class LinkUnlinkView(APIView):
+    """POST /auth/links/<id>/unlink/ (yoki DELETE /auth/links/<id>/) — ota-ona tasdiqlangan bog'lanishni uzadi: bog'lanish va
+    shu ota-ona bergan rozilik yozuvlari o'chadi, o'quvchiga xabar boradi."""
+
+    permission_classes = [RequirePerm('link.request')]
+
+    def post(self, request, pk):
+        services.unlink_child(parent=request.user, link_id=pk, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    delete = post
+
+
+class UsernameAvailableView(APIView):
+    """GET /auth/username-available/?username=... -> `{available, valid, suggestions: [...]}` (takliflar serverda bo'shligi
+    tekshirilgan). Bola hisobini yaratishda yozish paytida tekshiruv uchun; faqat tizimga kirganlarga."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'lookup'
+
+    def get(self, request):
+        return Response(services.username_availability(request.query_params.get('username', '')))
+
+
+class LoginRecognizeView(APIView):
+    """POST /auth/logins/<id>/recognize/ — ota-ona "Bu farzandim" deydi: qurilma tanish deb belgilanadi."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def post(self, request, pk):
+        return Response(services.recognize_login(parent=request.user, login_id=pk, request=request))
+
+
+class ChildSessionListView(APIView):
+    """GET /auth/children/<student_id>/sessions/ — farzandning seanslari (ota-ona uchun)."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def get(self, request, student_id):
+        return Response(services.child_sessions(parent=request.user, student_id=student_id))
+
+
+class ChildSessionDetailView(APIView):
+    """DELETE /auth/children/<student_id>/sessions/<sid>/ — bitta seansni tugatish (farzandga xabar boradi)."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def delete(self, request, student_id, sid):
+        services.end_child_session(parent=request.user, student_id=student_id, session_id=sid, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChildSessionLogoutAllView(APIView):
+    """POST /auth/children/<student_id>/sessions/logout-all/ — farzandning hamma seansini tugatish (farzandga xabar boradi)."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def post(self, request, student_id):
+        return Response({'ended': services.end_all_child_sessions(parent=request.user, student_id=student_id, request=request)})
 
 
 class UserSearchView(APIView):

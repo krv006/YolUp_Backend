@@ -75,6 +75,39 @@ def parse_device(user_agent: str, header_name: str = '') -> str:
     return ' · '.join(part for part in (browser, system) if part)[:120] or ua[:60]
 
 
+def parse_ua(user_agent: str) -> dict:
+    """User-Agent -> `{browser, os, device_type}` (ota-ona kirishlar jadvali uchun). `device_type`: phone | tablet | computer."""
+    ua = user_agent or ''
+    if re.match(r'^(okhttp|Dart|CFNetwork)', ua):
+        return {'browser': 'Mobil ilova', 'os': '', 'device_type': 'phone'}
+    system, version = '', ''
+    if m := re.search(r'Android ([\d.]+)', ua):
+        system, version = 'Android', m.group(1)
+    elif m := re.search(r'(?:iPhone|iPad|CPU) OS ([\d_]+)', ua):
+        system, version = 'iOS', m.group(1).replace('_', '.')
+    elif 'Windows' in ua:
+        system = 'Windows'
+    elif 'Mac OS X' in ua or 'Macintosh' in ua:
+        system = 'macOS'
+    elif 'Linux' in ua:
+        system = 'Linux'
+    browser = ''
+    for needle, name in (('Edg/', 'Edge'), ('OPR/', 'Opera'), ('YaBrowser/', 'Yandex'), ('Firefox/', 'Firefox'), ('Chrome/', 'Chrome'), ('Safari/', 'Safari')):
+        if needle in ua:
+            browser = name
+            pattern = r'Version/(\d+)' if name == 'Safari' else re.escape(needle) + r'(\d+)'  # Safari versiyasi `Version/17`, `Safari/604` emas
+            if m := re.search(pattern, ua):
+                browser = f'{name} {m.group(1)}'
+            break
+    if 'iPad' in ua or ('Android' in ua and 'Mobile' not in ua):
+        device_type = 'tablet'
+    elif 'Mobile' in ua or 'iPhone' in ua or 'Android' in ua:
+        device_type = 'phone'
+    else:
+        device_type = 'computer'
+    return {'browser': browser, 'os': f'{system} {version}'.strip(), 'device_type': device_type}
+
+
 def client_ip(request):
     if request is None:
         return None
@@ -103,6 +136,21 @@ def city_for_ip(ip) -> str:
     except Exception:  # noqa: BLE001 — AddressNotFound, fayl yo'q, kutubxona yo'q va h.k.
         if _geoip_reader is None:
             _geoip_failed = True  # fayl ochilmadi — har kirishda urinib o'tirmaymiz
+        return ''
+
+
+def country_for_ip(ip) -> str:
+    """IP bo'yicha davlat nomi (GeoIP bazasi bo'lsagina; aks holda bo'sh)."""
+    global _geoip_reader
+    if not ip or not getattr(settings, 'GEOIP_CITY_DB', '') or _geoip_failed:
+        return ''
+    try:
+        if _geoip_reader is None:
+            import geoip2.database
+
+            _geoip_reader = geoip2.database.Reader(settings.GEOIP_CITY_DB)
+        return (_geoip_reader.city(str(ip)).country.name or '')[:100]
+    except Exception:  # noqa: BLE001
         return ''
 
 
@@ -165,6 +213,7 @@ class SessionTokenObtainPairSerializer(TokenObtainPairSerializer):
         refresh['sid'] = str(start_session(self.user, self.context.get('request')).id)
         data['refresh'] = str(refresh)
         data['access'] = str(refresh.access_token)
+        data['must_change_password'] = self.user.must_change_password  # frontend birinchi kirishda parol almashtirish oynasini ochadi
         return data
 
 

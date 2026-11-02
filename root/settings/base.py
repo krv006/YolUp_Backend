@@ -132,6 +132,7 @@ REST_FRAMEWORK = {
         # Faqat login (parol/2FA/ijtimoiy): maktab/markaz Wi-Fi'sida ko'p o'quvchi bitta IP'dan kiradi. Brute-force uchun alohida
         # (IP + login) chegarasi bor (accounts.views.LOGIN_FAIL_LIMIT).
         'login': os.getenv('THROTTLE_LOGIN', '300/min'),
+        'lookup': os.getenv('THROTTLE_LOOKUP', '120/min'),  # yozish paytidagi tekshiruvlar (login bandligi)
     },
     'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
 }
@@ -260,6 +261,8 @@ RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 # birlashtirish va tiklashni o'sha yerdagi jarayonlar bajaradi. Bitta serverda (standart) `1`.
 RECORDINGS_LOCAL = os.getenv('RECORDINGS_LOCAL', '1') != '0'
 # Bu server nomi (monitoringda ajratish uchun): 'core' (sayt/baza) yoki 'media' (video/yozuv). Bo'sh = bitta server.
+# Ota-ona -> o'quvchi bog'lanish so'rovi (PENDING) shuncha kundan keyin avtomatik yopiladi
+LINK_REQUEST_TTL_DAYS = int(os.getenv('LINK_REQUEST_TTL_DAYS', '7'))
 SERVER_ROLE = os.getenv('SERVER_ROLE', '')
 # Egress konteyneri fayl yozadigan yo'l (uning FS'ida) — compose'da /out
 EGRESS_OUTPUT_PREFIX = os.getenv('EGRESS_OUTPUT_PREFIX', '/out')

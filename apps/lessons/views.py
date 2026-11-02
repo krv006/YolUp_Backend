@@ -13,7 +13,10 @@ from apps.accounts.models import User
 from apps.accounts.serializers import UserSerializer
 from apps.core.permissions import RequirePerm
 
+from apps.accounts import consent
+
 from . import attendance_summary, selectors, services
+from .filters import AttendanceFilter, LessonFilter
 from .models import Course, Enrollment
 from .serializers import (
     AttendanceSerializer,
@@ -239,7 +242,7 @@ def _students_with_presence_rows(request, course) -> list:
 
 class LessonViewSet(viewsets.ModelViewSet):
     serializer_class = LessonSerializer
-    filterset_fields = ['course', 'status']
+    filterset_class = LessonFilter  # course, status, student (ota-ona: farzand), starts_at__gte / starts_at__lte
     ordering_fields = ['starts_at']
 
     def get_permissions(self):
@@ -580,16 +583,44 @@ class AttendanceViewSet(viewsets.ReadOnlyModelViewSet):
     """Davomat hisoboti: o'qituvchi -> o'z darslari, o'quvchi -> o'zi, ota-ona -> tasdiqlangan bolalari."""
 
     serializer_class = AttendanceSerializer
-    filterset_fields = ['lesson', 'student']
+    filterset_class = AttendanceFilter  # lesson, student, course, from, to
+    http_method_names = ['get', 'head', 'options', 'patch']
 
     def get_permissions(self):
         return [RequirePerm('attendance.view')()]
 
     def get_queryset(self):
-        return selectors.attendance_for(self.request.user)
+        qs = selectors.attendance_for(self.request.user)
+        if self.request.user.role == User.Role.PARENT:  # `analytics` roziligi o'chiq farzandlarning davomati ota-onaga ko'rinmaydi
+            denied = consent.denied_student_ids(
+                qs.values_list('student_id', flat=True).distinct(), 'analytics',
+            )
+            if denied:
+                qs = qs.exclude(student_id__in=denied)
+        return qs
+
+    def partial_update(self, request, *args, **kwargs):
+        """PATCH /attendance/<id>/ — o'qituvchi izohi (`teacher_note`) va kechikish sababi (`late_reason`); faqat shu dars o'qituvchisi."""
+        record = self.get_object()
+        if request.user.role != User.Role.TEACHER or record.lesson.course.teacher_id != request.user.pk:
+            raise PermissionDenied(_("Faqat shu dars o'qituvchisi izoh qo'sha oladi."))
+        data = request.data
+        unknown = set(data) - {'teacher_note', 'late_reason'}
+        if unknown:
+            raise ValidationError({field: _("Bu maydonni o'zgartirib bo'lmaydi.") for field in sorted(unknown)})
+        if 'teacher_note' in data:
+            record.teacher_note = str(data['teacher_note'] or '').strip()[:2000]
+        if 'late_reason' in data:
+            record.late_reason = str(data['late_reason'] or '').strip()[:200]
+        record.save(update_fields=['teacher_note', 'late_reason', 'updated_at'])
+        return Response(self.get_serializer(record).data)
 
     def list(self, request, *args, **kwargs):
         """Sahifadagi qatorlar uchun e'tibor/fokus ma'lumotlari bitta guruhli yuklash bilan (har qatorga alohida so'rov emas)."""
+        student_param = request.query_params.get('student')
+        if student_param and request.user.role == User.Role.PARENT:
+            student = consent.approved_child(request.user, student_param)
+            consent.require(student, 'analytics')  # yopiq bo'lsa 403 `consent_required` (jim bo'sh ro'yxat emas)
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         rows = list(page if page is not None else queryset)
