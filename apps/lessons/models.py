@@ -5,6 +5,7 @@ from django.db.models import (
     CASCADE,
     BooleanField,
     CharField,
+    DateField,
     DateTimeField,
     ForeignKey,
     ImageField,
@@ -13,6 +14,7 @@ from django.db.models import (
     OneToOneField,
     PositiveIntegerField,
     PositiveSmallIntegerField,
+    SET_NULL,
     TextChoices,
     TextField,
     UniqueConstraint,
@@ -430,3 +432,23 @@ class ReminderPref(TimeStampedUUIDModel):
     class Meta:
         constraints = [UniqueConstraint(fields=['user', 'kind', 'target_id'], name='unique_reminder_pref')]
         indexes = [Index(fields=['kind', 'target_id'])]
+
+
+class CoursePayment(TimeStampedUUIDModel):
+    """Oylik to'lov belgisi: to'lov tizimi (Click/Payme) yo'q, shuning uchun o'qituvchi qaysi o'quvchi qaysi oy uchun
+    to'laganini o'zi belgilaydi. `period` — oyning 1-kuni. Yozuv bor = to'lagan; yo'q = to'lamagan."""
+
+    course = ForeignKey('lessons.Course', CASCADE, related_name='payments')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='course_payments')
+    period = DateField()
+    amount = PositiveIntegerField(null=True, blank=True)  # so'mda; berilmasa kursning oylik narxi ko'rsatiladi
+    paid_at = DateTimeField()
+    note = CharField(max_length=200, blank=True, default='')
+    recorded_by = ForeignKey(settings.AUTH_USER_MODEL, SET_NULL, null=True, blank=True, related_name='+')
+
+    class Meta:
+        ordering = ['-period']
+        constraints = [UniqueConstraint(fields=['course', 'student', 'period'], name='unique_course_student_period')]
+
+    def __str__(self):
+        return f'{self.student.username} @ {self.course.title} · {self.period:%Y-%m}'

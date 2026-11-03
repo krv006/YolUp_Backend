@@ -3,6 +3,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts import consent
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm
 
@@ -97,7 +98,8 @@ class ChildRankView(APIView):
         if not course_id:
             raise ValidationError({'course': _('Kurs majburiy.')})
         return Response(child.child_rank(
-            viewer=request.user, student_id=student_id, course_id=course_id, month=request.query_params.get('month'),
+            viewer=request.user, student_id=student_id, course_id=consent.as_uuid(course_id, 'course'),
+            month=request.query_params.get('month'),
         ))
 
 

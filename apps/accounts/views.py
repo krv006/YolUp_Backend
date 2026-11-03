@@ -250,12 +250,16 @@ class LoginHistoryView(APIView):
         except ValueError:
             raise ValidationError({'page': _("Sahifa raqami son bo'lishi kerak.")}) from None
         start = (page - 1) * size
-        base = request.build_absolute_uri(request.path)
-        extra = f"&student={params['student']}" if params.get('student') else ''
+
+        def page_link(number):
+            query = params.copy()  # from/to/device/student va boshqa filtrlar saqlanadi
+            query['page'], query['page_size'] = str(number), str(size)
+            return request.build_absolute_uri(f'{request.path}?{query.urlencode()}')
+
         return Response({
             'count': len(rows),
-            'next': f'{base}?page={page + 1}&page_size={size}{extra}' if start + size < len(rows) else None,
-            'previous': f'{base}?page={page - 1}&page_size={size}{extra}' if page > 1 else None,
+            'next': page_link(page + 1) if start + size < len(rows) else None,
+            'previous': page_link(page - 1) if page > 1 else None,
             'results': rows[start:start + size],
         })
 

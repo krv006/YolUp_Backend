@@ -1,5 +1,7 @@
 """Homework views — yupqa qatlam (board uslubi)."""
 from django.http import FileResponse
+from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -309,7 +311,7 @@ class RemindChildView(APIView):
     def post(self, request, assignment_id):
         student = request.data.get('student')
         if not student:
-            return Response({'student': ['Farzand majburiy.']}, status=400)
+            raise ValidationError({'student': _('Farzand majburiy.')})
         return Response(services.remind_child(
             parent=request.user, assignment_id=assignment_id, student_id=student, request=request,
         ))

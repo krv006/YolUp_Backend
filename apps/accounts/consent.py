@@ -2,8 +2,10 @@
 
 Qoida: rozilik yozuvi YO'Q bo'lsa — ruxsat (avvalgi xatti-harakat saqlanadi); aniq `granted=False` bo'lsa — yopiq.
 """
+import uuid
+
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .models import Consent, ParentChildLink, User
 
@@ -31,10 +33,19 @@ def require(student, kind: str) -> None:
         raise ConsentRequired(kind)
 
 
+def as_uuid(value, field: str = 'id') -> uuid.UUID:
+    """So'rov parametrini UUID ga o'giradi; noto'g'ri bo'lsa 400 (aks holda ORM filtri 500 beradi)."""
+    try:
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        raise ValidationError({field: _("Noto'g'ri identifikator.")}) from None
+
+
 def approved_child(parent: User, student_id) -> User:
-    """Ota-onaning TASDIQLANGAN farzandi (aks holda 403/404)."""
+    """Ota-onaning TASDIQLANGAN farzandi (aks holda 403/404; noto'g'ri UUID — 400)."""
     from rest_framework.exceptions import NotFound
 
+    student_id = as_uuid(student_id, 'student')
     try:
         link = ParentChildLink.objects.select_related('student').get(
             parent=parent, student_id=student_id, status=ParentChildLink.Status.APPROVED,

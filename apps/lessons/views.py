@@ -15,7 +15,7 @@ from apps.core.permissions import RequirePerm
 
 from apps.accounts import consent
 
-from . import attendance_summary, selectors, services
+from . import attendance_summary, progress, selectors, services
 from .filters import AttendanceFilter, LessonFilter
 from .models import Course, Enrollment
 from .serializers import (
@@ -49,6 +49,8 @@ class CourseViewSet(viewsets.ModelViewSet):
             return [RequirePerm('course.enroll')()]
         if self.action == 'attendance_summary':
             return [RequirePerm('attendance.view')()]
+        if self.action in ('progress', 'student_progress', 'student_payment'):
+            return [RequirePerm('course.edit')()]  # faqat o'qituvchi (kurs egaligi progress.ensure_teacher'da tekshiriladi)
         if self.action in ('invite_link',):
             return [RequirePerm('course.edit')()]  # faqat o'qituvchi (kurs egaligi service'da tekshiriladi)
         if self.action == 'join':
@@ -81,6 +83,44 @@ class CourseViewSet(viewsets.ModelViewSet):
             raise ValidationError({'range': _("all, 30d yoki month bo'lishi kerak.")})
         return Response(attendance_summary.course_summary(
             course=self.get_object(), viewer=request.user, range_key=range_key,
+        ))
+
+    @action(detail=True, url_path='progress')
+    def progress(self, request, pk=None):
+        """O'qituvchi: kursdagi har o'quvchining umumiy progressi — to'lov, davomat, uy vazifalari, qo'shilgan sana.
+        `?range=all|30d|month` (davomat davri), `?month=YYYY-MM` (to'lov oyi, standart joriy oy)."""
+        range_key = request.query_params.get('range', 'all')
+        if range_key not in attendance_summary.RANGES:
+            raise ValidationError({'range': _("all, 30d yoki month bo'lishi kerak.")})
+        return Response(progress.course_progress(
+            course=self.get_object(), viewer=request.user, range_key=range_key,
+            period=progress.parse_period(request.query_params.get('month')),
+        ))
+
+    @action(detail=True, url_path=r'students/(?P<student_id>[0-9a-fA-F-]{36})/progress')
+    def student_progress(self, request, pk=None, student_id=None):
+        """O'qituvchi: bitta o'quvchi — umumiy ko'rsatkichlar + har dars, har vazifa va oylik to'lov tarixi."""
+        range_key = request.query_params.get('range', 'all')
+        if range_key not in attendance_summary.RANGES:
+            raise ValidationError({'range': _("all, 30d yoki month bo'lishi kerak.")})
+        return Response(progress.student_progress(
+            course=self.get_object(), viewer=request.user, student_id=consent.as_uuid(student_id, 'student'), range_key=range_key,
+        ))
+
+    @action(
+        detail=True, methods=['put', 'delete'],
+        url_path=r'students/(?P<student_id>[0-9a-fA-F-]{36})/payments/(?P<month>[0-9]{4}-[0-9]{2})',
+    )
+    def student_payment(self, request, pk=None, student_id=None, month=None):
+        """O'qituvchi oyni to'langan deb belgilaydi: PUT `{amount?, note?}` (qayta chaqirish yangilaydi); DELETE — belgini olib tashlaydi."""
+        course, student = self.get_object(), consent.as_uuid(student_id, 'student')
+        period = progress.parse_period(month)
+        if request.method == 'DELETE':
+            progress.unmark_paid(course=course, viewer=request.user, student_id=student, period=period, request=request)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(progress.mark_paid(
+            course=course, viewer=request.user, student_id=student, period=period,
+            amount=request.data.get('amount'), note=request.data.get('note'), request=request,
         ))
 
     @action(detail=True, methods=['get', 'post', 'delete'], url_path='invite-link')
