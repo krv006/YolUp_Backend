@@ -3,3 +3,9 @@
 {$LK_DOMAIN} {
 	reverse_proxy 127.0.0.1:7880
 }
+
+# TURN domeni: Caddy bu yerda faqat sertifikatni oladi va yangilab turadi. Fayllarni LiveKit (TURN/TLS, 5349) o'qiydi.
+# TURN_DOMAIN berilmasa (standart) *.localhost — ichki sertifikat, ACME so'rovi yuborilmaydi, hech narsaga ta'sir qilmaydi.
+{$TURN_DOMAIN:turn.localhost} {
+	respond "ok"
+}

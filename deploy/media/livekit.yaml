@@ -23,13 +23,14 @@ logging:
 
 # --- TURN (ixtiyoriy, hozir O'CHIRILGAN) -----------------------------------------------------------
 # UDP va 7881 to'sib qo'yilgan tarmoqlar (ba'zi maktab/ofis) uchun. Yoqish: 1) DNS'da turn.<domen> -> shu server IP;
-# 2) docker-compose.media.yml da 3478/udp va 5349/tcp portlarni oching, ufw'da ruxsat bering;
-# 3) turn.<domen> uchun sertifikat fayllarini konteynerga ulang; 4) quyidagi blokni izohdan chiqaring.
-# Sinalmagan holda yoqmang — noto'g'ri sozlash LiveKit'ni ishga tushirmaydi.
+# 2) ufw'da 3478/udp va 5349/tcp; 3) MEDIA .env da TURN_DOMAIN=turn.<domen>, Caddy sertifikat oladi (compose'da `caddy_data`
+# LiveKit'ga /caddy-data sifatida ulangan); 4) fayl yo'lini tekshiring (find /caddy-data ...) va quyidagi blokni izohdan chiqaring.
+# Sertifikat fayllari yo'q bo'lsa LiveKit ISHGA TUSHMAYDI — blokni faqat sertifikat olingandan keyin yoqing.
+# Sertifikat yangilanganda (taxminan 60 kunda bir) LiveKit'ni qayta ishga tushiring (yangi faylni faqat start vaqtida o'qiydi).
 # turn:
 #   enabled: true
-#   domain: turn.thesofmebel.uz
+#   domain: turn.yolup.uz
 #   tls_port: 5349
 #   udp_port: 3478
-#   cert_file: /etc/turn/fullchain.pem
-#   key_file: /etc/turn/privkey.pem
+#   cert_file: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/turn.yolup.uz/turn.yolup.uz.crt
+#   key_file: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/turn.yolup.uz/turn.yolup.uz.key

@@ -49,6 +49,8 @@ services:
         hard: 65535
     volumes:
       - ./deploy/media/livekit.yaml:/etc/livekit.yaml:ro
+      # TURN/TLS sertifikati: Caddy olgan fayllar (faqat o'qish). livekit.yaml dagi `turn:` bloki shu yo'lga qaraydi.
+      - caddy_data:/caddy-data:ro
 
   # Yozuv API'si: o'qituvchi brauzeridan video/audio bo'laklarni qabul qiladi, birlashtiradi (ffmpeg -c copy), yozuvni
   # tomoshabinlarga beradi. APP serverdagi Caddy /api/v1/lessons/<id>/recording* so'rovlarini shu yerga yuboradi.
@@ -90,6 +92,7 @@ services:
     restart: unless-stopped
     environment:
       LK_DOMAIN: ${LK_DOMAIN:?LK_DOMAIN .env da berilishi shart}
+      TURN_DOMAIN: ${TURN_DOMAIN:-turn.localhost}
     # HOST tarmog'i: LiveKit ham host'da, Caddy 127.0.0.1:7880 ga ulanadi. 80/443 (tcp+udp) ufw'da ochiq.
     network_mode: host
     volumes:
