@@ -1,14 +1,18 @@
-# AI-home-checker (RJalol/AI-home-checker) — uy vazifasini AI bilan tekshiruvchi ALOHIDA xizmat.
-# Asosiy docker-compose.prod.yml'dan mustaqil: bu fayl ishlamasa ham platforma ishlayveradi
+# AI-home-checker-multi-model (RJalol/AI-home-checker-multi-model, `main`) — uy vazifasini (matn, rasm, DOCX va
+# Speaking AUDIO) AI bilan tekshiruvchi ALOHIDA xizmat.
+# Asosiy docker-compose.app.yml'dan mustaqil: bu fayl ishlamasa ham platforma ishlayveradi
 # (uy vazifasi o'qituvchiga qo'lda baholashga tushadi).
 #
-# Ishga tushirish (serverda, /var/www/edu_platform ichida):
+# Ishga tushirish (APP serverda, /var/www/edu_platform ichida):
 #   docker compose -f deploy/ai-home-checker/docker-compose.ai.yml \
 #       --env-file /var/www/ai-home-checker/.env up -d --build
 # To'liq qadamlar: deploy/ai-home-checker/README.md
 #
 # Tashqariga PORT OCHILMAYDI — xizmatga faqat bizning backend ichki Docker tarmog'i orqali
 # (http://checker-api:8000) murojaat qiladi.
+#
+# Yangi servis ko'p-provayderli (tiered pipeline): MODEL_BACKEND bermaymiz (standart `auto`) — qaysi provayder kaliti
+# bo'lsa shu ishlatiladi. Faqat Gemini audioni o'qiydi, shuning uchun Speaking uchun GEMINI_API_KEY shart.
 name: ai_checker
 
 x-checker: &checker
@@ -24,14 +28,22 @@ x-checker: &checker
       RUN rm -f .env
   restart: unless-stopped
   environment:
+    # Speaking (audio) va Listening uchun shart; boshqa provayderlar ixtiyoriy (bo'sh = o'sha daraja o'tkazib yuboriladi)
     GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY .env da berilishi shart}
+    QWEN_API_KEY: ${QWEN_API_KEY:-}
+    GLM_API_KEY: ${GLM_API_KEY:-}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    OPENAI_API_KEY: ${CHECKER_OPENAI_API_KEY:-}
+    # SHART: bo'sh bo'lsa barcha himoyalangan endpointlar 503 beradi
     INTERNAL_API_KEY: ${INTERNAL_API_KEY:?INTERNAL_API_KEY .env da berilishi shart}
     DATABASE_URL: postgresql+psycopg2://checker:${CHECKER_DB_PASSWORD:?CHECKER_DB_PASSWORD .env da berilishi shart}@checker-db:5432/homework_checker
     REDIS_URL: redis://checker-redis:6379/0
-    MODEL_BACKEND: gemini
+    FEEDBACK_LANGUAGE: ${FEEDBACK_LANGUAGE:-Uzbek (Latin script)}
     # Bolalarning topshiriqlari "o'qitish ma'lumotlari" papkasiga nusxalanmasin
     COLLECT_TRAINING_DATA: "false"
     ENABLE_CONTEXT_CACHING: ${ENABLE_CONTEXT_CACHING:-true}
+    # Speaking har doim Gemini'ga yo'naltiriladi (boshqa provayderlar audioni o'qiy olmaydi)
+    FORCE_GEMINI_FOR_SPEAKING: "true"
   volumes:
     - checker_uploads:/app/uploads
     - checker_reports:/app/reports
@@ -82,8 +94,14 @@ services:
 
   checker-worker:
     <<: *checker
-    # Baholash navbatini (Redis) ishlovchi jarayon; `webhook_delivery` — natijani yuboruvchi navbat
-    command: sh -c 'rq worker homework_grading webhook_delivery --url "$$REDIS_URL"'
+    # Baholash navbatini (Redis) ishlovchi jarayon; `webhook_delivery` — natijani yuboruvchi navbat;
+    # `--with-scheduler` — qayta urinishlar jadvali uchun (servis README'sidagi Procfile bilan bir xil)
+    command: sh -c 'rq worker homework_grading webhook_delivery --with-scheduler --url "$$REDIS_URL"'
+
+  # Qotib qolgan topshiriqlarni qayta navbatga qo'yadi (worker o'chib qolsa, topshiriq abadiy "pending_ai" bo'lib qolmasin)
+  checker-reconciler:
+    <<: *checker
+    command: python reconcile.py --loop 60
 
 volumes:
   checker_pgdata:
@@ -92,7 +110,7 @@ volumes:
   checker_training:
 
 networks:
-  # Bizning backend turgan tarmoq (docker-compose.prod.yml, loyiha nomi `edu_platform`)
+  # Bizning backend turgan tarmoq (docker-compose.app.yml, loyiha nomi `edu_platform`)
   edu:
     name: edu_platform_default
     external: true
