@@ -94,13 +94,14 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
     if lesson.status in (Lesson.Status.FINISHED, Lesson.Status.CANCELLED):
         raise ValidationError(_('Dars tugagan yoki bekor qilingan.'))
     # Bugun/kelajakka rejalashtirilgan darsga istalgan vaqt kirish mumkin
-    # (aniq soatini kutish shart emas). Faqat KUNI allaqachon o'tib ketgan,
-    # hech qachon boshlanmagan (hamon SCHEDULED) darslar bloklanadi — aks
-    # holda ular abadiy "kirish mumkin" bo'lib qolar edi. Frontend tugmani
-    # ham shu qoidaga ko'ra o'chiradi (apps/live/services.py bilan bir xil
-    # mantiq — lekin bu yerda HAQIQIY himoya: to'g'ridan-to'g'ri havola
-    # orqali chetlab o'tib bo'lmaydi).
-    if lesson.status == Lesson.Status.SCHEDULED:
+    # (aniq soatini kutish shart emas — o'qituvchi ertaroq boshlay oladi).
+    # KUNI o'tib ketgan, hech qachon boshlanmagan (hamon SCHEDULED) darsni
+    # faqat O'QITUVCHI kechikib boshlay oladi (2026-11-07). O'quvchi esa
+    # o'qituvchi boshlamaguncha (dars LIVE bo'lmaguncha) kira olmaydi: aks
+    # holda hech kim o'tkazmayotgan eski dars uchun "kirdi" davomati yozilib
+    # qolardi. Frontend o'quvchi tugmasini ham shu qoidaga ko'ra o'chiradi —
+    # lekin HAQIQIY himoya shu yerda (to'g'ridan-to'g'ri havolada ham ishlaydi).
+    if lesson.status == Lesson.Status.SCHEDULED and not is_teacher:
         local_now = timezone.localtime(timezone.now())
         local_starts_at = timezone.localtime(lesson.starts_at)
         if local_starts_at.date() < local_now.date():
@@ -198,8 +199,11 @@ def _ensure_attention_schedule(*, lesson: Lesson, student: User):
     if AttentionCheck.objects.filter(lesson=lesson, student=student).exists():
         return
     now = timezone.now()
-    end = lesson.starts_at + timedelta(minutes=lesson.duration_min)
-    start = max(now + timedelta(minutes=1), lesson.starts_at)
+    # HAQIQIY boshlanish (o'qituvchi kech yoki erta boshlagan bo'lishi mumkin) — rejalashtirilgan soat emas;
+    # aks holda kechikib boshlangan darsda tekshiruv oynasi "tugagan" chiqib, hech qanday tekshiruv qo'yilmasdi.
+    real_start = lesson.live_started_at or lesson.starts_at
+    end = real_start + timedelta(minutes=lesson.duration_min)
+    start = max(now + timedelta(minutes=1), real_start)
     window = (end - start).total_seconds()
     if window < 120:  # dars deyarli tugagan — tekshiruv qo'yilmaydi
         return

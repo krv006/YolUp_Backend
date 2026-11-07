@@ -118,13 +118,10 @@ class CourseLessonFlowTests(APITestCase):
         resp = self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
         self.assertEqual(resp.status_code, 403)
 
-    def test_scheduled_lesson_from_past_day_cannot_be_joined(self):
-        """2026-09-05 topilgan xato: eski (kuni allaqachon o'tib ketgan,
-        hech qachon boshlanmagan) SCHEDULED darsga token so'ralganda
-        ABADIY ruxsat berilardi — aslida teskari bo'lishi kerak edi
-        (kelajakdagi darsga muammosiz kirish mumkin edi, eskisiga esa
-        cheklov yo'q edi). Endi faqat kuni o'tib ketgan darslar
-        bloklanadi."""
+    def test_scheduled_lesson_from_past_day_cannot_be_joined_by_a_student(self):
+        """2026-09-05 topilgan xato: eski (kuni allaqachon o'tib ketgan, hech qachon boshlanmagan) SCHEDULED darsga
+        token so'ralganda ABADIY ruxsat berilardi. 2026-11-07: o'qituvchi uni kechikib boshlay oladi (qarang
+        apps/live/tests_late_start.py), o'quvchi esa o'qituvchi boshlamaguncha kira olmaydi."""
         from .models import Course, Lesson
 
         course = Course.objects.get(id=self.course_id)
@@ -132,7 +129,10 @@ class CourseLessonFlowTests(APITestCase):
             course=course, starts_at=timezone.now() - timedelta(days=2),
             duration_min=45, status=Lesson.Status.SCHEDULED,
         )
-        self.auth(self.teacher_token)
+        self.auth(self.parent_token)
+        self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
+        self.approve_all_requests()
+        self.auth(self.child_token)
         resp = self.client.post('/api/v1/live/token/', {'lesson_id': str(stale.id)})
         self.assertEqual(resp.status_code, 400)
 
