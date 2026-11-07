@@ -336,6 +336,8 @@ OPENAI_TIMEOUT = 180                                                       # son
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv('OPENAI_MAX_OUTPUT_TOKENS', '8192'))
 # Listening (audio) bo'limlari: AI skript yozadi, OpenAI ovoz sintezi uni mp3 qiladi (har gapiruvchiga alohida ovoz)
 OPENAI_TTS_MODEL = os.getenv('OPENAI_TTS_MODEL', 'tts-1')
+# Ovozdan matn (Speaking uy vazifasi): `whisper-1` so'zlar vaqtini ham beradi (ravonlik/pauza hisobi); `gpt-4o-mini-transcribe` ham mumkin
+OPENAI_STT_MODEL = os.getenv('OPENAI_STT_MODEL', 'whisper-1')
 OPENAI_TTS_VOICES = [v.strip() for v in os.getenv('OPENAI_TTS_VOICES', 'alloy,onyx,nova,shimmer').split(',') if v.strip()]
 AI_EXAM_AUDIO_MAX_CHARS = 9000                                              # bitta audio bo'lim skriptining yuqori chegarasi
 AI_EXAM_MAX_QUESTIONS = 80                                                  # bitta testdagi savollar yuqori chegarasi

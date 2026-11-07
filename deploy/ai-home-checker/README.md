@@ -1,5 +1,11 @@
 # AI-home-checker (multi-model) ni serverga ulash — uy vazifasi va Speaking audio AI tekshiruvi
 
+> **Gemini kaliti bo'lmasa bu xizmat KERAK EMAS.** 2026-11-07 dan Speaking (audio) vazifani ichki OpenAI tekshiruvchi ham baholaydi
+> (ovozni matnga aylantirib, `OPENAI_API_KEY` bilan; qo'shimcha server va kalit shart emas — `BACKEND_HOMEWORK_UPDATES.md` 8-bo'lim).
+> Bu xizmatni faqat Gemini kaliti bo'lsa va ovozni bevosita (talaffuzni ham eshitib) baholash kerak bo'lsa ulang.
+> Diqqat: `HOMEWORK_AI_URL` sozlansa ichki OpenAI tekshiruvchi o'chadi.
+
+
 `AI-home-checker-multi-model` (RJalol, yopiq repo, `main` shoxi) — **alohida xizmat**. U matn, rasm, DOCX va **Speaking audio**
 (`.mp3 .wav .m4a .ogg`) ni baholaydi. Bizning backend unga ichki Docker tarmog'i orqali murojaat qiladi. Xizmat ishlamasa ham platforma
 ishlayveradi: uy vazifasi o'qituvchiga qo'lda baholashga tushadi. **Yakuniy bahoni doim o'qituvchi tasdiqlaydi.**

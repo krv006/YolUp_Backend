@@ -127,17 +127,6 @@ class EngineFlowTests(HomeworkBase):
         self.assertIn("o'qib bo'lmadi", submission.error)
         self.assertEqual(self.fake.payloads, [])  # bo'sh ish uchun AI pul sarflanmaydi
 
-    def test_audio_is_never_sent_to_the_ai(self):
-        self.course.subject = Course.Subject.ENGLISH
-        self.course.save()
-        upload = SimpleUploadedFile('speech.mp3', b'ID3' + b'0' * 200, content_type='audio/mpeg')
-        submission = self.checking(upload, skill_key='speaking')
-        services.sync_ai_results()
-        submission.refresh_from_db()
-        self.assertEqual(submission.status, 'pending_review')
-        self.assertIn('Audio', submission.error)
-        self.assertEqual(self.fake.payloads, [])
-
     def test_invalid_key_goes_straight_to_manual_without_leaking_details(self):
         self.fake.reply = error(401)
         submission = self.checking()

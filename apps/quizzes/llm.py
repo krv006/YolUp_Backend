@@ -97,6 +97,50 @@ def speech(text: str, voice: str) -> bytes:
     raise LLMError(f'Ovoz xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
 
 
+def transcribe(data: bytes, filename: str, *, language: str = '') -> dict:
+    """Ovozni matnga aylantiradi (OpenAI `/audio/transcriptions`). `whisper-1` bo'lsa so'zlar vaqti ham keladi.
+    Qaytaradi: {'text', 'duration', 'words': [{'word','start','end'}], 'segments': [{'avg_logprob','no_speech_prob'}]}.
+    Xato turlari `chat_json` bilan bir xil (doimiy xatoda qayta urinish foydasiz)."""
+    model = settings.OPENAI_STT_MODEL
+    url = settings.OPENAI_BASE_URL.rstrip('/') + '/audio/transcriptions'
+    fields = {'model': model}
+    if language:
+        fields['language'] = language
+    if model.startswith('whisper'):  # faqat whisper batafsil (so'z va bo'lak vaqtlari) javob beradi
+        fields['response_format'] = 'verbose_json'
+        fields['timestamp_granularities[]'] = ['word', 'segment']
+    else:
+        fields['response_format'] = 'json'
+    try:
+        response = requests.post(
+            url, data=fields, files={'file': (filename, data)}, timeout=settings.OPENAI_TIMEOUT,
+            headers={'Authorization': f'Bearer {settings.OPENAI_API_KEY}'},
+        )
+    except requests.RequestException as exc:
+        raise LLMError(f"Ovozni matnga aylantirish xizmatiga ulanib bo'lmadi: {exc}") from exc
+    status = response.status_code
+    if status == 200:
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise LLMError("Ovozni matnga aylantirish yaroqsiz javob berdi.") from exc
+        return {
+            'text': str(body.get('text') or '').strip(), 'duration': body.get('duration'),
+            'words': [w for w in body.get('words') or [] if isinstance(w, dict)],
+            'segments': [s for s in body.get('segments') or [] if isinstance(s, dict)],
+        }
+    code, message = _error_message(response)
+    if status in (401, 403):
+        raise LLMError("AI kaliti noto'g'ri yoki ovozni matnga aylantirishga ruxsat yo'q (OPENAI_API_KEY).", permanent=True)
+    if status == 429 and code in ('insufficient_quota', 'billing_not_active'):
+        raise LLMError("AI hisobida mablag' yoki limit tugagan (OpenAI billing/quota).", permanent=True)
+    if status == 404:
+        raise LLMError(f"Ovoz tanish modeli topilmadi yoki hisobingizda ochiq emas: {model}.", permanent=True)
+    if status in (400, 413, 415):
+        raise LLMError(f"Audio fayl qabul qilinmadi: {message}", permanent=True)
+    raise LLMError(f'Ovoz tanish xizmati vaqtincha javob bermadi ({status}) {message}'.strip())
+
+
 def chat_json(system: str, user: str, *, max_tokens: int = 0, images: tuple = (), model: str = '') -> dict:
     """Tizim va foydalanuvchi xabari bo'yicha JSON obyekt qaytaradi. `images` — [(mime, bytes), ...]:
     rasmlar matn bilan birga yuboriladi (modelning ko'rish imkoniyati kerak, masalan gpt-4o-mini)."""
