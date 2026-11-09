@@ -12,10 +12,12 @@ from apps.core import audit
 from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import realtime
+from .code_highlight import CODE_LANGUAGE_IDS, CODE_LANGUAGES
 from .models import SHEET_H, SHEET_W, BoardErase, BoardGrant, BoardSheet
 
 MAX_STROKE_POINTS = 2000
 MAX_STROKES_PER_SHEET = 3000
+MAX_CODE_CHARS = 6000
 
 
 def _get_lesson(lesson_id) -> Lesson:
@@ -53,6 +55,12 @@ def is_math_lesson(lesson: Lesson) -> bool:
 
 def is_chemistry_lesson(lesson: Lesson) -> bool:
     return lesson.course.subject == Course.Subject.CHEMISTRY
+
+
+def is_code_lesson(lesson: Lesson) -> bool:
+    """Kod muharriri (Notepad++ uslubi) tugmasi faqat informatika kurslarida ko'rsatiladi; `code` elementining o'zi
+    barcha fanlarda saqlanadi (oddiy matndan xavfsizlik jihatidan farqi yo'q — `math` bilan bir xil qoida)."""
+    return lesson.course.subject == Course.Subject.COMPUTER_SCIENCE
 
 
 def permission_mode(lesson: Lesson) -> str:
@@ -129,6 +137,9 @@ def get_board(*, user: User, lesson_id) -> dict:
         # cheklanmagan — chunki ma'lumot umumiy va zararsiz, lekin UI shu
         # flag orqali faqat kimyo darslarida chiqishi kerak)
         'chemistry_enabled': is_chemistry_lesson(lesson),
+        # Kod muharriri: tugma shu flag bilan; til ro'yxati — yagona manba (`auto` = matndan aniqlash)
+        'code_enabled': is_code_lesson(lesson),
+        'code_languages': [{'id': language_id, 'label': label} for language_id, label in CODE_LANGUAGES],
     }
     if is_teacher:
         # Diqqatsiz o'quvchilar (oynadan chiqib, hali qaytmagan) — faqat
@@ -142,7 +153,52 @@ def get_board(*, user: User, lesson_id) -> dict:
     return result
 
 
+def _xy(stroke: dict) -> tuple:
+    try:
+        x = float(stroke.get('x', 60))
+        y = float(stroke.get('y', 60))
+    except (TypeError, ValueError):
+        raise ValidationError({'stroke': _("Koordinata noto'g'ri.")})
+    return round(max(0, min(SHEET_W - 40, x)), 1), round(max(0, min(SHEET_H - 20, y)), 1)
+
+
+def _text_size(stroke: dict, default: int = 24) -> int:
+    try:
+        return max(12, min(48, int(stroke.get('size', default))))
+    except (TypeError, ValueError):
+        raise ValidationError({'stroke': _("O'lcham noto'g'ri.")})
+
+
+def _box_width(stroke: dict, x: float):
+    """Matn/kod qutisining ixtiyoriy kengligi (o'lchamini o'zgartirganda); berilmasa None."""
+    raw = stroke.get('w')
+    if raw in (None, ''):
+        return None
+    try:
+        width = float(raw)
+    except (TypeError, ValueError):
+        raise ValidationError({'stroke': _("Kenglik noto'g'ri.")})
+    return round(max(40.0, min(SHEET_W - x, width)), 1)
+
+
 def _validate_stroke(stroke: dict) -> dict:
+    # Kod bloki (Notepad++ uslubi): boshidagi probellar (indent) saqlanadi, til ro'yxatdan; ranglashni frontend qiladi
+    if stroke.get('type') == 'code':
+        text = str(stroke.get('text') or '').replace('\r\n', '\n').rstrip()
+        if not text.strip():
+            raise ValidationError({'stroke': _("Kod bo'sh.")})
+        language = str(stroke.get('language') or 'auto').strip().lower()
+        if language not in CODE_LANGUAGE_IDS:
+            raise ValidationError({'language': _("Noma'lum dasturlash tili.")})
+        x, y = _xy(stroke)
+        clean = {
+            'type': 'code', 'text': text[:MAX_CODE_CHARS], 'language': language, 'x': x, 'y': y,
+            'size': _text_size(stroke, 20), 'color': str(stroke.get('color', '#1c1e3a'))[:9],
+        }
+        width = _box_width(stroke, x)
+        if width:
+            clean['w'] = width
+        return clean
     # MathLive formula bloki (LaTeX) — barcha fanlarda (mahsulot qarori):
     # bu shunchaki LaTeX matn, oddiy `text` elementidan xavfsizlik jihatidan
     # farqi yo'q. FAQAT yechuvchi (`solve_formula`, SymPy) matematika
@@ -175,14 +231,18 @@ def _validate_stroke(stroke: dict) -> dict:
             y = float(stroke.get('y', 60))
         except (TypeError, ValueError):
             raise ValidationError({'stroke': _("Koordinata noto'g'ri.")})
-        return {
+        clean = {
             'type': 'text',
             'text': text[:2000],
             'x': round(max(0, min(SHEET_W - 40, x)), 1),
             'y': round(max(0, min(SHEET_H - 20, y)), 1),
-            'size': max(12, min(48, int(stroke.get('size', 24)))),
+            'size': _text_size(stroke),
             'color': str(stroke.get('color', '#1c1e3a'))[:9],
         }
+        width = _box_width(stroke, clean['x'])
+        if width:
+            clean['w'] = width
+        return clean
     # Shakllar: to'g'ri chiziq/strelka, to'rtburchak, ellips — front doskasining
     # to'liq asboblar paneli uchun (hammasi saqlanadi va PDF'ga tushadi)
     if stroke.get('type') in ('line', 'rect', 'ellipse'):
@@ -253,6 +313,7 @@ def add_stroke(*, user: User, lesson_id, sheet_index: int, stroke: dict) -> dict
     clean = _validate_stroke(stroke)
     clean['id'] = uuid.uuid4().hex[:12]
     clean['by'] = user.first_name or user.username
+    clean['by_id'] = str(user.id)
     sheet.strokes = [*sheet.strokes, clean]
     sheet.save(update_fields=['strokes', 'updated_at'])
     # Real-time: barcha ulangan ishtirokchilarga bir zumda (WS, polling emas)
@@ -262,6 +323,99 @@ def add_stroke(*, user: User, lesson_id, sheet_index: int, stroke: dict) -> dict
     if _is_teacher(user, lesson) and _remember_current_sheet(lesson.id, sheet.index):
         # chiziq hodisasidan KEYIN (mijozlar `stroke` ni birinchi kutadi)
         transaction.on_commit(lambda: realtime.broadcast_current_sheet(lesson.id, sheet.index))
+    return clean
+
+
+_PROTECTED_FIELDS = {'id', 'by', 'by_id', 'edited_by'}
+
+
+def _bounds(element: dict):
+    """Geometrik elementning chegarasi (minx, miny, maxx, maxy); matn/formula/kod uchun None (ularda faqat langar nuqta)."""
+    kind = element.get('type')
+    try:
+        if kind == 'line':
+            xs, ys = [element['x1'], element['x2']], [element['y1'], element['y2']]
+        elif kind in ('rect', 'ellipse'):
+            xs, ys = [element['x'], element['x'] + element['w']], [element['y'], element['y'] + element['h']]
+        elif kind in ('text', 'math', 'code'):
+            return None
+        else:
+            xs, ys = [p[0] for p in element['points']], [p[1] for p in element['points']]
+        return min(xs), min(ys), max(xs), max(ys)
+    except (KeyError, TypeError, IndexError, ValueError):
+        raise ValidationError({'stroke': _("Element geometriyasi noto'g'ri.")}) from None
+
+
+def _moved(element: dict, dx, dy) -> dict:
+    """Elementni (dx, dy) ga suradi. Geometrik shakl sheet chegarasidan chiqib ketmaydi (surish kesiladi, shakl buzilmaydi);
+    matn/formula/kod langari esa validatsiyada kesiladi."""
+    try:
+        dx, dy = float(dx), float(dy)
+    except (TypeError, ValueError):
+        raise ValidationError({'move': _("Surish [dx, dy] sonlar bo'lishi kerak.")}) from None
+    bounds = _bounds(element)
+    moved = dict(element)
+    if bounds is None:
+        moved['x'] = float(element.get('x', 60)) + dx
+        moved['y'] = float(element.get('y', 60)) + dy
+        return moved
+    min_x, min_y, max_x, max_y = bounds
+    dx = max(-min_x, min(dx, SHEET_W - max_x))
+    dy = max(-min_y, min(dy, SHEET_H - max_y))
+    kind = element.get('type')
+    if kind == 'line':
+        moved.update(x1=element['x1'] + dx, x2=element['x2'] + dx, y1=element['y1'] + dy, y2=element['y2'] + dy)
+    elif kind in ('rect', 'ellipse'):
+        moved.update(x=element['x'] + dx, y=element['y'] + dy)
+    else:
+        moved['points'] = [[p[0] + dx, p[1] + dy] for p in element['points']]
+    return moved
+
+
+@transaction.atomic
+def update_stroke(*, user: User, lesson_id, sheet_index, stroke_id, changes=None, move=None) -> dict:
+    """Doskadagi mavjud elementni o'zgartiradi (Zoom doskasidagi "tahrirlash rejimi"): matnni tahrirlash, rang/o'lcham/kenglik,
+    shakl koordinatalari (`changes`) va ko'chirish (`move: [dx, dy]`). Turi (`type`), `id` va muallif o'zgarmaydi.
+    O'qituvchi hamma narsani, ruxsat olgan o'quvchi faqat O'ZI yozganini tahrirlaydi. Oxirgi yozuv g'olib (bir vaqtda ikki kishi
+    bir elementni o'zgartirsa)."""
+    lesson = _get_lesson(lesson_id)
+    if not can_draw(user, lesson):
+        raise PermissionDenied(_("Tahrirlash uchun o'qituvchidan ruxsat oling."))
+    if changes is not None and not isinstance(changes, dict):
+        raise ValidationError({'changes': _("'changes' obyekt bo'lishi kerak.")})
+    if move is not None and not (isinstance(move, (list, tuple)) and len(move) == 2):
+        raise ValidationError({'move': _("Surish [dx, dy] ko'rinishida bo'lishi kerak.")})
+    if not changes and not move:
+        raise ValidationError({'changes': _("Nima o'zgarishi ko'rsatilmadi.")})
+    try:
+        sheet = BoardSheet.objects.select_for_update().get(lesson=lesson, index=int(sheet_index or 0))
+    except BoardSheet.DoesNotExist:
+        raise NotFound(_('Sheet topilmadi.'))
+    position = next((i for i, item in enumerate(sheet.strokes) if item.get('id') == stroke_id), None)
+    if position is None:
+        raise NotFound(_('Element topilmadi.'))
+    current = sheet.strokes[position]
+    if not _is_teacher(user, lesson) and current.get('by_id') != str(user.id):
+        raise PermissionDenied(_("Faqat o'zingiz yozgan elementni tahrirlay olasiz."))
+    if changes and 'type' in changes and changes['type'] != current.get('type'):
+        raise ValidationError({'changes': _("Element turini o'zgartirib bo'lmaydi.")})
+    merged = {**current, **{key: value for key, value in (changes or {}).items() if key not in _PROTECTED_FIELDS and key != 'type'}}
+    if move:
+        merged = _moved(merged, move[0], move[1])
+    clean = _validate_stroke(merged)
+    clean['id'] = current['id']
+    clean['by'] = current.get('by', '')
+    if current.get('by_id'):
+        clean['by_id'] = current['by_id']
+    clean['edited_by'] = user.first_name or user.username
+    strokes = list(sheet.strokes)
+    strokes[position] = clean
+    sheet.strokes = strokes
+    sheet.save(update_fields=['strokes', 'updated_at'])
+    audit.record(action='board.edit', actor=user, target=lesson, meta={
+        'stroke_id': clean['id'], 'fields': sorted((changes or {}).keys()) + (['move'] if move else []),
+    })
+    transaction.on_commit(lambda: realtime.broadcast_update(lesson.id, sheet.index, clean))
     return clean
 
 
@@ -441,6 +595,62 @@ def _math_png(latex: str, color: str):
     return buf
 
 
+def _pdf_mono_font() -> str:
+    """PDF uchun monospace shrift: unicode'ni biladigan DejaVu Sans Mono, topilmasa Courier (faqat latin-1)."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    from .code_highlight import mono_font_path
+
+    name = 'DejaVuSansMono'
+    if name in pdfmetrics.getRegisteredFontNames():
+        return name
+    path = mono_font_path()
+    if path:
+        try:
+            pdfmetrics.registerFont(TTFont(name, path))
+            return name
+        except Exception:  # noqa: BLE001
+            pass
+    return 'Courier'
+
+
+def _pdf_code(c, s: dict, scale: float, page_h: float) -> None:
+    """Kod blokini ranglab chizadi (kulrang fon + token ranglari). Xato bo'lsa ham PDF yaratilaveradi."""
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+
+    from .code_highlight import BACKGROUND, LINE_HEIGHT, highlight_lines
+
+    font = _pdf_mono_font()
+    size = max(6, s.get('size', 20) * scale)
+    line_height = size * LINE_HEIGHT
+    x = s.get('x', 60) * scale
+    y = page_h - s.get('y', 60) * scale
+    lines = highlight_lines(s.get('text', ''), s.get('language', 'auto'), s.get('color', '#1c1e3a'))
+
+    def safe(text):
+        return text if font != 'Courier' else text.encode('latin-1', 'replace').decode('latin-1')
+
+    widest = max((sum(pdfmetrics.stringWidth(safe(part), font, size) for part, _color in line) for line in lines), default=0)
+    pad = 6 * scale
+    box_w = s['w'] * scale if s.get('w') else widest + 2 * pad
+    top = y + size * 1.05
+    bottom = y - (len(lines) - 1) * line_height - size * 0.45
+    c.setFillColor(HexColor(BACKGROUND))
+    c.roundRect(x - pad, bottom, box_w, top - bottom, 4 * scale, stroke=0, fill=1)
+    c.setFont(font, size)
+    for index, line in enumerate(lines):
+        cursor = x
+        for part, color in line:
+            try:
+                c.setFillColor(HexColor(color))
+            except ValueError:
+                c.setFillColor(HexColor('#1c1e3a'))
+            c.drawString(cursor, y - index * line_height, safe(part))
+            cursor += pdfmetrics.stringWidth(safe(part), font, size)
+
+
 def generate_pdf(lesson: Lesson):
     """Sheet'larni PDF sahifalarga chizadi (reportlab). Bo'sh doska -> None."""
     sheets = [s for s in lesson.board_sheets.all() if s.strokes]
@@ -480,6 +690,9 @@ def generate_pdf(lesson: Lesson):
                     c.setFont('Courier', size)
                     safe = str(s.get('latex', '')).encode('latin-1', 'replace').decode('latin-1')
                     c.drawString(x_pt, y_pt - size, safe)
+                continue
+            if s.get('type') == 'code':
+                _pdf_code(c, s, scale, page_h)
                 continue
             if s.get('type') == 'text':
                 try:

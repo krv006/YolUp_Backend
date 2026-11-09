@@ -6,6 +6,7 @@ urlpatterns = [
     path('periodic-table/', views.PeriodicTableView.as_view(), name='board-periodic-table'),
     path('<uuid:lesson_id>/', views.BoardView.as_view(), name='board'),
     path('<uuid:lesson_id>/stroke/', views.StrokeView.as_view(), name='board-stroke'),
+    path('<uuid:lesson_id>/stroke/<str:stroke_id>/', views.StrokeDetailView.as_view(), name='board-stroke-detail'),
     path('<uuid:lesson_id>/sheet/', views.SheetView.as_view(), name='board-sheet'),
     path('<uuid:lesson_id>/current-sheet/', views.CurrentSheetView.as_view(), name='board-current-sheet'),
     path('<uuid:lesson_id>/sheet/<int:index>/', views.SheetDetailView.as_view(), name='board-sheet-detail'),

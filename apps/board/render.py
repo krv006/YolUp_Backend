@@ -42,6 +42,40 @@ def _font(size: float):
     return _FONT_CACHE[size]
 
 
+_MONO_CACHE: dict = {}
+
+
+def _mono_font(size: float):
+    size = max(8, int(round(size)))
+    if size not in _MONO_CACHE:
+        try:
+            from .code_highlight import mono_font_path
+
+            _MONO_CACHE[size] = ImageFont.truetype(mono_font_path(), size)
+        except Exception:  # noqa: BLE001
+            _MONO_CACHE[size] = ImageFont.load_default()
+    return _MONO_CACHE[size]
+
+
+def _draw_code(draw, stroke: dict) -> None:
+    """Kod bloki: kulrang fon + ranglangan tokenlar (frontend bilan bir xil: bazaviy chiziq `y` da, qator = o'lcham x 1.35)."""
+    from .code_highlight import BACKGROUND, LINE_HEIGHT, highlight_lines
+
+    size = int(stroke.get('size') or 20)
+    font = _mono_font(size)
+    x, y = float(stroke.get('x', 60)), float(stroke.get('y', 60))
+    lines = highlight_lines(stroke.get('text', ''), stroke.get('language', 'auto'), str(stroke.get('color') or '#1c1e3a'))
+    widest = max((sum(font.getlength(part) for part, _color in line) for line in lines), default=0)
+    box_w = float(stroke['w']) if stroke.get('w') else widest + 16
+    bottom = y + (len(lines) - 1) * size * LINE_HEIGHT + size * 0.45
+    draw.rounded_rectangle([x - 8, y - size * 1.05, x - 8 + box_w, bottom], radius=6, fill=_color(BACKGROUND))
+    for index, line in enumerate(lines):
+        cursor = x
+        for part, color in line:
+            draw.text((cursor, y + index * size * LINE_HEIGHT), part, font=font, fill=_color(color), anchor='ls')
+            cursor += font.getlength(part)
+
+
 def _math_image(latex: str, color: tuple, size: float):
     """LaTeX -> shaffof PNG (matplotlib mathtext). Chiqmasa None.
 
@@ -87,6 +121,8 @@ def render_sheet(strokes: list) -> Image.Image:
             for line in str(stroke.get('text', '')).split('\n'):
                 draw.text((float(stroke.get('x', 60)), y), line, font=font, fill=color, anchor='ls')
                 y += size * 1.35
+        elif kind == 'code':
+            _draw_code(draw, stroke)
         elif kind == 'math':
             size = int(stroke.get('size') or 24)
             image = _math_image(str(stroke.get('latex', '')), color, size)

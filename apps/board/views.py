@@ -41,6 +41,19 @@ class StrokeView(APIView):
         return Response(stroke, status=201)
 
 
+class StrokeDetailView(APIView):
+    """`PATCH {sheet, changes?, move?}` — mavjud elementni tahrirlash (matn, rang, o'lcham, koordinata) yoki ko'chirish
+    (`move: [dx, dy]`). Javob — yangilangan to'liq element; hamma ishtirokchiga socket `stroke_updated` boradi."""
+
+    permission_classes = [RequirePerm('room.token')]
+
+    def patch(self, request, lesson_id, stroke_id):
+        return Response(services.update_stroke(
+            user=request.user, lesson_id=lesson_id, sheet_index=request.data.get('sheet', 0), stroke_id=stroke_id,
+            changes=request.data.get('changes'), move=request.data.get('move'),
+        ))
+
+
 class CurrentSheetView(APIView):
     """O'qituvchi: `POST {sheet}` — hozir shu sahifada turibman (o'quvchilarga socket `current_sheet` hodisasi boradi)."""
 

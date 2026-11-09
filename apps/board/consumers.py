@@ -6,9 +6,12 @@ Yopilish: 4401 — token yaroqsiz, 4403 — darsga a'zo emas.
 Client -> server:
     {"type": "stroke", "sheet": 0, "stroke": {...}}  — element qo'shish
         (REST POST .../stroke/ bilan teng kuchli; ruxsat/validatsiya bir xil)
+    {"type": "update", "sheet": 0, "stroke_id": "..", "changes": {...}, "move": [dx, dy]}  — elementni tahrirlash/ko'chirish
+        (REST PATCH .../stroke/<id>/ bilan teng kuchli)
 
 Server -> client (barcha ishtirokchilarga):
     {"type": "stroke", "sheet": 0, "stroke": {...}}     — yangi element
+    {"type": "stroke_updated", "sheet": 0, "stroke": {...}}  — element o'zgardi (id bo'yicha to'liq almashtiriladi)
     {"type": "erase", "sheet": 0, "stroke_ids": [...], "by", "reason"}
     {"type": "sheet", "index": 2}                        — yangi sheet
     {"type": "error", "detail": "..."}                   — faqat yuboruvchiga
@@ -47,6 +50,14 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
+        if content.get('type') == 'update':
+            error = await self._update_stroke(
+                self.scope['user'], content.get('sheet', 0), content.get('stroke_id'),
+                content.get('changes'), content.get('move'),
+            )
+            if error:
+                await self.send_json({'type': 'error', 'detail': error})
+            return
         if content.get('type') != 'stroke':
             return
         error = await self._add_stroke(
@@ -70,6 +81,21 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
         except Exception:
             return False
         return services.can_view(user, lesson)
+
+    @database_sync_to_async
+    def _update_stroke(self, user, sheet_index, stroke_id, changes, move):
+        from rest_framework.exceptions import APIException
+
+        from . import services
+
+        try:
+            services.update_stroke(
+                user=user, lesson_id=self.lesson_id, sheet_index=sheet_index, stroke_id=str(stroke_id or ''),
+                changes=changes, move=move,
+            )
+            return None
+        except APIException as exc:
+            return str(exc.detail)
 
     @database_sync_to_async
     def _add_stroke(self, user, sheet_index, stroke):

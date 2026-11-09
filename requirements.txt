@@ -39,3 +39,5 @@ pypdf>=5.0
 geoip2>=4.8
 # Google / Apple bilan kirish: id_token imzosini tekshirish (RS256) — apps.accounts.social
 PyJWT[crypto]>=2.8
+# Doska kod bloki (PDF/rasmda sintaksis ranglash) — apps.board.code_highlight; yo'q bo'lsa ham oddiy rangda chiziladi
+Pygments>=2.17

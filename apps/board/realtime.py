@@ -27,6 +27,12 @@ def broadcast_stroke(lesson_id, sheet_index: int, stroke: dict) -> None:
     _send(lesson_id, {'type': 'stroke', 'sheet': sheet_index, 'stroke': stroke})
 
 
+def broadcast_update(lesson_id, sheet_index: int, stroke: dict) -> None:
+    """Mavjud element o'zgardi (matn tahrirlandi, ko'chirildi, rangi/o'lchami o'zgardi) — mijoz `id` bo'yicha to'liq
+    elementni almashtiradi."""
+    _send(lesson_id, {'type': 'stroke_updated', 'sheet': sheet_index, 'stroke': stroke})
+
+
 def broadcast_erase(lesson_id, sheet_index: int, stroke_ids: list, by: str, reason: str) -> None:
     _send(lesson_id, {
         'type': 'erase', 'sheet': sheet_index,
