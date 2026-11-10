@@ -1,5 +1,6 @@
 """Sertifikatni tekshirish: yuklash (issuer/yil), admin tasdiqlash/rad etish, bildirishnoma, ko'rinish qoidalari."""
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APIClient, APITestCase
 
 from apps.notifications.models import NotificationRecipient
@@ -12,6 +13,7 @@ def pdf(name='c.pdf'):
     return SimpleUploadedFile(name, b'%PDF-1.4 test', content_type='application/pdf')
 
 
+@override_settings(CERTIFICATES_AUTO_VERIFY=False)  # admin tasdig'i rejimi (avtomatik tasdiqlash o'chirilganda)
 class CertificateReviewTests(APITestCase):
     def setUp(self):
         self.teacher = make('cert_t', role=User.Role.TEACHER)
@@ -89,3 +91,15 @@ class CertificateReviewTests(APITestCase):
         request.user = self.student
         shown = UserSerializer(self.teacher, context={'request': request}).data['certificates']
         self.assertEqual([c['id'] for c in shown], [first])
+
+
+class CertificateDefaultTests(APITestCase):
+    """2026-11-10: odatiy holatda sertifikat yuklangan zahoti tasdiqlangan ("Tekshirilmoqda" yo'q)."""
+
+    def test_upload_is_verified_at_once(self):
+        teacher = make('cert_default_t', role=User.Role.TEACHER)
+        client = APIClient()
+        client.force_authenticate(teacher)
+        data = client.post('/api/v1/auth/me/certificates/', {'file': pdf(), 'title': 'IELTS'}, format='multipart').json()
+        self.assertEqual((data['status'], data['verified']), ('verified', True))
+        self.assertTrue(TeacherCertificate.objects.get(pk=data['id']).verified_at)

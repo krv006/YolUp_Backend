@@ -109,6 +109,9 @@ class User(AbstractUser):
     notify_homework_due = BooleanField(default=True)
     # O'chirib qo'yilgan bildirishnoma turlari (`kind` qiymatlari): shu turdagi xabarlar bu foydalanuvchiga yaratilmaydi
     muted_kinds = JSONField(default=list, blank=True)
+    # Test yaratish (test-creator) pullik bo'ladi (2026-11-10): hozircha hammada yoqilgan; keyin admin foydalanuvchi bo'yicha o'chira oladi.
+    # Frontend pullik holatni shu bayroqqa qarab ko'rsatadi (`GET /auth/me/`).
+    can_create_tests = BooleanField(default=True)
     created_at = DateTimeField(auto_now_add=True)
     updated_at = DateTimeField(auto_now=True)
 

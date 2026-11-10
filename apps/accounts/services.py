@@ -1007,9 +1007,19 @@ def end_all_child_sessions(*, parent: User, student_id, request=None) -> int:
 
 
 def upload_certificate(*, teacher: User, file, title: str = '', issuer: str = '', issued_year=None) -> TeacherCertificate:
+    """Sertifikat yuklash. 2026-11-10: admin tasdig'i amalda ishlatilmagani uchun sertifikat doim "Tekshirilmoqda" bo'lib qolardi
+    (Trello: "profile qismda xato") — endi yuklangan zahoti `verified`. Admin baribir rad eta oladi (`review_certificate`).
+    Admin tasdig'ini qaytarish: `CERTIFICATES_AUTO_VERIFY=False` (sozlamalar/env)."""
+    from django.conf import settings
+    from django.utils import timezone
+
+    auto = getattr(settings, 'CERTIFICATES_AUTO_VERIFY', True)
     certificate = TeacherCertificate.objects.create(
         teacher=teacher, file=file, title=title, issuer=issuer, issued_year=issued_year,
+        **({'status': TeacherCertificate.Status.VERIFIED, 'verified_at': timezone.now()} if auto else {}),
     )
+    if auto:
+        return certificate
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
 

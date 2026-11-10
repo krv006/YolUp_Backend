@@ -60,3 +60,66 @@ class PhoneNormalizeTests(TestCase):
         self.assertEqual(User.objects.get(pk=a.pk).phone, '+998901234567')
         self.assertEqual(User.objects.get(pk=b.pk).phone, '+998900000002')
         self.assertEqual(User.objects.get(pk=c.pk).phone, "nomer yo'q")
+
+
+class CertificateAutoVerifyTests(TestCase):
+    """2026-11-10: sertifikat yuklangan zahoti tasdiqlangan (avval doim "Tekshirilmoqda" bo'lib turardi)."""
+
+    def test_new_certificates_are_verified_at_once_and_admins_are_not_pinged(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.accounts import services
+        from apps.accounts.models import TeacherCertificate
+        from apps.notifications.models import Notification
+
+        teacher = make('cert_t', User.Role.TEACHER)
+        make('cert_admin', User.Role.ADMIN)
+        cert = services.upload_certificate(teacher=teacher, file=SimpleUploadedFile('c.pdf', b'%PDF-1.4 x'), title='IELTS')
+        self.assertEqual(cert.status, TeacherCertificate.Status.VERIFIED)
+        self.assertIsNotNone(cert.verified_at)
+        self.assertFalse(Notification.objects.filter(kind='certificate_pending').exists())
+
+    def test_switch_restores_the_admin_review(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from django.test import override_settings
+
+        from apps.accounts import services
+        from apps.accounts.models import TeacherCertificate
+        from apps.notifications.models import Notification
+
+        teacher = make('cert_t2', User.Role.TEACHER)
+        make('cert_admin2', User.Role.ADMIN)
+        with override_settings(CERTIFICATES_AUTO_VERIFY=False):
+            cert = services.upload_certificate(teacher=teacher, file=SimpleUploadedFile('c.pdf', b'%PDF-1.4 x'))
+        self.assertEqual(cert.status, TeacherCertificate.Status.PENDING)
+        self.assertTrue(Notification.objects.filter(kind='certificate_pending').exists())
+
+    def test_data_migration_verifies_stuck_ones_and_keeps_rejected(self):
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        from apps.accounts.models import TeacherCertificate
+
+        teacher = make('cert_t3', User.Role.TEACHER)
+        stuck = TeacherCertificate.objects.create(teacher=teacher, file='x.pdf', status='pending')
+        rejected = TeacherCertificate.objects.create(teacher=teacher, file='y.pdf', status='rejected')
+        importlib.import_module('apps.accounts.migrations.0024_certificates_verified').verify_pending(django_apps, None)
+        stuck.refresh_from_db()
+        rejected.refresh_from_db()
+        self.assertEqual((stuck.status, rejected.status), ('verified', 'rejected'))
+        self.assertIsNotNone(stuck.verified_at)
+
+
+class CanCreateTestsFlagTests(TestCase):
+    def test_me_has_the_flag_on_by_default_and_it_is_read_only(self):
+        teacher = make('flag_t', User.Role.TEACHER)
+        client = APIClient()
+        client.force_authenticate(teacher)
+        self.assertTrue(client.get('/api/v1/auth/me/').json()['can_create_tests'])
+        client.patch('/api/v1/auth/me/', {'can_create_tests': False}, format='json')
+        teacher.refresh_from_db()
+        self.assertTrue(teacher.can_create_tests)  # o'zi o'zgartira olmaydi
+        User.objects.filter(pk=teacher.pk).update(can_create_tests=False)  # admin keyin o'chiradi
+        client.force_authenticate(User.objects.get(pk=teacher.pk))
+        self.assertFalse(client.get('/api/v1/auth/me/').json()['can_create_tests'])

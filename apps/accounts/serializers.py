@@ -151,11 +151,11 @@ class MeSerializer(UserSerializer):
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
             'email_verified', 'phone_verified', 'phone_verified_at', 'target_band', 'theme', 'text_size',
             'grade', 'must_change_password', 'notify_child_absent', 'notify_child_new_device', 'notify_homework_due',
-            'muted_kinds',
+            'muted_kinds', 'can_create_tests',
         ]
         read_only_fields = UserSerializer.Meta.read_only_fields + [
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
-            'phone_verified_at', 'must_change_password',
+            'phone_verified_at', 'must_change_password', 'can_create_tests',
         ]
 
     def validate_muted_kinds(self, value):
