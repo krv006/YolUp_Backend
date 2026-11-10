@@ -100,7 +100,7 @@ class RoomMember(TimeStampedUUIDModel):
 
     class Source(TextChoices):
         STUDENT = 'student', "O'quvchi"
-        PARENT = 'parent', 'Ota-ona'
+        PARENT = 'parent', 'Kuzatuvchi'
 
     room = ForeignKey('chat.ChatRoom', CASCADE, related_name='members')
     user = ForeignKey('accounts.User', CASCADE, related_name='room_memberships')

@@ -107,7 +107,7 @@ def send_reminders(now=None) -> dict:
                         send_notification(
                             sender=course.teacher, kind='payment_reminder', link_type='course', link_id=str(course.id),
                             data={**data, 'student_id': str(student.id)},
-                            description=_("Farzandingiz %(child)s uchun «%(course)s» guruhi to'lovi muddati %(due)s (%(days)s kun qoldi). %(fee)s") % {
+                            description=_("O'quvchi %(child)s uchun «%(course)s» guruhi to'lovi muddati %(due)s (%(days)s kun qoldi). %(fee)s") % {
                                 **base, 'child': student.get_full_name() or student.username,
                             },
                             target_type=Notification.Target.USERS, user_ids=parent_ids,

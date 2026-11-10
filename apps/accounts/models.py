@@ -43,7 +43,7 @@ class User(AbstractUser):
         ADMIN = 'admin', 'Admin'
         TEACHER = 'teacher', "O'qituvchi"
         STUDENT = 'student', "O'quvchi"
-        PARENT = 'parent', 'Ota-ona'
+        PARENT = 'parent', 'Kuzatuvchi'
 
     id = UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     role = CharField(max_length=16, choices=Role.choices, default=Role.STUDENT, db_index=True)

@@ -842,7 +842,7 @@ def _notify_parents_new_device(student: User, *, user_agent: str, ip, request=No
     try:
         notification_services.send_event(
             sender=student, recipients=parents, kind='security.new_device', link_type='login', link_id='',
-            description=f"{_display_name(student)} yangi qurilmadan kirdi: {device}" + (f' · {ip}' if ip else '') + '. Bu farzandingizmi?',
+            description=f"{_display_name(student)} yangi qurilmadan kirdi: {device}" + (f' · {ip}' if ip else '') + '. Bu siz kuzatayotgan o\'quvchimi?',
             data={'student_id': str(student.pk), 'device': device, 'ip': str(ip or ''), 'at': timezone.now().isoformat(),
                   'name': _display_name(student)},
             request=request,

@@ -669,7 +669,7 @@ def remind_child(*, parent: User, assignment_id, student_id, request=None) -> di
     if not _is_enrolled(child, assignment.course) or assignment.status != Assignment.Status.ACTIVE:
         raise NotFound(_('Vazifa topilmadi.'))
     if Submission.objects.filter(assignment=assignment, student=child).exclude(status=Submission.Status.RESUBMIT_REQUESTED).exists():
-        raise ValidationError({'detail': _('Farzand bu vazifani allaqachon topshirgan.')})
+        raise ValidationError({'detail': _("O'quvchi bu vazifani allaqachon topshirgan.")})
     previous = (
         Notification.objects.filter(
             kind='homework_reminder', sender=parent, link_type='assignment', link_id=str(assignment.pk), recipients__user=child,

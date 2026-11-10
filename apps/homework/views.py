@@ -333,7 +333,7 @@ class RemindChildView(APIView):
     def post(self, request, assignment_id):
         student = request.data.get('student')
         if not student:
-            raise ValidationError({'student': _('Farzand majburiy.')})
+            raise ValidationError({'student': _("O'quvchi majburiy.")})
         return Response(services.remind_child(
             parent=request.user, assignment_id=assignment_id, student_id=student, request=request,
         ))

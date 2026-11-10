@@ -16,7 +16,7 @@ class ConsentRequired(PermissionDenied):
     default_code = 'consent_required'
 
     def __init__(self, kind: str):
-        super().__init__(detail={'detail': _("Bu ma'lumot yopiq: ota-ona/o'quvchi rozilik bermagan."), 'kind': kind})
+        super().__init__(detail={'detail': _("Bu ma'lumot yopiq: kuzatuvchi/o'quvchi rozilik bermagan."), 'kind': kind})
 
 
 def is_denied(student, kind: str) -> bool:

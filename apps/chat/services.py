@@ -761,14 +761,14 @@ def request_direct(*, student: User, teacher_ref: str, request=None) -> ChatRoom
     """
     requester = student
     if requester.role not in (User.Role.STUDENT, User.Role.PARENT):
-        raise PermissionDenied(_("Faqat o'quvchi yoki ota-ona so'rov yuboradi."))
+        raise PermissionDenied(_("Faqat o'quvchi yoki kuzatuvchi so'rov yuboradi."))
     teacher = User.objects.filter(role=User.Role.TEACHER, is_active=True)\
         .filter(pk=teacher_ref if _is_uuid(teacher_ref) else None).first() \
         or User.objects.filter(role=User.Role.TEACHER, is_active=True, username=teacher_ref).first()
     if teacher is None:
         raise NotFound(_("O'qituvchi topilmadi."))
     if requester.role == User.Role.PARENT and teacher.pk not in contacts.children_teacher_ids(requester):
-        raise PermissionDenied(_("Faqat farzandingiz o'qituvchisiga yozish so'rovi yuborishingiz mumkin."))
+        raise PermissionDenied(_("Faqat o'zingiz kuzatayotgan o'quvchining o'qituvchisiga yozish so'rovi yuborishingiz mumkin."))
 
     room, created = ChatRoom.objects.get_or_create(
         kind=ChatRoom.Kind.DIRECT, teacher=teacher, student=requester,
@@ -794,7 +794,7 @@ def open_direct(*, teacher: User, user_id, request=None) -> ChatRoom:
     if other is None:
         raise NotFound(_('Foydalanuvchi topilmadi.'))
     if contacts.can_message(teacher, other) != contacts.WRITE:
-        raise PermissionDenied(_("Siz faqat o'z o'quvchingiz yoki ularning ota-onasi bilan chat ocha olasiz."))
+        raise PermissionDenied(_("Siz faqat o'z o'quvchingiz yoki uning kuzatuvchisi bilan chat ocha olasiz."))
     room, created = ChatRoom.objects.get_or_create(
         kind=ChatRoom.Kind.DIRECT, teacher=teacher, student=other,
         defaults={'direct_status': ChatRoom.DirectStatus.ACTIVE},
