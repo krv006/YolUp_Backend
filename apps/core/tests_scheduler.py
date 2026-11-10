@@ -12,7 +12,7 @@ class SchedulerTests(SimpleTestCase):
         commands = get_commands()
         for name, command, _args, period in run_scheduler.JOBS + run_scheduler.OPTIONAL_JOBS:
             self.assertIn(command, commands, name)
-            self.assertGreaterEqual(period, 30)
+            self.assertGreaterEqual(period, 2 if name == 'push_attention' else 30)
 
     def test_failure_is_contained(self):
         with mock.patch.object(run_scheduler, 'call_command', side_effect=RuntimeError('boom')), \

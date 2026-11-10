@@ -278,6 +278,37 @@ def _ensure_attention_schedule_once(*, lesson_id, student: User, lesson: Lesson 
         cache.delete(lock_key)
 
 
+ATTENTION_REPUSH_SEC = 6  # javob bo'lmasa, oyna ochilgandan shuncha soniya keyin YANA BIR marta yuboriladi (xabar yo'qolsa)
+
+
+def push_due_attention(*, now=None) -> int:
+    """Vaqti kelgan (oyna ichidagi, javobsiz) tekshiruvlarni shu o'quvchining doska socketiga yuboradi (har tekshiruvga ko'pi bilan 2 marta).
+    Mijoz endi har 3-6 soniyada so'ramaydi — bu eng katta yukni (1000 o'quvchida ~167 so'rov/s) olib tashlaydi. Socket uzilgan o'quvchi
+    sekinroq polling bilan baribir ko'radi. Cache ishlamasa — jim o'tadi (polling zaxirasi bor). Qaytaradi: yuborilgan hodisalar soni."""
+    from apps.board import realtime as board_realtime
+
+    now = now or timezone.now()
+    rows = AttentionCheck.objects.filter(
+        answered_at__isnull=True, lesson__status=Lesson.Status.LIVE,
+        due_at__lte=now, due_at__gt=now - timedelta(seconds=ATTENTION_WINDOW_SEC),
+    ).values_list('id', 'lesson_id', 'student_id', 'due_at')
+    pushed = 0
+    for check_id, lesson_id, student_id, due_at in rows:
+        try:
+            first = cache.add(f'attn:push1:{check_id}', 1, 120)
+            again = (not first) and (now - due_at).total_seconds() >= ATTENTION_REPUSH_SEC and cache.add(f'attn:push2:{check_id}', 1, 120)
+        except Exception:  # noqa: BLE001
+            continue
+        if first or again:
+            try:
+                board_realtime.broadcast_attention(lesson_id, student_id, check_id, due_at)
+                pushed += 1
+            except Exception:  # noqa: BLE001 — socket qatlami xatosi cron'ni yiqitmasin
+                import logging
+                logging.getLogger('apps').exception('attention push failed')
+    return pushed
+
+
 def pending_attention(*, user: User, lesson_id) -> AttentionCheck | None:
     """Hozir ko'rsatilishi kerak bo'lgan tekshiruv (15s oynasi ichida, javobsiz)."""
     # O'quvchi dars LIVE bo'lmasdan kirgan bo'lsa, jadval shu yerda (polling orqali) yaratiladi.

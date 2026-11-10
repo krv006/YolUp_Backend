@@ -23,6 +23,28 @@ def _send(lesson_id, event: dict) -> None:
     })
 
 
+def user_group_name(lesson_id, user_id) -> str:
+    """Bitta foydalanuvchining shu dars doskasi uchun shaxsiy guruhi (boshqalar ko'rmasligi kerak bo'lgan hodisalar uchun)."""
+    return f'board_{lesson_id}_u_{user_id}'
+
+
+def send_to_user(lesson_id, user_id, event: dict) -> None:
+    from channels.layers import get_channel_layer
+
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    async_to_sync(layer.group_send)(user_group_name(lesson_id, user_id), {'type': 'board.event', 'event': event})
+
+
+def broadcast_attention(lesson_id, user_id, check_id, due_at) -> None:
+    """"Siz shu yerdamisiz?" tekshiruvi VAQTI KELGANDA faqat shu o'quvchiga (o'quvchi jadvalni oldindan bila olmaydi: server
+    aynan `due_at` paytida yuboradi). Ilgari mijoz har 3-6 soniyada so'rab turardi."""
+    send_to_user(lesson_id, user_id, {
+        'type': 'attention', 'check': {'id': str(check_id), 'due_at': due_at.isoformat() if hasattr(due_at, 'isoformat') else due_at},
+    })
+
+
 def broadcast_stroke(lesson_id, sheet_index: int, stroke: dict) -> None:
     _send(lesson_id, {'type': 'stroke', 'sheet': sheet_index, 'stroke': stroke})
 

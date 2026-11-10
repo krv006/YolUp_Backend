@@ -11,6 +11,7 @@ Client -> server:
 
 Server -> client (barcha ishtirokchilarga):
     {"type": "stroke", "sheet": 0, "stroke": {...}}     — yangi element
+    {"type": "attention", "check": {"id", "due_at"}}      — faqat shu o'quvchiga: "Siz shu yerdamisiz?" vaqti keldi
     {"type": "stroke_updated", "sheet": 0, "stroke": {...}}  — element o'zgardi (id bo'yicha to'liq almashtiriladi)
     {"type": "erase", "sheet": 0, "stroke_ids": [...], "by", "reason"}
     {"type": "sheet", "index": 2}                        — yangi sheet
@@ -19,7 +20,7 @@ Server -> client (barcha ishtirokchilarga):
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from .realtime import group_name
+from .realtime import group_name, user_group_name
 
 
 class BoardConsumer(AsyncJsonWebsocketConsumer):
@@ -42,12 +43,16 @@ class BoardConsumer(AsyncJsonWebsocketConsumer):
             return
         self.lesson_id = lesson_id
         self.group = group_name(lesson_id)
+        self.user_group = user_group_name(lesson_id, user.id)  # shaxsiy hodisalar (masalan diqqat tekshiruvi)
         await self.channel_layer.group_add(self.group, self.channel_name)
+        await self.channel_layer.group_add(self.user_group, self.channel_name)
         await self.accept()
 
     async def disconnect(self, code):
         if hasattr(self, 'group'):
             await self.channel_layer.group_discard(self.group, self.channel_name)
+        if hasattr(self, 'user_group'):
+            await self.channel_layer.group_discard(self.user_group, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
         if content.get('type') == 'update':
