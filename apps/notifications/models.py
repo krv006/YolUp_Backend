@@ -27,6 +27,7 @@ class Notification(TimeStampedUUIDModel):
         ALL = 'all', 'Hammaga'
         USERS = 'users', 'Bir nechta foydalanuvchi'  # `user_ids` ro'yxati
         PARENTS_OF = 'parents_of', "O'quvchilarning ota-onalari"  # `user_ids` — o'quvchilar
+        COURSE = 'course', "Guruhning barcha o'quvchilari"  # `course_id` (+ ixtiyoriy `include_parents`)
 
     sender = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='sent_notifications')
     # Admin CKEditor'da yozgan matn — server tomonda tozalangan (sanitize) HTML

@@ -4,6 +4,7 @@ import logging
 import re
 
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -60,9 +61,10 @@ def strip_html(html: str) -> str:
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
     link_type: str = '', link_id: str = '', kind: str = '', user_ids=None, data=None,
+    course_id=None, include_parents: bool = False,
 ) -> Notification:
     if target_type not in Notification.Target.values:
-        raise ValidationError({'target_type': _("'user', 'users', 'parents_of' yoki 'all' bo'lishi kerak.")})
+        raise ValidationError({'target_type': _("'user', 'users', 'parents_of', 'course' yoki 'all' bo'lishi kerak.")})
     clean = sanitize_html(description)
     if not clean:
         raise ValidationError({'description': _("Xabar matni bo'sh bo'lishi mumkin emas.")})
@@ -74,6 +76,8 @@ def send_notification(
             raise NotFound(_('Foydalanuvchi topilmadi.'))
     elif target_type in (Notification.Target.USERS, Notification.Target.PARENTS_OF):
         recipients = _resolve_group(target_type, user_ids)
+    elif target_type == Notification.Target.COURSE:
+        recipients = _resolve_course(course_id, include_parents)
     else:
         recipients = list(User.objects.exclude(pk=sender.pk))
 
@@ -141,11 +145,35 @@ def _resolve_group(target_type: str, user_ids) -> list:
     return list(User.objects.filter(pk__in=parent_ids))
 
 
-def authorize_teacher_targets(*, teacher: User, target_type: str, user_ids) -> None:
+def _resolve_course(course_id, include_parents: bool) -> list:
+    """Guruhning barcha tasdiqlangan o'quvchilari (+ ixtiyoriy: ularning tasdiqlangan ota-onalari)."""
+    from apps.accounts.models import ParentChildLink
+    from apps.lessons.models import Course, Enrollment
+
+    try:
+        course = Course.objects.get(pk=course_id)
+    except (Course.DoesNotExist, ValueError, TypeError, DjangoValidationError):
+        raise NotFound(_('Guruh topilmadi.'))
+    student_ids = list(
+        Enrollment.objects.filter(course=course, status=Enrollment.Status.APPROVED).values_list('student_id', flat=True)
+    )
+    ids = set(student_ids)
+    if include_parents and student_ids:
+        ids |= set(ParentChildLink.objects.filter(
+            student_id__in=student_ids, status=ParentChildLink.Status.APPROVED,
+        ).values_list('parent_id', flat=True))
+    return list(User.objects.filter(pk__in=ids))
+
+
+def authorize_teacher_targets(*, teacher: User, target_type: str, user_ids, course_id=None) -> None:
     """O'qituvchi (umumiy `notification.send` huquqisiz) faqat O'Z o'quvchilariga yoki ularning ota-onalariga yubora oladi:
     `user_ids` — uning kurslaridagi tasdiqlangan o'quvchilar bo'lishi shart."""
-    from apps.lessons.models import Enrollment
+    from apps.lessons.models import Course, Enrollment
 
+    if target_type == Notification.Target.COURSE:
+        if not Course.objects.filter(pk=course_id, teacher=teacher).exists():
+            raise PermissionDenied(_("Bu guruh sizniki emas."))
+        return
     if target_type not in (Notification.Target.USERS, Notification.Target.PARENTS_OF):
         raise PermissionDenied(_("O'qituvchi faqat o'z o'quvchilari yoki ularning ota-onalariga yubora oladi."))
     ids = set(user_ids or [])

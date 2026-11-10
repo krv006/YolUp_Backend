@@ -68,6 +68,7 @@ class NotificationViewSet(mixins.ListModelMixin, mixins.DestroyModelMixin, views
         if not user_has_perm(request.user, 'notification.send'):
             services.authorize_teacher_targets(
                 teacher=request.user, target_type=data['target_type'], user_ids=data.get('user_ids'),
+                course_id=data.get('course_id'),
             )
             # O'qituvchi tizim havolalarini (link_*) yasay olmaydi; `kind` faqat eslatma turlari bilan cheklangan
             data = {**data, 'link_type': '', 'link_id': ''}
