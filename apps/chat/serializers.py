@@ -48,6 +48,8 @@ class MessageSerializer(serializers.ModelSerializer):
     capabilities = serializers.SerializerMethodField()
     type = serializers.SerializerMethodField()
     my_submission = serializers.SerializerMethodField()
+    # Kanal posti: izohlar soni; izoh: qaysi postniki (`thread_root`)
+    comment_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -57,9 +59,17 @@ class MessageSerializer(serializers.ModelSerializer):
             'message_type', 'reply_to', 'client_message_id', 'status', 'edited_at', 'forwarded_from_name',
             'file_name', 'file_type', 'file_size', 'page_count', 'duration', 'waveform',
             'reactions', 'assignment', 'forwarded_from', 'mentions', 'mentioned_users', 'attachment', 'attachments', 'capabilities',
-            'type', 'my_submission',
+            'type', 'my_submission', 'thread_root', 'comment_count',
         ]
-        read_only_fields = ['room', 'sender']
+        read_only_fields = ['room', 'sender', 'thread_root']
+
+    def get_comment_count(self, obj) -> int | None:
+        if obj.thread_root_id is not None or obj.room.kind != ChatRoom.Kind.CHANNEL:
+            return None
+        value = getattr(obj, 'comment_total', None)
+        if value is None:
+            value = obj.comments.filter(deleted_at__isnull=True).count()
+        return value
 
     def get_file_url(self, obj) -> str | None:
         if not obj.file:
@@ -209,12 +219,15 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     online_count = serializers.SerializerMethodField()
     announcement_mode = serializers.BooleanField(source='announcement_only', read_only=True)
     can_write = serializers.SerializerMethodField()
+    can_comment = serializers.SerializerMethodField()
+    members_count = serializers.SerializerMethodField()
     capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
         fields = [
-            'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only', 'announcement_mode', 'can_write', 'capabilities',
+            'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only', 'announcement_mode', 'can_write', 'can_comment',
+            'capabilities', 'description', 'members_count',
             'title', 'last_message', 'unread', 'unread_count', 'first_unread_message_id',
             'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'pinned_messages', 'last_read_message_id', 'has_unread_mention',
             'online_count', 'updated_at',
@@ -264,7 +277,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         if cached is not None:
             msg = cached[0] if cached else None
         else:
-            msg = obj.messages.filter(deleted_at__isnull=True).order_by('-created_at').first()
+            msg = obj.messages.filter(deleted_at__isnull=True, thread_root__isnull=True).order_by('-created_at').first()
         if not msg:
             return None
         data = {
@@ -283,7 +296,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def _unread_qs(self, obj):
         user = self.context['request'].user
         read = self._my_read(obj)
-        qs = obj.messages.exclude(sender=user).filter(deleted_at__isnull=True).exclude(hides__user=user)
+        qs = obj.messages.exclude(sender=user).filter(deleted_at__isnull=True, thread_root__isnull=True).exclude(hides__user=user)
         if read:
             qs = qs.filter(created_at__gt=read.last_read_at)
         return qs
@@ -354,14 +367,23 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def get_can_write(self, obj) -> bool:
         return selectors.can_write(self.context['request'].user, obj)
 
+    def get_can_comment(self, obj) -> bool:
+        return selectors.can_comment(self.context['request'].user, obj)
+
+    def get_members_count(self, obj) -> int | None:
+        return len(selectors.member_ids(obj)) if obj.kind == ChatRoom.Kind.CHANNEL else None
+
     def get_capabilities(self, obj) -> dict:
         """Xona darajasidagi huquqlar: yozish, qadash, e'lon rejimini o'zgartirish va boshqalarning xabarini hamma uchun o'chirish."""
         user = self.context['request'].user
         teacher = selectors.is_room_teacher(user, obj)
-        return {
+        caps = {
             'write': selectors.can_write(user, obj), 'pin': selectors.can_pin(user, obj),
             'announcement': teacher, 'delete': teacher,
         }
+        if obj.kind == ChatRoom.Kind.CHANNEL:  # kanalda alohida: post yozish (`write`) faqat egasi, izoh (`comment`) — a'zolar
+            caps['comment'] = selectors.can_comment(user, obj)
+        return caps
 
     def get_online_count(self, obj) -> int:
         return len(presence.online_ids(selectors.member_ids(obj)))

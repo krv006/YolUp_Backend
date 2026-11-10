@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm
 from apps.lessons.models import Lesson
 
-from . import attachments, contacts, selectors, services, spam
+from . import attachments, channel_service, contacts, selectors, services, spam
 from .models import ChatRoom, Message, MessageAttachment, PinnedMessage, RoomRead
 from .serializers import ChatRoomSerializer, MessageSerializer
 
@@ -85,7 +85,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         """Har bir xonaning oxirgi (o'chirilmagan) xabari. Avvalgi `Prefetch(...[:1])` Django'da ROW_NUMBER() OVER (PARTITION BY room)
         bilan HAMMA xabarni o'qirdi (8 xona x 2500 xabarda 56 ms, xabar ko'paygan sari o'sadi); bu yerda har xona uchun
         (room_id, created_at) indeksidan bitta qidiruv."""
-        last_id = Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True).order_by('-created_at').values('pk')[:1]
+        last_id = Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True, thread_root__isnull=True).order_by('-created_at').values('pk')[:1]
         ids = (
             ChatRoom.objects.filter(pk__in=selectors.rooms_for(user).order_by().values('pk'))
             .annotate(last_id=Subquery(last_id)).filter(last_id__isnull=False).values('last_id')
@@ -123,8 +123,15 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         room = self.get_object()
         if not selectors.can_read(request.user, room):
             self.permission_denied(request)
-        qs = selectors.visible_messages(room, request.user)
         params = request.query_params
+        thread = None
+        if params.get('thread'):  # kanal posti izohlari
+            thread = Message.objects.filter(
+                pk=params['thread'] if services._is_uuid(params['thread']) else None, room=room, thread_root__isnull=True,
+            ).first()
+            if thread is None:
+                raise ValidationError({'thread': _('Post bu kanalda topilmadi.')})
+        qs = selectors.visible_messages(room, request.user, thread=thread)
         if params.get('around'):
             return self._messages_around(request, room, qs, params)
         after, before, limit = params.get('after'), params.get('before'), params.get('limit')
@@ -150,7 +157,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         else:
             items = sorted(qs.order_by('-created_at')[:100], key=lambda m: m.created_at)
             has_more = False
-        if params.get('mark_read') != '0':
+        if params.get('mark_read') != '0' and thread is None:
             services.mark_read(user=request.user, room=room)
         data = MessageSerializer(items, many=True, context=self._message_context(request, room)).data
         if paginated and not after:
@@ -241,6 +248,7 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             reply_to_id=data.get('reply_to_id'), client_message_id=data.get('client_message_id'),
             upload=request.FILES.get('file'), uploads=uploads, message_type=str(data.get('message_type') or ''),
             duration=data.get('duration'), waveform=_waveform(data.get('waveform')), mentions=_mentions(data),
+            thread_root_id=data.get('thread_root_id'),
         )
         payload = MessageSerializer(message, context=self._message_context(request, message.room)).data
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
@@ -427,6 +435,52 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
                 'room_id': str(room.id) if room else None,
             })
         return Response(data)
+
+
+class ChannelViewSet(viewsets.ViewSet):
+    """Kanallar (faqat o'qituvchi boshqaradi). O'qish/post/izoh — oddiy chat endpointlari (`/chat/rooms/<id>/messages/`,
+    izohlar: `?thread=<post_id>`, izoh yozish: `thread_root_id`). Kanallar `GET /chat/rooms/` da `kind: "channel"` bilan chiqadi."""
+
+    permission_classes = [RequirePerm('chat.use')]
+
+    @staticmethod
+    def _room(request, room):
+        return ChatRoomSerializer(room, context={'request': request}).data
+
+    def create(self, request):
+        """`{title, description?, course_ids?: [], student_ids?: []}` — a'zolar: tanlangan guruhlarning o'quvchilari va/yoki alohida
+        o'quvchilar; ikkala holatda ularning tasdiqlangan ota-onalari ham qo'shiladi."""
+        room = channel_service.create_channel(
+            teacher=request.user, title=request.data.get('title'), description=request.data.get('description', ''),
+            course_ids=request.data.get('course_ids'), student_ids=request.data.get('student_ids'), request=request,
+        )
+        return Response(self._room(request, room), status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, pk=None):
+        room = channel_service.update_channel(
+            teacher=request.user, room_id=pk, title=request.data.get('title'), description=request.data.get('description'),
+            request=request,
+        )
+        return Response(self._room(request, room))
+
+    def destroy(self, request, pk=None):
+        channel_service.delete_channel(teacher=request.user, room_id=pk, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['get', 'post'], url_path='members')
+    def members(self, request, pk=None):
+        """GET — a'zolar (rol bilan); POST `{course_ids?, student_ids?}` — qo'shish."""
+        if request.method == 'POST':
+            return Response(channel_service.add_members(
+                teacher=request.user, room_id=pk, course_ids=request.data.get('course_ids'),
+                student_ids=request.data.get('student_ids'), request=request,
+            ))
+        return Response(services.room_members(user=request.user, room_id=pk, request=request, query=request.query_params.get('query', '')))
+
+    @action(detail=True, methods=['delete'], url_path=r'members/(?P<user_id>[^/.]+)')
+    def remove_member(self, request, pk=None, user_id=None):
+        channel_service.remove_member(teacher=request.user, room_id=pk, user_id=user_id, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdminSpamReportView(APIView):

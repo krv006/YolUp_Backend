@@ -82,8 +82,8 @@ def _send(message_id) -> None:
         return
     sender = message.sender
     sender_name = (sender.get_full_name() or sender.username) if sender else 'Chat'
-    group = room.kind == ChatRoom.Kind.COURSE
-    title = room.course.title if group else sender_name
+    group = room.kind in (ChatRoom.Kind.COURSE, ChatRoom.Kind.CHANNEL)
+    title = (room.course.title if room.kind == ChatRoom.Kind.COURSE else room.title) if group else sender_name
     note = Notification(
         id=uuid.uuid4(), description=_body(message, sender_name, group), kind='chat_message',
         link_type='chat_room', link_id=str(room.id),

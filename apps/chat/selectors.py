@@ -7,7 +7,7 @@ from django.db.models.functions import Coalesce
 from apps.accounts.models import User
 from apps.lessons.models import Enrollment
 
-from .models import ChatRoom, Message, MessageReaction, RoomRead
+from .models import ChatRoom, Message, MessageReaction, RoomMember, RoomRead
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=dt_timezone.utc)
@@ -19,12 +19,12 @@ def with_room_stats(qs, user: User):
     read_at = Subquery(RoomRead.objects.filter(room=OuterRef('pk'), user=user).values('last_read_at')[:1], output_field=DateTimeField())
     qs = qs.annotate(room_read_at=read_at)
     unread = (
-        Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True)
+        Message.objects.filter(room=OuterRef('pk'), deleted_at__isnull=True, thread_root__isnull=True)
         .exclude(sender=user).exclude(hides__user=user)
         .filter(created_at__gt=Coalesce(OuterRef('room_read_at'), Value(_EPOCH, output_field=DateTimeField())))
     )
     last_read = Message.objects.filter(
-        room=OuterRef('pk'), deleted_at__isnull=True, created_at__lte=OuterRef('room_read_at'),
+        room=OuterRef('pk'), deleted_at__isnull=True, thread_root__isnull=True, created_at__lte=OuterRef('room_read_at'),
     ).order_by('-created_at').values('id')[:1]
     return qs.annotate(
         room_unread=Coalesce(Subquery(unread.order_by().values('room').annotate(c=Count('pk')).values('c'), output_field=IntegerField()), 0),
@@ -40,6 +40,7 @@ def rooms_for(user: User):
     - Kurs guruhi: o'qituvchi (kurs egasi) yoki tasdiqlangan o'quvchi.
     - Direct: taraflardan biri (pending/blocked ham ro'yxatda ko'rinadi —
       holatini ko'rsatish uchun; yozish esa faqat ACTIVE'da).
+    - Kanal: egasi (o'qituvchi) yoki a'zo.
     """
     approved_courses = Enrollment.objects.filter(
         student=user, status=Enrollment.Status.APPROVED,
@@ -50,6 +51,7 @@ def rooms_for(user: User):
             Q(kind=ChatRoom.Kind.COURSE)
             & (Q(course__teacher=user) | Q(course_id__in=approved_courses))
             | Q(kind=ChatRoom.Kind.DIRECT) & (Q(teacher=user) | Q(student=user))
+            | Q(kind=ChatRoom.Kind.CHANNEL) & (Q(teacher=user) | Q(members__user=user))
         )
         .select_related('course', 'course__teacher', 'teacher', 'student')
         .distinct()
@@ -59,6 +61,13 @@ def rooms_for(user: User):
 def can_read(user: User, room: ChatRoom) -> bool:
     if room.kind == ChatRoom.Kind.DIRECT:
         return user.id in (room.teacher_id, room.student_id)
+    if room.kind == ChatRoom.Kind.CHANNEL:
+        if room.teacher_id == user.id:
+            return True
+        memo = room.__dict__.setdefault('_can_read_memo', {})
+        if user.id not in memo:
+            memo[user.id] = RoomMember.objects.filter(room=room, user=user).exists()
+        return memo[user.id]
     if room.course.teacher_id == user.id:
         return True
     # Ro'yxatda bitta xona uchun can_write/capabilities/can_pin shuni qayta-qayta so'raydi — natijani xona ob'ektida eslab qolamiz
@@ -75,19 +84,28 @@ def can_write(user: User, room: ChatRoom) -> bool:
         return False
     if room.kind == ChatRoom.Kind.DIRECT:
         return room.direct_status == ChatRoom.DirectStatus.ACTIVE
+    if room.kind == ChatRoom.Kind.CHANNEL:
+        return room.teacher_id == user.id  # post yozish — faqat egasi; a'zolar izoh yozadi (`can_comment`)
     if room.announcement_only and not is_room_teacher(user, room):
         return False  # e'lon rejimi: guruhga faqat o'qituvchi yozadi
     return True
 
 
+def can_comment(user: User, room: ChatRoom) -> bool:
+    """Kanal posti ostida izoh yozish: egasi va har bir a'zo (o'quvchi ham, ota-ona ham)."""
+    return room.kind == ChatRoom.Kind.CHANNEL and can_read(user, room)
+
+
 def is_room_teacher(user: User, room: ChatRoom) -> bool:
-    """Kurs guruhining o'qituvchisi (guruhni boshqarish huquqi shunda)."""
+    """Kurs guruhining (yoki kanalning) o'qituvchisi — guruhni boshqarish huquqi shunda."""
+    if room.kind == ChatRoom.Kind.CHANNEL:
+        return room.teacher_id == user.id
     return room.kind == ChatRoom.Kind.COURSE and room.course.teacher_id == user.id
 
 
 def can_pin(user: User, room: ChatRoom) -> bool:
     """Qadash huquqi: kurs guruhida faqat o'qituvchi, direct chatda ikkala tomon."""
-    if room.kind == ChatRoom.Kind.COURSE:
+    if room.kind in (ChatRoom.Kind.COURSE, ChatRoom.Kind.CHANNEL):
         return is_room_teacher(user, room)
     return can_read(user, room)
 
@@ -107,10 +125,17 @@ def capabilities(user: User, room: ChatRoom, message: Message) -> dict:
     }
 
 
-def visible_messages(room: ChatRoom, user: User):
-    """Foydalanuvchi ko'radigan xabarlar: hamma uchun o'chirilganlar va "men uchun o'chirilgan"lar chiqarilgan."""
+def visible_messages(room: ChatRoom, user: User, thread=None):
+    """Foydalanuvchi ko'radigan xabarlar: hamma uchun o'chirilganlar va "men uchun o'chirilgan"lar chiqarilgan.
+    Kanal izohlari asosiy lentada CHIQMAYDI — ular `thread=<post>` bilan alohida olinadi (post qatorida `comment_count`)."""
+    base = room.messages.filter(thread_root=thread) if thread is not None else room.messages.filter(thread_root__isnull=True)
+    if room.kind == ChatRoom.Kind.CHANNEL and thread is None:
+        comments = Message.objects.filter(thread_root=OuterRef('pk'), deleted_at__isnull=True).order_by().values('thread_root')
+        base = base.annotate(comment_total=Coalesce(
+            Subquery(comments.annotate(c=Count('pk')).values('c'), output_field=IntegerField()), 0,
+        ))
     return (
-        room.messages.filter(deleted_at__isnull=True)
+        base.filter(deleted_at__isnull=True)
         .exclude(hides__user=user)
         .select_related('sender', 'reply_to', 'reply_to__sender', 'assignment', 'forwarded_from_author')
         .prefetch_related('mentions', 'files', Prefetch('reactions', queryset=MessageReaction.objects.only('message_id', 'user_id', 'emoji')))
@@ -131,6 +156,8 @@ def member_ids(room: ChatRoom) -> list:
     """Xonaning barcha a'zolari (kurs guruhi: o'qituvchi + tasdiqlangan o'quvchilar; direct: ikki tomon)."""
     if room.kind == ChatRoom.Kind.DIRECT:
         return [i for i in (room.teacher_id, room.student_id) if i]
+    if room.kind == ChatRoom.Kind.CHANNEL:
+        return [room.teacher_id, *RoomMember.objects.filter(room=room).values_list('user_id', flat=True)]
     students = Enrollment.objects.filter(
         course_id=room.course_id, status=Enrollment.Status.APPROVED,
     ).values_list('student_id', flat=True)

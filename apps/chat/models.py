@@ -36,6 +36,9 @@ class ChatRoom(TimeStampedUUIDModel):
     class Kind(TextChoices):
         COURSE = 'course', 'Kurs guruhi'
         DIRECT = 'direct', 'Shaxsiy'
+        # Telegram kanaliga o'xshash (2026-11-10): postni faqat o'qituvchi (`teacher` = egasi) yozadi, a'zolar (`RoomMember`) o'qiydi
+        # va har post ostida izoh (`Message.thread_root`) qoldiradi
+        CHANNEL = 'channel', 'Kanal'
 
     class DirectStatus(TextChoices):
         PENDING = 'pending', "So'rov kutilmoqda"
@@ -63,6 +66,9 @@ class ChatRoom(TimeStampedUUIDModel):
     image = ImageField(upload_to='group_images/', null=True, blank=True)
     # E'lon rejimi: true bo'lsa guruhga faqat o'qituvchi yozadi
     announcement_only = BooleanField(default=False)
+    # kind=CHANNEL: nomi va tavsifi (egasi `teacher` maydonida)
+    title = CharField(max_length=200, blank=True, default='')
+    description = TextField(blank=True, default='')
 
     class Meta:
         ordering = ['-updated_at']
@@ -77,6 +83,8 @@ class ChatRoom(TimeStampedUUIDModel):
     def title_for(self, user) -> str:
         if self.kind == self.Kind.COURSE:
             return self.course.title
+        if self.kind == self.Kind.CHANNEL:
+            return self.title
         other = self.teacher if user.id == self.student_id else self.student
         return (other.get_full_name() or other.username) if other else 'Chat'
 
@@ -84,6 +92,25 @@ class ChatRoom(TimeStampedUUIDModel):
         if self.kind == self.Kind.COURSE:
             return f'guruh: {self.course.title}'
         return f'direct: {self.teacher} ↔ {self.student} [{self.direct_status}]'
+
+
+class RoomMember(TimeStampedUUIDModel):
+    """Kanal a'zosi (kurs guruhida a'zolik `Enrollment` orqali, direct'da ikki tomon). `source`: a'zo kimligi — o'quvchi yoki
+    shu o'quvchining tasdiqlangan ota-onasi."""
+
+    class Source(TextChoices):
+        STUDENT = 'student', "O'quvchi"
+        PARENT = 'parent', 'Ota-ona'
+
+    room = ForeignKey('chat.ChatRoom', CASCADE, related_name='members')
+    user = ForeignKey('accounts.User', CASCADE, related_name='room_memberships')
+    source = CharField(max_length=8, choices=Source.choices, default=Source.STUDENT)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['room', 'user'], name='unique_room_member')]
+
+    def __str__(self):
+        return f'{self.user} in {self.room_id}'
 
 
 class SpamReport(TimeStampedUUIDModel):
@@ -152,6 +179,8 @@ class Message(TimeStampedUUIDModel):
     message_type = CharField(max_length=12, choices=Type.choices, default=Type.TEXT)
     # Javob berilgan xabar (matn ichiga yozilgan `↪` hack'i o'rniga)
     reply_to = ForeignKey('self', SET_NULL, null=True, blank=True, related_name='replies')
+    # Kanal postining izohi: izoh `thread_root=post`. Oddiy xabarlar va postlarda bo'sh
+    thread_root = ForeignKey('self', CASCADE, null=True, blank=True, related_name='comments')
     # Qayta yuborishda (internet uzilsa) xabar ikki marta tushmasligi uchun client UUID'si
     client_message_id = CharField(max_length=64, blank=True, default='')
     # Fayl haqida (hajm va sahifalar soni dizaynda ko'rsatiladi)

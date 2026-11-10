@@ -5,6 +5,7 @@ from . import views
 
 router = DefaultRouter()
 router.register('rooms', views.ChatRoomViewSet, basename='chat-room')
+router.register('channels', views.ChannelViewSet, basename='chat-channel')
 
 urlpatterns = [
     path('files/<uuid:message_id>/', views.ChatFileView.as_view(), name='chat-file'),

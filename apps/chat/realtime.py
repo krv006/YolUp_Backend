@@ -34,6 +34,23 @@ def broadcast_message(message) -> None:
     broadcast_activity(message)
 
 
+def broadcast_comment(message) -> None:
+    """Kanal posti ostida yangi izoh: xonadagilarga `{type:"channel_comment", post_id, comment_count, message}` (izoh asosiy
+    lentaga `message` hodisasi bilan TUSHMAYDI). Xato xabar oqimini buzmasin."""
+    import logging
+
+    from .models import Message
+
+    try:
+        broadcast_event(message.room_id, {
+            'type': 'channel_comment', 'post_id': str(message.thread_root_id),
+            'comment_count': Message.objects.filter(thread_root_id=message.thread_root_id, deleted_at__isnull=True).count(),
+            'message': message_payload(message),
+        })
+    except Exception:  # noqa: BLE001
+        logging.getLogger('apps').exception('channel_comment broadcast failed')
+
+
 def notice_group(user_id) -> str:
     """Foydalanuvchining umumiy (`ws/notifications/`) ulanishlari — xona ochiq bo'lmasa ham ro'yxat/badge yangilanishi uchun."""
     from apps.notifications.realtime import group_name

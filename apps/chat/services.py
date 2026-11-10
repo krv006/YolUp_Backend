@@ -90,12 +90,27 @@ def _find_reply(room: ChatRoom, reply_to_id):
 
 def send_message_ex(
     *, user: User, room_id, text='', reply_to_id=None, client_message_id='', upload=None, uploads=None,
-    message_type='', duration=None, waveform=None, mentions=None,
+    message_type='', duration=None, waveform=None, mentions=None, thread_root_id=None,
 ) -> tuple:
     """Xabar yuboradi (matn, bir yoki bir nechta fayl/rasm, ovoz). Qaytaradi: (xabar, yangi_yaratildimi). Bir xil
     `client_message_id` bilan qayta kelsa — avval yaratilgan xabar qaytadi (yangi_yaratildimi=False) va qayta tarqatilmaydi."""
     room = _get_room(room_id)
-    if not selectors.can_write(user, room):
+    thread_root = None
+    if thread_root_id:
+        # Kanal posti ostidagi izoh: egasi ham, har bir a'zo ham (o'quvchi, ota-ona) yoza oladi
+        if room.kind != ChatRoom.Kind.CHANNEL:
+            raise ValidationError({'thread_root_id': _("Izoh faqat kanal postiga yoziladi.")})
+        if not selectors.can_comment(user, room):
+            raise PermissionDenied(_("Bu kanalga izoh yozish huquqingiz yo'q."))
+        thread_root = Message.objects.filter(
+            pk=thread_root_id if _is_uuid(thread_root_id) else None, room=room, thread_root__isnull=True,
+            deleted_at__isnull=True, kind=Message.Kind.USER,
+        ).first()
+        if thread_root is None:
+            raise NotFound(_('Post topilmadi.'))
+    elif room.kind == ChatRoom.Kind.CHANNEL and not selectors.can_write(user, room):
+        raise PermissionDenied(_("Kanalga faqat o'qituvchi post yozadi. Izoh uchun `thread_root_id` yuboring."))
+    elif not selectors.can_write(user, room):
         if room.kind == ChatRoom.Kind.DIRECT and room.direct_status != ChatRoom.DirectStatus.ACTIVE:
             raise PermissionDenied(_("Chat hali ochiq emas (so'rov qabul qilinmagan yoki bloklangan)."))
         if room.kind == ChatRoom.Kind.COURSE and room.announcement_only and selectors.can_read(user, room):
@@ -141,7 +156,7 @@ def send_message_ex(
         with transaction.atomic():
             message = Message.objects.create(
                 room=room, sender=user, text=text, reply_to=reply, client_message_id=client_message_id,
-                file=files[0] if files else '', **fields,
+                thread_root=thread_root, file=files[0] if files else '', **fields,
             )
             for index, (upload_file, info) in enumerate(zip(files, infos)):
                 MessageAttachment.objects.create(
@@ -151,14 +166,18 @@ def send_message_ex(
                     name=info['file_name'], mime=info['file_type'], size=info['file_size'],
                     page_count=info['page_count'], order=index,
                 )
-            # xona ro'yxatda tepaga chiqsin
-            room.save(update_fields=['updated_at'])
+            # xona ro'yxatda tepaga chiqsin (kanal izohi chiqarmaydi — u post ostida)
+            if thread_root is None:
+                room.save(update_fields=['updated_at'])
             if mentioned:
                 message.mentions.set(mentioned)
             # Real-time: tranzaksiya muvaffaqiyatli yopilgandan KEYIN tarqatamiz (aks holda ulangan
             # client hali bazada yo'q xabarni ko'rishi mumkin)
-            transaction.on_commit(lambda: realtime.broadcast_message(message))
-            transaction.on_commit(lambda: push.schedule(message))  # chatda bo'lmaganlarga push (fonda)
+            if thread_root is not None:
+                transaction.on_commit(lambda: realtime.broadcast_comment(message))
+            else:
+                transaction.on_commit(lambda: realtime.broadcast_message(message))
+                transaction.on_commit(lambda: push.schedule(message))  # chatda bo'lmaganlarga push (fonda)
             if mentioned:
                 transaction.on_commit(lambda: _notify_mentions(message, mentioned))
     except IntegrityError:
