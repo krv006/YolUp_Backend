@@ -134,3 +134,41 @@ class CourseFeeFieldsTests(APITestCase):
         for bad in ({'lessons_per_week': 0}, {'lessons_per_week': 15}, {'monthly_fee': -1}):
             r = self.client.post('/api/v1/courses/', {'title': 'X', **bad}, format='json')
             self.assertEqual(r.status_code, 400, bad)
+
+
+class FocusExitsCountTests(AttendanceSummaryTests):
+    """2026-11-10: hisobotda va darslar ro'yxatida oynadan chiqishlar soni (frontend 100 tadan sahifalab yig'masin)."""
+
+    def test_summary_has_focus_exits_per_student_over_the_range(self):
+        for lesson in (self.old, self.recent_a, self.recent_b):
+            self.attend(self.aziza, lesson)
+        self.focus(self.aziza, self.old, exit_min=5, return_min=6)
+        self.focus(self.aziza, self.recent_a, exit_min=10, return_min=12)
+        self.focus(self.aziza, self.recent_a, exit_min=20, return_min=22)
+        self.focus(self.aziza, self.recent_b, exit_min=30)  # qaytmagan chiqish ham 1 ta
+        body = self.get(self.teacher).json()
+        self.assertEqual(self.row(body, 'Aziza Rahimova')['focus_exits'], 4)
+        self.assertEqual(self.row(body, 'Bobur')['focus_exits'], 0)
+        self.assertEqual(body['focus_exits'], 4)
+        # davr bo'yicha: oxirgi 30 kunda eski dars (1 ta chiqish) hisobga kirmaydi
+        self.assertEqual(self.row(self.get(self.teacher, '?range=30d').json(), 'Aziza Rahimova')['focus_exits'], 3)
+
+    def test_lessons_list_has_focus_exits_for_teacher_only(self):
+        self.attend(self.aziza, self.recent_a)
+        self.attend(self.bobur, self.recent_a)
+        self.focus(self.aziza, self.recent_a, exit_min=10, return_min=12)
+        self.focus(self.bobur, self.recent_a, exit_min=15, return_min=16)
+        self.focus(self.bobur, self.recent_a, exit_min=30, return_min=31)
+
+        def lesson_row(user):
+            self.client.force_authenticate(user)
+            response = self.client.get(f'/api/v1/lessons/?course={self.course.id}')
+            self.assertEqual(response.status_code, 200, response.content)
+            data = response.json()
+            rows = data['results'] if isinstance(data, dict) else data
+            return next(r for r in rows if r['id'] == str(self.recent_a.id)), next(r for r in rows if r['id'] == str(self.recent_b.id))
+
+        recent_a, recent_b = lesson_row(self.teacher)
+        self.assertEqual(recent_a['focus_exits'], 3)
+        self.assertEqual(recent_b['focus_exits'], 0)
+        self.assertIsNone(lesson_row(self.aziza)[0]['focus_exits'])

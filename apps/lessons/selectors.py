@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce
 
 from apps.accounts.models import ParentChildLink, User
 
-from .models import Attendance, Course, Enrollment, Lesson, LessonRating, LessonRecording
+from .models import Attendance, Course, Enrollment, FocusEvent, Lesson, LessonRating, LessonRecording
 
 _APPROVED = ParentChildLink.Status.APPROVED
 _ENROLLED = Enrollment.Status.APPROVED
@@ -105,6 +105,8 @@ def with_card_stats(qs: QuerySet[Lesson]) -> QuerySet[Lesson]:
         card_students=count(Enrollment, course=OuterRef('course_id'), status=_ENROLLED),
         card_attended=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False),
         card_present=count(Attendance, lesson=OuterRef('pk'), joined_at__isnull=False, left_at__isnull=True),
+        # Shu darsda barcha o'quvchilarning oynadan chiqishlari jami (o'qituvchi hisoboti)
+        card_focus_exits=count(FocusEvent, lesson=OuterRef('pk'), kind=FocusEvent.Kind.EXIT),
         # Har dars uchun alohida so'rov ketmasligi uchun (avval: test, o'rtacha baho, baholar soni — 3 ta/dars)
         card_rating_count=count(LessonRating, lesson=OuterRef('pk')),
         card_avg_rating=Subquery(

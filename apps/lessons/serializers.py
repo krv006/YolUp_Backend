@@ -2,11 +2,12 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from apps.accounts.models import User
 from apps.accounts.serializers import UserSerializer
 from apps.quizzes.models import Quiz
 
 from . import selectors
-from .models import Attendance, Course, Enrollment, Lesson, LessonRating
+from .models import Attendance, Course, Enrollment, FocusEvent, Lesson, LessonRating
 
 
 ATTENDANCE_OPENS_MINUTES = 10
@@ -101,6 +102,8 @@ class LessonSerializer(serializers.ModelSerializer):
     participants_count = serializers.SerializerMethodField()
     attendance_rate = serializers.SerializerMethodField()
     joined_count = serializers.SerializerMethodField()
+    # Shu darsda barcha o'quvchilar oynadan necha marta chiqqan (faqat o'qituvchi/admin ko'radi, boshqalarga null)
+    focus_exits = serializers.SerializerMethodField()
     assignment = serializers.SerializerMethodField()
     # O'quvchi uchun (boshqa rollarda null): o'zi qo'ygan baho va qatnashgani (faqat tugagan darsda true/false)
     my_rating = serializers.SerializerMethodField()
@@ -120,7 +123,7 @@ class LessonSerializer(serializers.ModelSerializer):
             'id', 'course', 'course_title', 'title', 'note', 'starts_at',
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
-            'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'assignment',
+            'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'focus_exits', 'assignment',
             'my_rating', 'attended', 'recording_active', 'recording_started_at',
             'attendance_opens_at', 'has_reminder', 'reminder_minutes',
         ]
@@ -239,6 +242,16 @@ class LessonSerializer(serializers.ModelSerializer):
         value = getattr(obj, 'card_present', None)
         if value is None:
             value = Attendance.objects.filter(lesson=obj, joined_at__isnull=False, left_at__isnull=True).count()
+        return value or 0
+
+    def get_focus_exits(self, obj) -> int | None:
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is None or getattr(user, 'role', None) not in (User.Role.TEACHER, User.Role.ADMIN, User.Role.SUPER_ADMIN):
+            return None
+        value = getattr(obj, 'card_focus_exits', None)
+        if value is None:
+            value = FocusEvent.objects.filter(lesson=obj, kind=FocusEvent.Kind.EXIT).count()
         return value or 0
 
     def get_assignment(self, obj) -> dict | None:

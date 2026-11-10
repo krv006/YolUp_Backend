@@ -80,9 +80,9 @@ def course_summary(*, course, viewer: User, range_key: str = 'all', now=None) ->
     for event in FocusEvent.objects.filter(lesson__in=lessons, student__in=students).order_by('created_at'):
         events.setdefault((event.student_id, event.lesson_id), []).append(event)
 
-    rows, totals = [], {'attended': 0, 'present': 0.0, 'focused': 0.0}
+    rows, totals = [], {'attended': 0, 'present': 0.0, 'focused': 0.0, 'exits': 0}
     for student in students:
-        attended, present, focused = 0, 0.0, 0.0
+        attended, present, focused, exits = 0, 0.0, 0.0, 0
         for lesson in lessons:
             record = attendance.get((student.id, lesson.id))
             if record is None:
@@ -93,18 +93,23 @@ def course_summary(*, course, viewer: User, range_key: str = 'all', now=None) ->
             away = min(seconds, _away_seconds(events.get((student.id, lesson.id), []), record.joined_at, end))
             present += seconds
             focused += seconds - away
+            exits += sum(1 for e in events.get((student.id, lesson.id), []) if e.kind == FocusEvent.Kind.EXIT)
         rows.append({
             'id': str(student.id), 'name': _name(student),
             'attendance_percent': _percent(attended, len(lessons)) if lessons else 0,
             'focus_percent': _percent(focused, present),
             'attended_count': attended,
+            # tanlangan davrdagi barcha tugagan darslar bo'yicha oynadan chiqishlar jami
+            'focus_exits': exits,
         })
         totals['attended'] += attended
         totals['present'] += present
         totals['focused'] += focused
+        totals['exits'] += exits
     return {
         'attendance_percent': _percent(totals['attended'], len(students) * len(lessons)) if lessons and students else 0,
         'focus_percent': _percent(totals['focused'], totals['present']),
         'lesson_count': len(lessons),
+        'focus_exits': totals['exits'],
         'students': rows,
     }
