@@ -57,6 +57,13 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
         JAPANESE = 'japanese', _('Yapon tili')
         OTHER = 'other', _('Boshqa')
 
+    class Kind(TextChoices):
+        GROUP = 'group', 'Guruh'
+        # Speaking club (2026-11-10): o'z chati + jonli mashg'ulotlar. Kurs infratuzilmasidan foydalanadi (chat xonasi, jonli darslar,
+        # davomat, yozuvlar); a'zolar o'qituvchi tomonidan darhol qo'shiladi. Oddiy guruh ro'yxatida chiqmaydi (`/clubs/`).
+        CLUB = 'club', 'Klub'
+
+    kind = CharField(max_length=8, choices=Kind.choices, default=Kind.GROUP, db_index=True)
     teacher = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='courses')
     title = CharField(max_length=200)
     # Erkin matn EMAS — o'qituvchi tayin ro'yxatdan tanlaydi (2026-09-15: ilgari

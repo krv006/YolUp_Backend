@@ -63,8 +63,15 @@ class CourseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if self.action == 'catalog':
-            return selectors.with_course_stats(Course.objects.filter(is_active=True), self.request.user).order_by('title')
+            return selectors.with_course_stats(
+                Course.objects.filter(is_active=True, kind=Course.Kind.GROUP), self.request.user,
+            ).order_by('title')
         qs = selectors.courses_for(self.request.user)
+        if self.action == 'list':
+            # Speaking clublar guruh ro'yxatida chiqmaydi (alohida `/clubs/`); `?kind=club` yoki `?kind=all` — ixtiyoriy
+            kind = self.request.query_params.get('kind', Course.Kind.GROUP)
+            if kind in Course.Kind.values:
+                qs = qs.filter(kind=kind)
         # ro'yxat/ko'rish uchun statistika oldindan yuklanadi; yozish amallarida (update/destroy...) kerak emas
         return selectors.with_course_stats(qs, self.request.user) if self.action in ('list', 'retrieve') else qs
 
