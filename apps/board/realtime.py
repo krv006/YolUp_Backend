@@ -85,6 +85,21 @@ def broadcast_mic_denied(lesson_id, student_id: str) -> None:
     _send(lesson_id, {'type': 'mic_denied', 'student_id': student_id})
 
 
+def broadcast_mic_revoked(lesson_id, student_id: str) -> None:
+    """O'quvchining mikrofon RUXSATI olindi (hammani ovozsiz qilish, o'quvchining o'zi o'chirishi yoki ochiq rejim o'chirilishi) —
+    o'quvchi interfeysi "So'rash" holatiga qaytadi, o'qituvchi paneli yangilanadi."""
+    _send(lesson_id, {'type': 'mic_revoked', 'student_id': student_id})
+
+
+def broadcast_camera_revoked(lesson_id, student_id: str) -> None:
+    _send(lesson_id, {'type': 'camera_revoked', 'student_id': student_id})
+
+
+def broadcast_media_mode(lesson_id, open_mic: bool, open_camera: bool) -> None:
+    """"Hammaga mikrofon/kamera ochiq" almashtirgichlari o'zgardi."""
+    _send(lesson_id, {'type': 'media_mode', 'open_mic': open_mic, 'open_camera': open_camera})
+
+
 def broadcast_current_sheet(lesson_id, index: int) -> None:
     """O'qituvchi boshqa sahifaga o'tdi — mobil mijoz doska kartasida "Doska · N-sahifa" ni yangilaydi."""
     _send(lesson_id, {'type': 'current_sheet', 'sheet': index})

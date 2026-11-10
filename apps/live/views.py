@@ -1,4 +1,6 @@
 """Live views — yupqa qatlam: HTTP <-> live services."""
+from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -102,17 +104,61 @@ class RequestMicView(APIView):
 
 
 class MuteAllView(APIView):
-    """O'qituvchi: hammani ovozsiz qiladi — `{lesson_id, except?: [user_id]}` -> `{muted: n}`."""
+    """O'qituvchi: hammaning mikrofonini (yoki `kind: "video"` bo'lsa kamerasini) o'chiradi va RUXSATINI qaytarib oladi —
+    `{lesson_id, kind?: "audio"|"video", except?: [user_id]}` -> `{muted: n}` (video: `{camera_off: n}`).
+    O'quvchilar interfeysi `mic_revoked` / `camera_revoked` hodisasi bilan "So'rash" holatiga qaytadi."""
 
     permission_classes = [RequirePerm('room.moderate')]
+    kind_default = 'audio'
 
     def post(self, request):
         except_ids = request.data.get('except') or []
-        muted = services.mute_all(
-            teacher=request.user, lesson_id=request.data.get('lesson_id'),
-            except_ids=except_ids if isinstance(except_ids, list) else [], request=request,
+        kind = services._media_kind(request.data.get('kind') or self.kind_default)
+        count = services.restrict_media(
+            teacher=request.user, lesson_id=request.data.get('lesson_id') or request.data.get('lesson'),
+            kind=kind, except_ids=except_ids if isinstance(except_ids, list) else [], request=request,
         )
-        return Response({'muted': muted})
+        return Response({'muted': count} if kind == 'audio' else {'camera_off': count})
+
+
+class CameraOffAllView(MuteAllView):
+    """`POST /live/camera-off-all/ {lesson_id, except?}` — `mute-all` ning `kind: "video"` varianti."""
+
+    kind_default = 'video'
+
+
+class ReleaseMediaView(APIView):
+    """O'quvchi ruxsat berilgan mikrofon/kamerani o'zi o'chirgach chaqiradi: `{lesson_id, kind: "microphone"|"camera"}` ->
+    `{revoked, open}`. Ruxsat olinadi (qayta yoqish uchun yana so'rov kerak); ochiq rejim yoqilgan bo'lsa olinmaydi."""
+
+    permission_classes = [RequirePerm('room.token')]
+
+    def post(self, request):
+        return Response(services.release_media(
+            user=request.user, lesson_id=request.data.get('lesson_id') or request.data.get('lesson'),
+            kind=request.data.get('kind'), request=request,
+        ))
+
+
+class LessonMediaModeView(APIView):
+    """`GET` — holat (`{open_mic, open_camera}`); `PATCH {open_mic?, open_camera?}` — o'qituvchi almashtirgichlari."""
+
+    def get_permissions(self):
+        return [RequirePerm('room.moderate' if self.request.method == 'PATCH' else 'room.token')()]
+
+    def get(self, request, lesson_id):
+        from apps.lessons import selectors as lesson_selectors
+
+        lesson = lesson_selectors.lessons_for(request.user).filter(pk=lesson_id).first()
+        if lesson is None:
+            raise NotFound(_('Dars topilmadi.'))
+        return Response(services.media_mode(lesson=lesson))
+
+    def patch(self, request, lesson_id):
+        return Response(services.set_media_mode(
+            teacher=request.user, lesson_id=lesson_id, open_mic=request.data.get('open_mic'),
+            open_camera=request.data.get('open_camera'), request=request,
+        ))
 
 
 class LessonPresenceView(APIView):

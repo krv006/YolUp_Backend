@@ -298,7 +298,7 @@ class LessonPresenceTests(ScheduleBase):
         self.assertEqual(body['count'], 2)  # o'qituvchi (jonli) + hali chiqmagan 1 o'quvchi
         self.assertEqual(len(body['avatars']), 1)
         idle = self.lesson(starts_at=self.tomorrow(15))
-        self.assertEqual(self.api(self.student).get(f'/api/v1/live/lesson/{idle.id}/presence/').json(), {'count': 0, 'avatars': []})
+        self.assertEqual(self.api(self.student).get(f'/api/v1/live/lesson/{idle.id}/presence/').json(), {'count': 0, 'avatars': [], 'open_mic': False, 'open_camera': False})
 
     def test_outsiders_cannot_peek(self):
         lesson = self.lesson(status=Lesson.Status.LIVE)

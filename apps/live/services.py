@@ -125,6 +125,7 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
     # QO'SHIMCHA cheklamagan (cheklov boshidanoq yo'q edi). Endi o'quvchi uchun
     # `can_publish` butunlay YOPIQ boshlanadi — grant_*() funksiyalari uni
     # (aynan kerakli manba bilan birga) ANIQ ochadi.
+    student_sources = [] if is_teacher else _open_sources(lesson, user)
     token = (
         AccessToken(settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET)
         .with_identity(f'user-{user.id}')
@@ -142,11 +143,12 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
                 room_join=True,
                 room=lesson.room_name,
                 room_admin=is_teacher,
-                can_publish=is_teacher,
+                can_publish=is_teacher or bool(student_sources),
                 can_subscribe=True,
                 # O'qituvchi: manbalar ANIQ yozilgan (bo'sh/None "hammasi mumkin" degani, lekin mobil mijoz
-                # `canPublishSources` ni o'qib mikrofon/kamera tugmalarini o'chirib qo'yardi)
-                can_publish_sources=list(TEACHER_PUBLISH_SOURCES) if is_teacher else [],
+                # `canPublishSources` ni o'qib mikrofon/kamera tugmalarini o'chirib qo'yardi).
+                # O'quvchi: faqat "ochiq rejim" yoqilgan manbalar (bo'sh ro'yxat bilan `can_publish=False` — hech narsa ochiq emas)
+                can_publish_sources=list(TEACHER_PUBLISH_SOURCES) if is_teacher else student_sources,
             )
         )
     )
@@ -187,6 +189,8 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
         'room': lesson.room_name,
         'is_teacher': is_teacher,
         'join_delay_ms': join_delay_ms,
+        'open_mic': lesson.open_mic,
+        'open_camera': lesson.open_camera,
     }
 
 
@@ -738,48 +742,220 @@ def deny_mic(*, teacher: User, lesson_id, student_id, request=None) -> bool:
 
 # ── Taklif va chetlashtirish (Zoom uslubidagi invite/ban) ──────────────────
 
-def mute_all(*, teacher: User, lesson_id, except_ids=None, request=None) -> int:
-    """O'qituvchi hamma ishtirokchining (o'zi va `except_ids` dan tashqari) mikrofonini o'chiradi (LiveKit server API).
-    Mikrofon ruxsati olinmaydi — o'quvchi xohlasa qayta yoqa oladi. Qaytaradi: ovozi o'chirilgan ishtirokchilar soni."""
-    lesson = _get_owned_lesson(teacher=teacher, lesson_id=lesson_id)
-    skip = {f'user-{teacher.id}'} | {f'user-{i}' for i in (except_ids or [])}
+# ── Mikrofon/kamera ruxsatini olish va ochiq rejim (2026-11-10) ─────────────────────────────────
 
-    async def _mute() -> int:
-        from livekit.protocol.models import TrackType
-        from livekit.protocol.room import ListParticipantsRequest, MuteRoomTrackRequest
+_MEDIA = {
+    'audio': {'source': TrackSource.MICROPHONE, 'event': 'mic_revoked', 'label': 'mikrofon'},
+    'video': {'source': TrackSource.CAMERA, 'event': 'camera_revoked', 'label': 'kamera'},
+}
+_KIND_ALIASES = {'audio': 'audio', 'mic': 'audio', 'microphone': 'audio', 'video': 'video', 'camera': 'video'}
 
-        client = LiveKitAPI(
-            url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET,
-        )
-        muted = set()
-        try:
-            listing = await client.room.list_participants(ListParticipantsRequest(room=lesson.room_name))
-            for participant in listing.participants:
-                if participant.identity in skip:
-                    continue
-                for track in participant.tracks:
-                    if track.type == TrackType.AUDIO and not track.muted:
-                        await client.room.mute_published_track(MuteRoomTrackRequest(
-                            room=lesson.room_name, identity=participant.identity, track_sid=track.sid, muted=True,
-                        ))
-                        muted.add(participant.identity)
-        finally:
-            await client.aclose()
-        return len(muted)
 
+def _media_kind(value) -> str:
+    kind = _KIND_ALIASES.get(str(value or 'audio').lower())
+    if kind is None:
+        raise ValidationError({'kind': _("audio (microphone) yoki video (camera) bo'lishi kerak.")})
+    return kind
+
+
+def _open_sources(lesson: Lesson, user: User) -> list:
+    """Ochiq rejim yoqilgan manbalar (o'quvchi tokeni uchun). Kamerada ota-ona roziligi baribir hisobga olinadi."""
+    from apps.accounts import consent
+
+    sources = []
+    if lesson.open_mic:
+        sources.append('microphone')
+    if lesson.open_camera and not consent.is_denied(user, 'camera'):
+        sources.append('camera')
+    return sources
+
+
+def _broadcast(lesson_id, name: str, *args) -> None:
     try:
-        count = asyncio.run(_mute())
-    except Exception as exc:  # noqa: BLE001 — LiveKit xatosi (xona yo'q, server javob bermadi) mijozga tafsilotsiz
+        from apps.board import realtime as board_realtime
+        getattr(board_realtime, name)(lesson_id, *args)
+    except Exception:  # noqa: BLE001 — realtime xatosi asosiy amalni buzmasin
+        import logging
+        logging.getLogger('apps').exception('%s broadcast failed', name)
+
+
+def _student_id(identity: str):
+    return identity[5:] if identity.startswith('user-') else identity
+
+
+async def _revoke_media(room_name: str, kind: str, skip: set, only=None, mute: bool = True) -> list:
+    """Xonadagi ishtirokchilardan (o'qituvchi/`skip` dan tashqari, `only` berilsa faqat shular) shu manbani O'CHIRADI (mute) va
+    RUXSATini qaytarib oladi. Qaytaradi: tegilgan ishtirokchilar identity'lari. Ruxsat ro'yxati bo'shab qolsa `can_publish=False`
+    (bo'sh ro'yxat LiveKit'da "hammasi ochiq" degani — shuning uchun ochiq qoldirmaymiz)."""
+    from livekit.protocol.models import TrackType
+    from livekit.protocol.room import ListParticipantsRequest, MuteRoomTrackRequest
+
+    spec = _MEDIA[kind]
+    track_type = TrackType.AUDIO if kind == 'audio' else TrackType.VIDEO
+    client = LiveKitAPI(url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET)
+    touched = []
+    try:
+        listing = await client.room.list_participants(ListParticipantsRequest(room=room_name))
+        for participant in listing.participants:
+            if participant.identity in skip or (only is not None and participant.identity not in only):
+                continue
+            changed = False
+            if mute:
+                for track in participant.tracks:
+                    # video: faqat kamera (ekran ulashish emas); audio: barcha ovoz treklari
+                    if track.type != track_type or track.muted:
+                        continue
+                    if kind == 'video' and getattr(track, 'source', TrackSource.CAMERA) != TrackSource.CAMERA:
+                        continue
+                    await client.room.mute_published_track(MuteRoomTrackRequest(
+                        room=room_name, identity=participant.identity, track_sid=track.sid, muted=True,
+                    ))
+                    changed = True
+            permission = getattr(participant, 'permission', None)
+            if permission is not None and spec['source'] in set(permission.can_publish_sources):
+                sources = set(permission.can_publish_sources) - {spec['source']}
+                await client.room.update_participant(UpdateParticipantRequest(
+                    room=room_name, identity=participant.identity,
+                    permission=ParticipantPermission(
+                        can_subscribe=True, can_publish=bool(sources), can_publish_data=True, can_publish_sources=list(sources),
+                    ),
+                ))
+                changed = True
+            if changed:
+                touched.append(participant.identity)
+    finally:
+        await client.aclose()
+    return touched
+
+
+async def _open_media(room_name: str, kind: str, skip: set, denied: set) -> list:
+    """Xonadagi barcha o'quvchilarga shu manbani yoqish RUXSATINI qo'shadi (mavjud ruxsatlar saqlanadi). `denied` — ota-ona
+    roziligi yo'q o'quvchilar identity'lari (kamera uchun)."""
+    from livekit.protocol.room import ListParticipantsRequest
+
+    source = _MEDIA[kind]['source']
+    client = LiveKitAPI(url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET)
+    touched = []
+    try:
+        listing = await client.room.list_participants(ListParticipantsRequest(room=room_name))
+        for participant in listing.participants:
+            if participant.identity in skip or participant.identity in denied:
+                continue
+            sources = set(participant.permission.can_publish_sources) | {source}
+            await client.room.update_participant(UpdateParticipantRequest(
+                room=room_name, identity=participant.identity,
+                permission=ParticipantPermission(
+                    can_subscribe=True, can_publish=True, can_publish_data=True, can_publish_sources=list(sources),
+                ),
+            ))
+            touched.append(participant.identity)
+    finally:
+        await client.aclose()
+    return touched
+
+
+def _run_livekit(coro_factory, lesson: Lesson, what: str):
+    """LiveKit chaqiruvi: xato bo'lsa dars jonli emasligida bo'sh natija, jonli bo'lsa 400 (mijozga tafsilotsiz)."""
+    try:
+        return asyncio.run(coro_factory())
+    except Exception as exc:  # noqa: BLE001 — LiveKit xatosi (xona yo'q, server javob bermadi)
         import logging
 
-        logging.getLogger('apps').warning('mute_all LiveKit xatosi: %s', exc)
+        logging.getLogger('apps').warning('%s LiveKit xatosi: %s', what, exc)
         if lesson.status != Lesson.Status.LIVE:
-            return 0  # dars jonli emas — ovozi o'chiradigan hech kim yo'q
+            return []  # dars jonli emas — tegiladigan hech kim yo'q
         raise ValidationError({'detail': _("Jonli dars serveriga ulanib bo'lmadi. Birozdan keyin urinib ko'ring.")}) from None
+
+
+def restrict_media(*, teacher: User, lesson_id, kind='audio', except_ids=None, request=None) -> int:
+    """O'qituvchi hamma o'quvchining mikrofonini (`kind=audio`) yoki kamerasini (`kind=video`) o'chiradi VA ruxsatini qaytarib oladi
+    (2026-11-10): `can_publish_sources` dan manba olib tashlanadi; o'qituvchi va `except_ids` ga tegilmaydi. Qayta yoqish uchun
+    o'quvchi yana so'rov yuboradi (yoki "ochiq" rejim yoqiladi). Har o'quvchiga `mic_revoked`/`camera_revoked` hodisasi boradi.
+    Qaytaradi: tegilgan ishtirokchilar soni."""
+    kind = _media_kind(kind)
+    lesson = _get_owned_lesson(teacher=teacher, lesson_id=lesson_id)
+    skip = {f'user-{teacher.id}'} | {f'user-{i}' for i in (except_ids or [])}
+    touched = _run_livekit(lambda: _revoke_media(lesson.room_name, kind, skip), lesson, f'restrict_media({kind})')
+    for identity in touched:
+        _broadcast(lesson.id, f"broadcast_{_MEDIA[kind]['event']}", _student_id(identity))
     audit.record(
-        action='room.mute_all', actor=teacher, target=lesson, meta={'muted': count}, request=request,
+        action='room.mute_all' if kind == 'audio' else 'room.camera_off_all', actor=teacher, target=lesson,
+        meta={'count': len(touched)}, request=request,
     )
-    return count
+    return len(touched)
+
+
+def mute_all(*, teacher: User, lesson_id, except_ids=None, request=None) -> int:
+    """Hammani ovozsiz qiladi (mikrofon ruxsati ham qaytarib olinadi — `restrict_media`)."""
+    return restrict_media(teacher=teacher, lesson_id=lesson_id, kind='audio', except_ids=except_ids, request=request)
+
+
+def release_media(*, user: User, lesson_id, kind, request=None) -> dict:
+    """O'quvchi ruxsat berilgan mikrofon/kamerani O'ZI o'chirdi -> ruxsat ham olinadi (bir martalik ruxsat): qayta yoqish uchun yana
+    so'rov yuboradi. "Ochiq" rejim yoqilgan bo'lsa ruxsat olinmaydi. Frontend o'chirgach shuni chaqiradi."""
+    kind = _media_kind(kind)
+    try:
+        lesson = Lesson.objects.select_related('course').get(pk=lesson_id)
+    except (Lesson.DoesNotExist, ValueError, TypeError):
+        raise NotFound(_('Dars topilmadi.'))
+    if not lesson.course.enrollments.filter(student=user, status=Enrollment.Status.APPROVED).exists():
+        raise PermissionDenied(_("Bu darsga kirish huquqingiz yo'q."))
+    if (kind == 'audio' and lesson.open_mic) or (kind == 'video' and lesson.open_camera):
+        return {'revoked': False, 'open': True}
+    identity = f'user-{user.id}'
+    try:
+        touched = asyncio.run(_revoke_media(lesson.room_name, kind, set(), only={identity}, mute=False))
+    except Exception as exc:  # noqa: BLE001 — o'quvchi interfeysini buzmaymiz
+        import logging
+
+        logging.getLogger('apps').warning('release_media LiveKit xatosi: %s', exc)
+        return {'revoked': False, 'open': False}
+    if touched:
+        _broadcast(lesson.id, f"broadcast_{_MEDIA[kind]['event']}", str(user.id))
+        audit.record(action=f'room.release_{_MEDIA[kind]["label"]}', actor=user, target=lesson, request=request)
+    return {'revoked': bool(touched), 'open': False}
+
+
+def media_mode(*, lesson: Lesson) -> dict:
+    return {'open_mic': lesson.open_mic, 'open_camera': lesson.open_camera}
+
+
+def set_media_mode(*, teacher: User, lesson_id, open_mic=None, open_camera=None, request=None) -> dict:
+    """"Hammaga mikrofon ochiq" / "Hammaga kamera ochiq" almashtirgichlari. Yoqilganda hozirgi o'quvchilarga ruxsat qo'shiladi (keyin
+    kirganlar tokenda oladi); o'chirilganda yoqilgan mikrofon/kameralar o'chiriladi va ruxsat qaytarib olinadi (egasi bilan kelishilgan
+    ochiq savol 3 bo'yicha taklif: ha, hammani cheklashdagidek)."""
+    from apps.accounts import consent
+
+    lesson = _get_owned_lesson(teacher=teacher, lesson_id=lesson_id)
+    changes = {}
+    for field, kind, value in (('open_mic', 'audio', open_mic), ('open_camera', 'video', open_camera)):
+        if value is None:
+            continue
+        if not isinstance(value, bool):
+            raise ValidationError({field: _("true yoki false bo'lishi kerak.")})
+        if value != getattr(lesson, field):
+            changes[field] = (kind, value)
+    skip = {f'user-{teacher.id}'}
+    touched_by_kind = {}
+    for field, (kind, value) in changes.items():
+        if value:
+            denied = set()
+            if kind == 'video':
+                student_ids = list(lesson.course.enrollments.filter(status=Enrollment.Status.APPROVED).values_list('student_id', flat=True))
+                denied = {f'user-{i}' for i in consent.denied_student_ids(student_ids, 'camera')}
+            _run_livekit(lambda k=kind, d=denied: _open_media(lesson.room_name, k, skip, d), lesson, f'open_media({kind})')
+        else:
+            touched_by_kind[kind] = _run_livekit(lambda k=kind: _revoke_media(lesson.room_name, k, skip), lesson, f'close_media({kind})')
+    for field, (_kind, value) in changes.items():
+        setattr(lesson, field, value)
+    if changes:
+        lesson.save(update_fields=[*changes, 'updated_at'])
+        for kind, identities in touched_by_kind.items():
+            for identity in identities:
+                _broadcast(lesson.id, f"broadcast_{_MEDIA[kind]['event']}", _student_id(identity))
+        _broadcast(lesson.id, 'broadcast_media_mode', lesson.open_mic, lesson.open_camera)
+        audit.record(action='room.media_mode', actor=teacher, target=lesson, meta=media_mode(lesson=lesson), request=request)
+    return media_mode(lesson=lesson)
 
 
 def lesson_presence(*, user: User, lesson_id) -> dict:
@@ -798,7 +974,7 @@ def lesson_presence(*, user: User, lesson_id) -> dict:
     if lesson.status == Lesson.Status.LIVE:
         people.insert(0, lesson.course.teacher)
     avatars = [person.avatar.url for person in people if person.avatar][:5]
-    return {'count': len(people), 'avatars': avatars}
+    return {'count': len(people), 'avatars': avatars, **media_mode(lesson=lesson)}
 
 
 def lesson_waiting(*, user: User, lesson_id) -> dict:
