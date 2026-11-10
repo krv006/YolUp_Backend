@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm
 from apps.lessons.models import Lesson
 
-from . import attachments, selectors, services
+from . import attachments, contacts, selectors, services, spam
 from .models import ChatRoom, Message, MessageAttachment, PinnedMessage, RoomRead
 from .serializers import ChatRoomSerializer, MessageSerializer
 
@@ -366,6 +366,21 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    @action(detail=False, methods=['post'], url_path='direct/open')
+    def direct_open(self, request):
+        """O'qituvchi -> O'Z o'quvchisi yoki uning ota-onasi: so'rovsiz chat (mavjud xonani qaytaradi yoki ACTIVE yaratadi)."""
+        room = services.open_direct(teacher=request.user, user_id=request.data.get('user_id'), request=request)
+        return Response(ChatRoomSerializer(room, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def report(self, request, pk=None):
+        """Shaxsiy chatdagi suhbatdoshni spam/haqorat deb belgilash: `{reason: insult|harassment|advertising|other, comment?}`.
+        Chat darhol bloklanadi, shikoyat admin panelga tushadi."""
+        report = spam.report_room(
+            user=request.user, room_id=pk, reason=request.data.get('reason'), comment=request.data.get('comment'), request=request,
+        )
+        return Response(spam.report_row(report), status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=['post'], url_path='direct/respond')
     def direct_respond(self, request):
         """O'qituvchi: accept yoki block."""
@@ -387,14 +402,17 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False)
     def teachers(self, request):
-        """O'quvchining o'qituvchilari — yangi direct so'rov yuborish ro'yxati uchun."""
+        """O'quvchining o'qituvchilari (ota-onaning — farzandlarining o'qituvchilari) — yangi direct so'rov yuborish ro'yxati uchun."""
         from apps.accounts.models import User
         from apps.accounts.serializers import UserSerializer
         from apps.lessons.models import Enrollment
 
-        teacher_ids = Enrollment.objects.filter(
-            student=request.user, status=Enrollment.Status.APPROVED,
-        ).values('course__teacher_id')
+        if request.user.role == User.Role.PARENT:
+            teacher_ids = contacts.children_teacher_ids(request.user)
+        else:
+            teacher_ids = Enrollment.objects.filter(
+                student=request.user, status=Enrollment.Status.APPROVED,
+            ).values('course__teacher_id')
         teachers = User.objects.filter(pk__in=teacher_ids)
         existing = {
             r.teacher_id: r for r in
@@ -409,6 +427,38 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
                 'room_id': str(room.id) if room else None,
             })
         return Response(data)
+
+
+class AdminSpamReportView(APIView):
+    """Admin: `GET /admin/reports/?status=open|resolved|dismissed` — chatdagi shikoyatlar ro'yxati (sahifalangan)."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def get(self, request):
+        from rest_framework.pagination import PageNumberPagination
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        page = paginator.paginate_queryset(spam.reports_for_admin(request.query_params.get('status')), request, view=self)
+        return paginator.get_paginated_response([spam.report_row(r) for r in page])
+
+
+class AdminSpamReportDetailView(APIView):
+    permission_classes = [RequirePerm('user.manage')]
+
+    def get(self, request, pk):
+        return Response(spam.report_row(spam._get_report(pk), with_messages=True))
+
+
+class AdminSpamReportActionView(APIView):
+    """`POST /admin/reports/<id>/resolve|dismiss|unblock/` (unblock — chatni qayta ochish)."""
+
+    permission_classes = [RequirePerm('user.manage')]
+    action = None
+
+    def post(self, request, pk):
+        report = spam.handle_report(admin=request.user, report_id=pk, action=self.action, request=request)
+        return Response(spam.report_row(report))
 
 
 class MessageDetailView(APIView):

@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from apps.accounts import selectors as account_selectors
 from apps.accounts.models import User
+from apps.chat import contacts as chat_contacts
 from apps.chat import selectors as chat_selectors
 from apps.chat.models import Message
 from apps.lessons import selectors as lesson_selectors
@@ -58,22 +59,12 @@ def _messages(user, q):
 
 
 def _people(user, q):
-    if user.role == User.Role.TEACHER:
-        found = account_selectors.teacher_people_search(user, q)
-        return [{'type': 'people', 'id': p['id'], 'title': p['name'], 'subtitle': f"@{p['username']}", 'role': p['role'],
-                 'avatar': p['avatar'], 'room_id': p['room_id']} for p in found]
-    # O'quvchi/ota-ona: o'z guruhlari o'qituvchilari
-    courses = lesson_selectors.courses_for(user).select_related('teacher')
-    seen, rows = set(), []
-    for course in courses:
-        teacher = course.teacher
-        text = f'{teacher.get_full_name()} {teacher.username}'.lower()
-        if teacher.id not in seen and q.lower() in text:
-            seen.add(teacher.id)
-            rows.append({'type': 'people', 'id': str(teacher.id), 'title': teacher.get_full_name() or teacher.username,
-                         'subtitle': f'@{teacher.username}', 'role': teacher.role,
-                         'avatar': teacher.avatar.url if teacher.avatar else None, 'room_id': None})
-    return rows
+    if user.role not in (User.Role.TEACHER, User.Role.STUDENT, User.Role.PARENT):
+        return []
+    return [{
+        'type': 'people', 'id': p['id'], 'title': p['name'], 'subtitle': f"@{p['username']}", 'role': p['role'],
+        'avatar': p['avatar'], 'room_id': p['room_id'], 'direct_status': p['direct_status'], 'can_message': p['can_message'],
+    } for p in chat_contacts.people_search(user, q)]
 
 
 FINDERS = {'groups': _groups, 'lessons': _lessons, 'quizzes': _quizzes, 'messages': _messages, 'people': _people}

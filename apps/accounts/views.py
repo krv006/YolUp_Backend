@@ -673,8 +673,10 @@ class UserSearchView(APIView):
     (lessons.CourseViewSet.search_students bilan bir xil naqsh, lekin barcha rollar)."""
 
     def get_permissions(self):
-        if getattr(self.request.user, 'role', None) == 'teacher':
-            return [IsAuthenticated()]  # o'qituvchi faqat o'z guruhlaridagi odamlarni qidiradi (pastda)
+        if getattr(self.request.user, 'role', None) in ('teacher', 'student', 'parent'):
+            # o'qituvchi — o'z guruhlaridagi odamlar; o'quvchi — hamma (faqat ism/username/avatar/rol); ota-ona — farzandining
+            # o'qituvchilari (apps.chat.contacts.people_search)
+            return [IsAuthenticated()]
         return [RequirePerm('user.manage')()]
 
     def get(self, request):
@@ -685,8 +687,10 @@ class UserSearchView(APIView):
         q = (request.query_params.get('q') or '').strip()
         if len(q) < 2:
             return Response([])
-        if request.user.role == 'teacher':
-            return Response(selectors.teacher_people_search(request.user, q))
+        if request.user.role in ('teacher', 'student', 'parent'):
+            from apps.chat import contacts
+
+            return Response(contacts.people_search(request.user, q))
         users = User.objects.filter(
             Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
         ).exclude(pk=request.user.pk).order_by('username')[:10]

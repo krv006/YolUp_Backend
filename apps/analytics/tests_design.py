@@ -161,7 +161,7 @@ class PeopleSearchTests(ScheduleBase):
 
     def test_short_query_and_other_roles(self):
         self.assertEqual(self.search('a'), [])
-        self.assertEqual(self.api(self.student).get('/api/v1/auth/users/search/', {'q': 'ab'}).status_code, 403)
+        self.assertEqual(self.api(self.student).get('/api/v1/auth/users/search/', {'q': 'ab'}).status_code, 200)  # 2026-11-10: o'quvchi ham qidira oladi
         admin = make('adm', User.Role.ADMIN)
         rows = self.api(admin).get('/api/v1/auth/users/search/', {'q': 's1'}).json()
         self.assertEqual([r['username'] for r in rows], ['s1'])  # admin eski xatti-harakat (to'liq foydalanuvchi)

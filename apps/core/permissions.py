@@ -60,6 +60,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         'stats.view_own',
     },
     PARENT: {
+        'chat.use',  # faqat shaxsiy chat (farzandining o'qituvchilari bilan); guruh chatlariga kirish selectors.can_read bilan yopiq
         'child.create',
         'link.request', 'link.view',
         'consent.manage',

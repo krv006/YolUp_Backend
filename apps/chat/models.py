@@ -41,6 +41,8 @@ class ChatRoom(TimeStampedUUIDModel):
         PENDING = 'pending', "So'rov kutilmoqda"
         ACTIVE = 'active', 'Ochiq'
         BLOCKED = 'blocked', 'Bloklangan'
+        # Spam/shikoyat sababli bloklangan (2026-11-10): yozib bo'lmaydi, qayta so'rov yuborib ham bo'lmaydi — faqat admin ochadi
+        SPAM = 'spam', 'Spam sifatida bloklangan'
 
     kind = CharField(max_length=8, choices=Kind.choices, db_index=True)
     # kind=COURSE bo'lsa:
@@ -82,6 +84,39 @@ class ChatRoom(TimeStampedUUIDModel):
         if self.kind == self.Kind.COURSE:
             return f'guruh: {self.course.title}'
         return f'direct: {self.teacher} ↔ {self.student} [{self.direct_status}]'
+
+
+class SpamReport(TimeStampedUUIDModel):
+    """Shaxsiy chatdagi suhbatdoshni spam/haqorat deb belgilash (barcha rollar). Belgilangach chat darhol
+    `spam` holatiga o'tadi (belgilangan odam yoza olmaydi), shikoyat admin panelga tushadi."""
+
+    class Reason(TextChoices):
+        INSULT = 'insult', 'Haqorat'
+        HARASSMENT = 'harassment', 'Bezovta qilish'
+        ADVERTISING = 'advertising', 'Reklama'
+        OTHER = 'other', 'Boshqa'
+
+    class Status(TextChoices):
+        OPEN = 'open', 'Ochiq'
+        RESOLVED = 'resolved', "Tasdiqlandi (chat bloklangan qoladi)"
+        DISMISSED = 'dismissed', "Rad etildi (chat qayta ochildi)"
+
+    reporter = ForeignKey('accounts.User', CASCADE, related_name='spam_reports_made')
+    reported = ForeignKey('accounts.User', CASCADE, related_name='spam_reports_received')
+    room = ForeignKey('chat.ChatRoom', CASCADE, related_name='spam_reports')
+    reason = CharField(max_length=16, choices=Reason.choices)
+    comment = TextField(blank=True, default='')
+    status = CharField(max_length=10, choices=Status.choices, default=Status.OPEN, db_index=True)
+    # Admin chatni qayta ochganda shu holatga qaytariladi
+    room_status_before = CharField(max_length=8, blank=True, default='')
+    handled_by = ForeignKey('accounts.User', SET_NULL, null=True, blank=True, related_name='+')
+    handled_at = DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.reporter} -> {self.reported} [{self.reason}/{self.status}]'
 
 
 class Message(TimeStampedUUIDModel):

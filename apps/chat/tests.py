@@ -87,15 +87,20 @@ class ChatFlowTests(TestCase):
         r = self.api(self.student).post('/api/v1/chat/rooms/direct/request/', {'teacher': 't1'})
         self.assertEqual(r.data['direct_status'], ChatRoom.DirectStatus.PENDING)
 
-    def test_student_cannot_request_foreign_teacher(self):
+    def test_student_can_request_any_teacher(self):
+        # 2026-11-10: guruhda bo'lish sharti olib tashlandi — o'quvchi istalgan o'qituvchiga so'rov yuboradi (accept/block o'qituvchida)
         other = make('t2', User.Role.TEACHER)
         r = self.api(self.student).post('/api/v1/chat/rooms/direct/request/', {'teacher': other.username})
-        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data['direct_status'], 'pending')
 
-    def test_parent_has_no_chat(self):
+    def test_parent_sees_no_group_chats(self):
+        # ota-onada endi `chat.use` bor (faqat shaxsiy chat), lekin guruh chatlari ro'yxatida bo'lmaydi
         parent = make('p1', User.Role.PARENT)
         r = self.api(parent).get('/api/v1/chat/rooms/')
-        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data['results'], [])
+        self.assertEqual(self.api(parent).get(f'/api/v1/chat/rooms/{self.course.chat_room.id}/').status_code, 404)
 
     def test_teacher_sets_group_image(self):
         room = self.course.chat_room

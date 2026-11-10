@@ -16,7 +16,7 @@ from apps.accounts.models import User
 from apps.core import audit
 from apps.lessons.models import Course, Enrollment
 
-from . import attachments, presence, push, realtime, selectors
+from . import attachments, contacts, presence, push, realtime, selectors
 from .models import ChatRoom, Message, MessageAttachment, MessageHide, MessageReaction, PinnedMessage, RoomRead
 from .serializers import member_row
 
@@ -734,32 +734,58 @@ def search_messages(*, user: User, room_id, q: str, limit=None, cursor=None) -> 
 
 @transaction.atomic
 def request_direct(*, student: User, teacher_ref: str, request=None) -> ChatRoom:
-    """O'quvchi o'z o'qituvchisiga direct so'rov yuboradi (1 martalik).
+    """O'quvchi YOKI ota-ona o'qituvchiga direct so'rov yuboradi (parametr nomi `student` — eski mijozlar uchun).
 
-    Faqat o'zi o'qiydigan kurs o'qituvchisiga. Blocklangan bo'lsa qayta so'rov
-    yuborsa yana PENDING bo'ladi (o'qituvchi yana ko'rib chiqadi).
+    2026-11-10 qoidalari: o'quvchi ISTALGAN o'qituvchiga so'rov yubora oladi (avval faqat o'z o'qituvchisiga edi);
+    ota-ona — faqat farzandining o'qituvchilariga. Blocklangan bo'lsa qayta so'rov yuborsa yana PENDING bo'ladi.
+    Spam deb belgilangan chatga qayta so'rov yuborib bo'lmaydi (faqat admin ochadi).
     """
-    if student.role != User.Role.STUDENT:
-        raise PermissionDenied(_("Faqat o'quvchi so'rov yuboradi."))
-    teacher = User.objects.filter(role=User.Role.TEACHER)\
+    requester = student
+    if requester.role not in (User.Role.STUDENT, User.Role.PARENT):
+        raise PermissionDenied(_("Faqat o'quvchi yoki ota-ona so'rov yuboradi."))
+    teacher = User.objects.filter(role=User.Role.TEACHER, is_active=True)\
         .filter(pk=teacher_ref if _is_uuid(teacher_ref) else None).first() \
-        or User.objects.filter(role=User.Role.TEACHER, username=teacher_ref).first()
+        or User.objects.filter(role=User.Role.TEACHER, is_active=True, username=teacher_ref).first()
     if teacher is None:
         raise NotFound(_("O'qituvchi topilmadi."))
-    is_my_teacher = Enrollment.objects.filter(
-        student=student, status=Enrollment.Status.APPROVED, course__teacher=teacher,
-    ).exists()
-    if not is_my_teacher:
-        raise PermissionDenied(_("Faqat o'z o'qituvchingizga yozish so'rovi yuborishingiz mumkin."))
+    if requester.role == User.Role.PARENT and teacher.pk not in contacts.children_teacher_ids(requester):
+        raise PermissionDenied(_("Faqat farzandingiz o'qituvchisiga yozish so'rovi yuborishingiz mumkin."))
 
     room, created = ChatRoom.objects.get_or_create(
-        kind=ChatRoom.Kind.DIRECT, teacher=teacher, student=student,
+        kind=ChatRoom.Kind.DIRECT, teacher=teacher, student=requester,
         defaults={'direct_status': ChatRoom.DirectStatus.PENDING},
     )
+    if not created and room.direct_status == ChatRoom.DirectStatus.SPAM:
+        raise PermissionDenied(_("Bu chat spam sifatida bloklangan. Uni faqat administrator ochishi mumkin."))
     if not created and room.direct_status == ChatRoom.DirectStatus.BLOCKED:
         room.direct_status = ChatRoom.DirectStatus.PENDING
         room.save(update_fields=['direct_status', 'updated_at'])
-    audit.record(action='chat.direct_request', actor=student, target=room, request=request)
+    audit.record(action='chat.direct_request', actor=requester, target=room, request=request)
+    return room
+
+
+@transaction.atomic
+def open_direct(*, teacher: User, user_id, request=None) -> ChatRoom:
+    """O'qituvchi O'Z o'quvchisi yoki uning tasdiqlangan ota-onasi bilan so'rovsiz chat ochadi: mavjud xonani
+    qaytaradi yoki darhol ACTIVE xona yaratadi (kutayotgan/bloklangan xonani ham ACTIVE qiladi — qaror o'qituvchiniki).
+    Spam deb belgilangan chatni faqat admin ochadi."""
+    if teacher.role != User.Role.TEACHER:
+        raise PermissionDenied(_("Faqat o'qituvchi shu amalni bajara oladi."))
+    other = User.objects.filter(pk=user_id if _is_uuid(user_id) else None, is_active=True).first()
+    if other is None:
+        raise NotFound(_('Foydalanuvchi topilmadi.'))
+    if contacts.can_message(teacher, other) != contacts.WRITE:
+        raise PermissionDenied(_("Siz faqat o'z o'quvchingiz yoki ularning ota-onasi bilan chat ocha olasiz."))
+    room, created = ChatRoom.objects.get_or_create(
+        kind=ChatRoom.Kind.DIRECT, teacher=teacher, student=other,
+        defaults={'direct_status': ChatRoom.DirectStatus.ACTIVE},
+    )
+    if not created and room.direct_status == ChatRoom.DirectStatus.SPAM:
+        raise PermissionDenied(_("Bu chat spam sifatida bloklangan. Uni faqat administrator ochishi mumkin."))
+    if not created and room.direct_status != ChatRoom.DirectStatus.ACTIVE:
+        room.direct_status = ChatRoom.DirectStatus.ACTIVE
+        room.save(update_fields=['direct_status', 'updated_at'])
+    audit.record(action='chat.direct_open', actor=teacher, target=room, request=request)
     return room
 
 
@@ -780,6 +806,8 @@ def respond_direct(*, teacher: User, room_id, action: str, request=None) -> Chat
     room = _get_room(room_id)
     if room.kind != ChatRoom.Kind.DIRECT or room.teacher_id != teacher.id:
         raise PermissionDenied(_("Bu so'rov sizga tegishli emas."))
+    if room.direct_status == ChatRoom.DirectStatus.SPAM:
+        raise PermissionDenied(_("Bu chat spam sifatida bloklangan. Uni faqat administrator ochishi mumkin."))
     if action == 'accept':
         room.direct_status = ChatRoom.DirectStatus.ACTIVE
     elif action == 'block':
