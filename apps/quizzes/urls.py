@@ -14,6 +14,7 @@ urlpatterns = [
     path('template/', views.QuizTemplateView.as_view(), name='quiz-template'),
     path('<uuid:pk>/', views.QuizDetailView.as_view(), name='quiz-detail'),
     path('<uuid:pk>/groups/<uuid:group_id>/audio/', views.QuizGroupAudioView.as_view(), name='quiz-group-audio'),
+    path('<uuid:pk>/audience/', views.QuizAudienceView.as_view(), name='quiz-audience'),
     path('<uuid:pk>/publish/', views.QuizPublishView.as_view(), name='quiz-publish'),
     path('<uuid:pk>/export/', views.QuizExportView.as_view(), name='quiz-export'),
     path('<uuid:pk>/attempts/', views.QuizAttemptListCreateView.as_view(), name='quiz-attempts'),

@@ -273,21 +273,47 @@ def post_homework_message(*, user: User, room_id, assignment_id) -> Message:
     return _create_assignment_card(assignment, sender=user)
 
 
+def _image_owner_room(teacher: User, room_id) -> ChatRoom:
+    """Rasmini o'zgartirish mumkin bo'lgan xona: o'qituvchining guruhi (kurs chati) yoki o'z kanali."""
+    room = _get_room(room_id)
+    if room.kind == ChatRoom.Kind.COURSE and room.course.teacher_id == teacher.id:
+        return room
+    if room.kind == ChatRoom.Kind.CHANNEL and room.teacher_id == teacher.id:
+        return room
+    raise PermissionDenied(_("Faqat guruh o'qituvchisi yoki kanal egasi rasmni o'zgartira oladi."))
+
+
 @transaction.atomic
 def set_group_image(*, teacher: User, room_id, image, request=None) -> ChatRoom:
-    """Guruh (kurs) chat rasmini o'rnatadi — faqat kurs egasi o'qituvchi."""
+    """Guruh (kurs) yoki kanal rasmini o'rnatadi — faqat guruh o'qituvchisi / kanal egasi."""
     if not image:
         raise ValidationError({'image': _('Rasm fayli kerak.')})
-    room = _get_room(room_id)
-    if room.kind != ChatRoom.Kind.COURSE or room.course.teacher_id != teacher.id:
-        raise PermissionDenied(_("Faqat kurs o'qituvchisi guruh rasmini o'zgartira oladi."))
+    room = _image_owner_room(teacher, room_id)
     room.image = image
     room.save(update_fields=['image', 'updated_at'])
-    # Kurs ro'yxatlari ham shu rasmni ko'rsatadi (`/courses/` -> `avatar`) — bir xil fayl
-    from apps.lessons.models import Course
+    if room.kind == ChatRoom.Kind.COURSE:
+        # Kurs ro'yxatlari ham shu rasmni ko'rsatadi (`/courses/` -> `avatar`) — bir xil fayl
+        from apps.lessons.models import Course
 
-    Course.objects.filter(pk=room.course_id).update(avatar=room.image.name)
-    audit.record(action='chat.group_image_set', actor=teacher, target=room, request=request)
+        Course.objects.filter(pk=room.course_id).update(avatar=room.image.name)
+    audit.record(
+        action='chat.channel_image_set' if room.kind == ChatRoom.Kind.CHANNEL else 'chat.group_image_set',
+        actor=teacher, target=room, request=request,
+    )
+    return room
+
+
+@transaction.atomic
+def remove_group_image(*, teacher: User, room_id, request=None) -> ChatRoom:
+    """Rasmni olib tashlaydi (kanal/guruh)."""
+    room = _image_owner_room(teacher, room_id)
+    room.image = None
+    room.save(update_fields=['image', 'updated_at'])
+    if room.kind == ChatRoom.Kind.COURSE:
+        from apps.lessons.models import Course
+
+        Course.objects.filter(pk=room.course_id).update(avatar=None)
+    audit.record(action='chat.image_removed', actor=teacher, target=room, request=request)
     return room
 
 

@@ -146,8 +146,7 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
             'min': MIN_QUESTIONS, 'max': MAX_QUESTIONS,
         }})
     if course is None:
-        if not subject:
-            raise ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
+        pass  # guruh ham, fan ham ixtiyoriy
     else:
         if course.teacher_id != teacher.id:
             raise PermissionDenied(_('Bu kurs sizga tegishli emas.'))

@@ -211,3 +211,43 @@ class CourseKindOnRoomTests(BaseChatRules):
         self.assertEqual(kinds, {'A': 'group', 'Club': 'club'})
         one = self.api(self.student).get(f'/api/v1/chat/rooms/{club.chat_room.id}/').json()
         self.assertEqual(one['course_kind'], 'club')
+
+
+class ChannelImageTests(BaseChatRules):
+    def make_image(self):
+        from apps.chat.tests import make_image
+
+        return make_image()
+
+    def channel(self):
+        r = self.api(self.teacher).post('/api/v1/chat/channels/', {'title': 'Rasmli', 'course_ids': [str(self.course.id)]}, format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.data['id']
+
+    def test_owner_sets_and_removes_the_channel_image(self):
+        cid = self.channel()
+        r = self.api(self.teacher).post(f'/api/v1/chat/channels/{cid}/image/', {'image': self.make_image()}, format='multipart')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn('/media/group_images/', r.data['image'])
+        listed = self.api(self.student).get(f'/api/v1/chat/rooms/{cid}/')
+        self.assertIn('/media/group_images/', listed.data['image'])  # a'zolar ham ko'radi
+        gone = self.api(self.teacher).delete(f'/api/v1/chat/channels/{cid}/image/')
+        self.assertEqual(gone.status_code, 200, gone.content)
+        self.assertFalse(gone.data['image'])
+
+    def test_the_generic_rooms_endpoint_works_for_channels_too(self):
+        cid = self.channel()
+        r = self.api(self.teacher).post(f'/api/v1/chat/rooms/{cid}/image/', {'image': self.make_image()}, format='multipart')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn('/media/group_images/', r.data['image'])
+
+    def test_members_and_other_teachers_cannot_change_it(self):
+        cid = self.channel()
+        for user in (self.student, make('c_t_other', User.Role.TEACHER)):
+            r = self.api(user).post(f'/api/v1/chat/channels/{cid}/image/', {'image': self.make_image()}, format='multipart')
+            self.assertIn(r.status_code, (403, 404))
+
+    def test_an_image_file_is_required(self):
+        cid = self.channel()
+        r = self.api(self.teacher).post(f'/api/v1/chat/channels/{cid}/image/', {}, format='multipart')
+        self.assertEqual(r.status_code, 400)

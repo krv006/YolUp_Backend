@@ -3,6 +3,8 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
+import uuid
+
 from django.db.models import Count, F, IntegerField, OuterRef, Prefetch, Q, Subquery, Window
 from django.db.models.functions import Coalesce
 from django.db.models.functions import RowNumber
@@ -18,7 +20,7 @@ from apps.accounts.models import User
 from apps.core.permissions import RequirePerm, TestCreationAllowed
 
 from . import ai_jobs, attempts_export, export, selectors, services
-from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizDraft
+from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizAttempt, QuizDraft
 from .serializers import (
     AiQuizCreateSerializer,
     AiQuizJobSerializer,
@@ -91,6 +93,7 @@ class QuizListCreateView(generics.ListCreateAPIView):
             title=data.get('title', ''), description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
             groups=data.get('groups'), status=Quiz.Status.DRAFT if as_draft else Quiz.Status.PUBLISHED,
+            student_ids=data.get('student_ids'),
         )
         return Response(
             QuizDetailSerializer(quiz, context={'request': request}).data, status=status.HTTP_201_CREATED,
@@ -286,6 +289,55 @@ class QuizNotAttemptedView(APIView):
                 'avatar_url': request.build_absolute_uri(avatar) if avatar else None,
             })
         return Response(rows)
+
+
+class QuizAudienceView(APIView):
+    """Testni guruhning qaysi o'quvchilari ocha oladi: `GET` — guruhdagi hamma o'quvchi `{assigned, attempted,
+    can_attend}` bilan; `PUT {student_ids: [...]}` — faqat shularga berish (bo'sh ro'yxat — hammaga)."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')()]
+
+    def _payload(self, request, quiz):
+        from apps.lessons.models import Enrollment
+
+        rows = []
+        if quiz.course_id:
+            restricted = set(quiz.assigned_students.values_list('pk', flat=True))
+            attempted = set(QuizAttempt.objects.filter(quiz=quiz).values_list('student_id', flat=True))
+            students = User.objects.filter(
+                enrollments__course_id=quiz.course_id, enrollments__status=Enrollment.Status.APPROVED,
+            ).distinct()
+            for student in sorted(students, key=lambda u: (u.get_full_name() or u.username).lower()):
+                avatar = student.avatar.url if student.avatar else None
+                assigned = not restricted or student.pk in restricted
+                rows.append({
+                    'id': str(student.id), 'name': student.get_full_name() or student.username,
+                    'username': student.username,
+                    'avatar_url': request.build_absolute_uri(avatar) if avatar else None,
+                    'assigned': assigned, 'can_attend': assigned, 'attempted': student.pk in attempted,
+                })
+        return {
+            'restricted': quiz.assigned_students.exists(), 'total': len(rows),
+            'assigned_count': sum(1 for r in rows if r['assigned']), 'students': rows,
+        }
+
+    def get(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        return Response(self._payload(request, quiz))
+
+    def put(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        ids = request.data.get('student_ids')
+        if not isinstance(ids, list):
+            raise ValidationError({'student_ids': _("O'quvchilar ro'yxatini yuboring (bo'sh ro'yxat — hammaga).")})
+        try:
+            ids = [str(uuid.UUID(str(i))) for i in ids]
+        except ValueError:
+            raise ValidationError({'student_ids': _("Noto'g'ri o'quvchi identifikatori.")})
+        newly = services.set_audience(teacher=request.user, quiz=quiz, student_ids=ids)
+        services.notify_newly_assigned(quiz, newly)
+        return Response(self._payload(request, quiz))
 
 
 class QuizDetailView(APIView):

@@ -279,6 +279,13 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         data['reviewed_by'] = s.reviewed_by.username if s.reviewed_by_id else None
         data['ai_overall_score'] = s.ai_overall_score
         data['ai_grade'] = s.ai_grade
+        # AI holati — "AI tekshiruv natijasi" oynasi bo'sh ("— ball, Baho yo'q") qolmasligi uchun aniq holat:
+        # checking (hali tekshirilmoqda) | ready (natija bor) | failed (baholay olmadi — o'zingiz baholang) | none (AI ishlatilmagan)
+        data['ai_state'] = (
+            'checking' if s.status == Submission.Status.CHECKING
+            else 'ready' if s.ai_result else 'failed' if s.error else 'none'
+        )
+        data['ai_checking_since'] = s.updated_at if s.status == Submission.Status.CHECKING else None
         if include_result:
             data['ai_result'] = s.ai_result
             data['focus'] = focus_summary(assignment_id=s.assignment_id, student=s.student)
@@ -766,9 +773,10 @@ def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: s
     if answers not in (None, '', []) and not has_questions:
         raise ValidationError({'answers': _("Bu vazifada savollar yo'q.")})
     parsed_answers = hw_questions.parse_answers(a, answers) if has_questions else []
-    if upload is None and not has_questions:
-        raise ValidationError({'file': _('Fayl majburiy.')})
-    if upload is None and not parsed_answers:
+    if upload is None and not has_questions and not extra_uploads and not (comment or '').strip():
+        # Fayl majburiy emas (2026-11-10): faqat matnli javob (izoh) ham topshiriq bo'ladi
+        raise ValidationError({'file': _('Fayl yuklang yoki javobingizni izohga yozing.')})
+    if upload is None and not parsed_answers and has_questions:
         raise ValidationError({'answers': _('Javob yoki fayl kerak.')})
     extra_uploads = list(extra_uploads or [])
     if upload is None and extra_uploads:
@@ -814,8 +822,8 @@ def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: s
         )
     if has_questions:
         return _finish_question_submission(submission, a, parsed_answers)
-    if not a.ai_check or not _start_ai_check(submission):
-        # AI sozlanmagan yoki ishlamayapti — o'qituvchi to'g'ridan-to'g'ri baholaydi
+    if not submission.file or not a.ai_check or not _start_ai_check(submission):
+        # Faylsiz (faqat matnli) javob, AI sozlanmagan yoki ishlamayapti — o'qituvchi to'g'ridan-to'g'ri baholaydi
         _notify_new_submission(submission)
     return _submission_dict(submission)
 
@@ -938,6 +946,8 @@ def submission_file(*, user: User, submission_id, index=None) -> tuple:
     )
     if not allowed:
         raise PermissionDenied(_("Bu faylni ko'rish huquqingiz yo'q."))
+    if not s.file and index in (None, '', '0', 0) and not s.extra_files.exists():
+        raise NotFound(_("Bu topshiriqda fayl yo'q (faqat matnli javob)."))
     if index not in (None, '', '0', 0):
         try:
             extra = s.extra_files.all()[int(index) - 1]

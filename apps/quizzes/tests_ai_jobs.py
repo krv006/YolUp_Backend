@@ -180,11 +180,13 @@ class AiQuizJobTests(QuizTestBase):
         self.assertEqual(self.start(question_count=200).status_code, 400)
         self.assertEqual(self.start(standard='toefl').status_code, 400)
         self.assertEqual(self.start(topic='  ').status_code, 400)
-        self.assertEqual(self.start(course='', subject='').status_code, 400)  # guruh ham fan ham yo'q
         self.auth(self.teacher_token)
         no_file = self.client.post('/api/v1/quizzes/ai-generate/', {
             'topic': 'X', 'standard': 'sat', 'course': self.course_id}, format='multipart')
         self.assertEqual(no_file.status_code, 400)
+
+    def test_job_without_group_and_subject_is_allowed(self):
+        self.assertEqual(self.start(course='', subject='').status_code, 202)  # guruh ham fan ham ixtiyoriy (2026-11-10)
 
     def test_subject_only_job_is_allowed(self):
         resp = self.start(course='', subject='math')

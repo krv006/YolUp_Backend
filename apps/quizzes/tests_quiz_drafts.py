@@ -53,8 +53,10 @@ class ImportSavesDraftTests(QuizTestBase):
         second = quiz.questions.get(order=1)
         self.assertEqual(second.options.filter(is_correct=True).count(), 0)
 
-    def test_import_needs_course_or_subject_when_saving(self):
-        self.assertEqual(self.import_docx(topic='x').status_code, 400)
+    def test_import_with_a_topic_only_saves_an_ungrouped_draft(self):
+        resp = self.import_docx(topic='x')  # guruh ham, fan ham majburiy emas (2026-11-10)
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertIsNone(resp.json()['course'])
 
     def test_google_form_import_saves_ungrouped_draft_by_subject(self):
         self.auth(self.teacher_token)

@@ -101,3 +101,67 @@ class AssignmentExtrasTests(HomeworkBase):
         detail = self.api(self.student).get(f'/api/v1/homework/assignments/{self.assignment()}/').json()
         self.assertIsNone(detail['attachment_size'])
         self.assertIsNone(detail['lesson_starts_at'])
+
+
+class TextOnlySubmissionTests(HomeworkBase):
+    """Fayl majburiy emas (2026-11-10): faqat izohdagi matnli javob ham topshiriq bo'ladi."""
+
+    def post(self, aid, **data):
+        return self.api(self.student).post(f'/api/v1/homework/assignments/{aid}/submit/', data, format='multipart')
+
+    def test_a_text_answer_without_a_file_is_accepted_and_goes_to_the_teacher(self):
+        aid = self.assignment()
+        resp = self.post(aid, comment="2 + 2 = 4, chunki ikki marta ikki")
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['files'], [])
+        self.assertEqual(resp.data['comment'], "2 + 2 = 4, chunki ikki marta ikki")
+        sub = Submission.objects.get(pk=resp.data['id'])
+        self.assertEqual(sub.status, Submission.Status.PENDING_REVIEW)  # AI faylsiz javobga yuborilmaydi
+        self.assertEqual(sub.original_name, '')
+
+    def test_neither_a_file_nor_a_comment_is_still_rejected(self):
+        aid = self.assignment()
+        self.assertEqual(self.post(aid).status_code, 400)
+        self.assertEqual(self.post(aid, comment='   ').status_code, 400)
+
+    def test_the_teacher_sees_the_text_answer_and_has_no_file_to_download(self):
+        aid = self.assignment()
+        sub_id = self.post(aid, comment='Javobim shu').data['id']
+        detail = self.api(self.teacher).get(f'/api/v1/homework/submissions/{sub_id}/')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data['comment'], 'Javobim shu')
+        self.assertEqual(self.api(self.teacher).get(f'/api/v1/homework/submissions/{sub_id}/file/').status_code, 404)
+        reviewed = self.review(sub_id, {'overall_score': 80})
+        self.assertEqual(reviewed.status_code, 200, reviewed.content)
+
+
+class AiStateTests(HomeworkBase):
+    def state(self, sub):
+        return self.api(self.teacher).get(f'/api/v1/homework/submissions/{sub.id}/').data
+
+    def make_sub(self, **fields):
+        aid = self.assignment()
+        resp = self.submit(aid)
+        sub = Submission.objects.get(pk=resp.data['id'])
+        Submission.objects.filter(pk=sub.pk).update(**fields)
+        sub.refresh_from_db()
+        return sub
+
+    def test_teacher_sees_a_clear_ai_state(self):
+        checking = self.make_sub(status=Submission.Status.CHECKING, ai_result=None, error='')
+        data = self.state(checking)
+        self.assertEqual(data['ai_state'], 'checking')
+        self.assertIsNotNone(data['ai_checking_since'])
+
+        ready = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result={'overall_score': 70}, error='')
+        self.assertEqual(self.state(ready)['ai_state'], 'ready')
+
+        failed = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result=None, error="AI baholay olmadi")
+        data = self.state(failed)
+        self.assertEqual(data['ai_state'], 'failed')
+        self.assertIsNone(data['ai_checking_since'])
+
+    def test_students_do_not_get_the_ai_state(self):
+        sub = self.make_sub(status=Submission.Status.CHECKING)
+        data = self.api(self.student).get(f'/api/v1/homework/submissions/{sub.id}/').data
+        self.assertNotIn('ai_state', data)

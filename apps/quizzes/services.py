@@ -34,6 +34,67 @@ def _enrolled_students(course: Course):
     return User.objects.filter(enrollments__course=course, enrollments__status=_ENROLLED)
 
 
+def audience_students(quiz: Quiz):
+    """Testni ocha oladigan o'quvchilar: belgilangan bo'lsa — faqat shular (va hali guruhda bo'lganlari), aks holda
+    guruhdagi hamma tasdiqlangan o'quvchi. Guruhsiz testda bo'sh."""
+    if quiz.course_id is None:
+        return User.objects.none()
+    students = _enrolled_students(quiz.course).distinct()
+    if quiz.assigned_students.exists():
+        students = students.filter(assigned_quizzes=quiz)
+    return students
+
+
+def can_attend(quiz: Quiz, student: User) -> bool:
+    if quiz.course_id is None or not _enrolled_students(quiz.course).filter(pk=student.pk).exists():
+        return False
+    return not quiz.assigned_students.exists() or quiz.assigned_students.filter(pk=student.pk).exists()
+
+
+def set_audience(*, teacher: User, quiz: Quiz, student_ids) -> list:
+    """Testni guruhning faqat ba'zi o'quvchilariga berish. `student_ids` bo'sh/None yoki guruhning hamma o'quvchisi
+    bo'lsa — cheklov olib tashlanadi (hamma). Yangi qo'shilgan o'quvchilarga e'lon qilingan test haqida xabar boradi.
+    Qaytaradi: yangi qo'shilgan o'quvchilar ro'yxati."""
+    if not _is_owner(quiz, teacher):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    if quiz.course_id is None:
+        raise ValidationError({'student_ids': _("Guruhsiz testni o'quvchilarga ajratib bo'lmaydi — avval guruhga bering.")})
+    ids = {str(i) for i in (student_ids or [])}
+    enrolled = {str(u.pk): u for u in _enrolled_students(quiz.course).distinct()}
+    unknown = ids - set(enrolled)
+    if unknown:
+        raise ValidationError({'student_ids': _("Ba'zi o'quvchilar bu guruhda emas.")})
+    before = set(quiz.assigned_students.values_list('pk', flat=True))
+    everyone_before = not before
+    if not ids or ids == set(enrolled):
+        quiz.assigned_students.clear()
+        newly = [] if everyone_before else [u for u in enrolled.values() if u.pk not in before]
+    else:
+        quiz.assigned_students.set([enrolled[i] for i in ids])
+        # hamma ilgari ham ko'rgan edi (xabar olgan) — faqat cheklangan ro'yxatga keyin qo'shilganlarga xabar boradi
+        newly = [] if everyone_before else [enrolled[i] for i in ids if enrolled[i].pk not in before]
+    return newly
+
+
+def notify_newly_assigned(quiz: Quiz, students) -> None:
+    """Keyin ro'yxatga qo'shilgan o'quvchilarga e'lon qilingan (ochiq) test haqida xabar."""
+    if students and quiz.status == Quiz.Status.PUBLISHED and (quiz.opens_at is None or quiz.opens_at <= timezone.now()):
+        transaction.on_commit(lambda: _notify_students(quiz, students))
+
+
+def _notify_students(quiz: Quiz, students) -> None:
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    description = f'«{quiz.course.title}»: yangi test qo\'shildi — «{quiz.title or quiz.topic}».'
+    for student in students:
+        send_notification(
+            sender=quiz.course.teacher, description=description,
+            target_type=Notification.Target.USER, user_id=student.id,
+            link_type='quiz', link_id=str(quiz.id),
+        )
+
+
 def _is_owner(quiz: Quiz, teacher: User) -> bool:
     if quiz.author_id == teacher.id:
         return True
@@ -51,16 +112,7 @@ def _used_in_exam(quiz: Quiz) -> bool:
 def _notify_new_quiz(quiz: Quiz) -> None:
     """apps.homework._notify_new_assignment bilan bir xil naqsh — real-time
     push (WebSocket) send_notification ichida avtomatik bo'ladi."""
-    from apps.notifications.models import Notification
-    from apps.notifications.services import send_notification
-
-    description = f'«{quiz.course.title}»: yangi test qo\'shildi — «{quiz.title or quiz.topic}».'
-    for student in _enrolled_students(quiz.course):
-        send_notification(
-            sender=quiz.course.teacher, description=description,
-            target_type=Notification.Target.USER, user_id=student.id,
-            link_type='quiz', link_id=str(quiz.id),
-        )
+    _notify_students(quiz, audience_students(quiz))
 
 
 T = Question.Type
@@ -159,12 +211,12 @@ def create_quiz(
     *, teacher: User, topic: str, questions: list, course: Course | None = None,
     subject: str = '', lesson: Lesson | None = None, title: str = '', description: str = '',
     due_at=None, opens_at=None, status: str = Quiz.Status.PUBLISHED, groups: list | None = None,
+    student_ids=None,
 ) -> Quiz:
     if not topic.strip():
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
     if course is None:
-        if not subject:
-            raise ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
+        # Guruh ham, fan ham majburiy emas (2026-11-10): guruhsiz test faqat muallifga ko'rinadi, keyin guruhga beriladi
         if lesson is not None:
             raise ValidationError({'lesson': _("Guruhsiz testni darsga biriktirib bo'lmaydi.")})
     else:
@@ -181,6 +233,8 @@ def create_quiz(
     group_objs = sync_groups(quiz, groups or [])
     for q_index, q_data in enumerate(questions):
         _create_question(quiz, q_index, q_data, group_objs)
+    if student_ids:
+        set_audience(teacher=teacher, quiz=quiz, student_ids=student_ids)
 
     # Faqat DARHOL ochiq, e'lon qilingan test uchun bildirishnoma yuboriladi —
     # kelajakdagi "ochilish kuni"si bo'lgan yoki qoralama testda hali ko'ra
@@ -306,7 +360,7 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
 
 
 _EDITABLE_FIELDS = (
-    'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course',
+    'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course', 'student_ids',
 )
 
 
@@ -330,6 +384,7 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
     groups = fields.pop('groups', None)
     new_course = fields.pop('course', None)
     requested_status = fields.pop('status', None)
+    student_ids = fields.pop('student_ids', None)
     moved = False
     if new_course is not None and new_course.id != quiz.course_id:
         # Faqat guruhsiz (fan bo'yicha, masalan AI yaratgan) testni o'z guruhiga biriktirish mumkin
@@ -343,6 +398,9 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         quiz.save(update_fields=['course', 'subject'])
     if requested_status == Quiz.Status.DRAFT and quiz.status == Quiz.Status.PUBLISHED:
         raise ValidationError({'status': _("E'lon qilingan testni qoralamaga qaytarib bo'lmaydi.")})
+    newly_assigned = []
+    if student_ids is not None:
+        newly_assigned = set_audience(teacher=teacher, quiz=quiz, student_ids=student_ids)
     if questions is not None:
         if QuizAttempt.objects.filter(quiz=quiz).exists():
             raise ValidationError({
@@ -382,6 +440,9 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
             publish_quiz(teacher=teacher, quiz=quiz)  # tushunarli 400 xabari uchun
     if moved and quiz.status == Quiz.Status.PUBLISHED and not published_now:
         _notify_if_open(quiz)  # e'lon qilingan test guruhga endi tushdi — o'quvchilarga xabar
+    elif newly_assigned and not moved and not published_now and quiz.status == Quiz.Status.PUBLISHED:
+        if quiz.opens_at is None or quiz.opens_at <= timezone.now():
+            transaction.on_commit(lambda: _notify_students(quiz, newly_assigned))  # keyin qo'shilgan o'quvchilarga xabar
     return quiz
 
 
@@ -433,6 +494,8 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds
     ).exists()
     if not is_enrolled:
         raise PermissionDenied(_('Siz bu kursga yozilmagansiz.'))
+    if not can_attend(quiz, student):
+        raise PermissionDenied(_("Bu test sizga berilmagan."))
 
     questions = list(quiz.questions.prefetch_related('options'))
     given_by_question = {}

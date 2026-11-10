@@ -1,6 +1,6 @@
 """Quizzes selector qatlami — "kim nimani ko'radi" qoidalari bitta joyda
 (apps.lessons.selectors.lessons_for bilan bir xil naqsh)."""
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 
 from apps.accounts.models import ParentChildLink, User
@@ -21,16 +21,23 @@ def quizzes_for(user: User) -> QuerySet[Quiz]:
     # o'qituvchi esa tayyorlash uchun har doim ko'radi (yuqorida qaytdi).
     # Qoralama (`draft`) ham faqat o'qituvchiga ko'rinadi.
     not_yet_opened = Q(opens_at__isnull=False, opens_at__gt=timezone.now()) | Q(status=Quiz.Status.DRAFT)
+    # Test guruhning faqat ba'zi o'quvchilariga berilgan bo'lsa (`assigned_students` bo'sh emas) — boshqalarga ko'rinmaydi
+    through = Quiz.assigned_students.through
+    restricted = Exists(through.objects.filter(quiz=OuterRef('pk')))
     if user.role == User.Role.STUDENT:
+        mine = Exists(through.objects.filter(quiz=OuterRef('pk'), user=user))
         return qs.filter(
             course__enrollments__student=user, course__enrollments__status=_ENROLLED,
-        ).exclude(not_yet_opened)
+        ).filter(~restricted | mine).exclude(not_yet_opened)
     if user.role == User.Role.PARENT:
+        child_assigned = Exists(through.objects.filter(
+            quiz=OuterRef('pk'), user__parent_links__parent=user, user__parent_links__status=_APPROVED,
+        ))
         return qs.filter(
             course__enrollments__status=_ENROLLED,
             course__enrollments__student__parent_links__parent=user,
             course__enrollments__student__parent_links__status=_APPROVED,
-        ).exclude(not_yet_opened).distinct()
+        ).filter(~restricted | child_assigned).exclude(not_yet_opened).distinct()
     return qs
 
 

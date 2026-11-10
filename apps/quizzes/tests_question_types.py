@@ -234,22 +234,23 @@ class SubjectQuizTests(QuizTestBase):
         payload.update(extra)
         return self.client.post('/api/v1/quizzes/', payload, format='json')
 
-    def test_create_without_course_needs_subject(self):
+    def test_create_without_course_may_skip_the_subject(self):
         resp = self.make_subject_quiz()
         self.assertEqual(resp.status_code, 201, resp.content)
         body = resp.json()
         self.assertIsNone(body['course'])
         self.assertEqual(body['subject'], 'chemistry')
         self.assertTrue(body['subject_label'])
-        self.assertEqual(self.make_subject_quiz(subject='').status_code, 400)
+        self.assertEqual(self.make_subject_quiz(subject='').status_code, 201)  # fan ixtiyoriy (2026-11-10)
         self.assertEqual(self.make_subject_quiz(subject='nope').status_code, 400)
 
-    def test_neither_course_nor_subject_is_400(self):
+    def test_neither_course_nor_subject_is_allowed(self):
         self.auth(self.teacher_token)
         resp = self.client.post(
             '/api/v1/quizzes/', {'topic': 'x', 'title': 'x', 'questions': self.QUESTION}, format='json',
         )
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 201, resp.content)  # guruh ham, fan ham majburiy emas (2026-11-10)
+        self.assertIsNone(resp.json()['course'])
 
     def test_course_quiz_takes_subject_from_course(self):
         self.auth(self.teacher_token)

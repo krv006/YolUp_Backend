@@ -301,7 +301,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     ordering_fields = ['starts_at']
 
     def get_permissions(self):
-        if self.action == 'create':
+        if self.action in ('create', 'bulk_create'):
             return [RequirePerm('lesson.schedule')()]
         if self.action in ('update', 'partial_update', 'destroy'):
             return [RequirePerm('lesson.edit')()]
@@ -343,6 +343,44 @@ class LessonViewSet(viewsets.ModelViewSet):
             return
         serializer.instance = services.schedule_lesson(
             teacher=self.request.user, course=course, request=self.request, **data,
+        )
+
+    BULK_MAX = 50
+
+    @action(detail=False, methods=['post'], url_path='bulk')
+    def bulk_create(self, request):
+        """Bir so'rovda bir nechta (turli kun/soatdagi) dars yaratish: `{course, lessons: [{title, starts_at,
+        duration_min?, note?}, ...]}` (≤50). Hammasi yoki hech biri (birortasi xato bo'lsa hech narsa yaratilmaydi);
+        xato — `{"lessons": {"<indeks>": {maydon: [xabar]}}}`. Haftalik takrorlanish uchun odatdagidek `recurrence`."""
+        from django.db import transaction
+
+        course_id = request.data.get('course')
+        items = request.data.get('lessons')
+        if not isinstance(items, list) or not items:
+            raise ValidationError({'lessons': _("Kamida bitta dars yuboring.")})
+        if len(items) > self.BULK_MAX:
+            raise ValidationError({'lessons': _("Bir vaqtda %(n)s tadan ko'p dars qo'shib bo'lmaydi.") % {'n': self.BULK_MAX}})
+        errors, parsed = {}, []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors[str(index)] = {'non_field_errors': [_("Noto'g'ri dars ma'lumoti.")]}
+                continue
+            ser = self.get_serializer(data={**item, 'course': item.get('course') or course_id})
+            if ser.is_valid():
+                parsed.append(dict(ser.validated_data))
+            else:
+                errors[str(index)] = ser.errors
+        if errors:
+            raise ValidationError({'lessons': errors})
+        with transaction.atomic():
+            lessons = []
+            for data in parsed:
+                course = data.pop('course')
+                data.pop('recurrence', None)  # ommaviy qo'shishda alohida takrorlanish yo'q
+                lessons.append(services.schedule_lesson(teacher=request.user, course=course, request=request, **data))
+        return Response(
+            {'count': len(lessons), 'lessons': LessonSerializer(lessons, many=True, context={'request': request}).data},
+            status=status.HTTP_201_CREATED,
         )
 
     def perform_update(self, serializer):

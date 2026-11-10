@@ -22,6 +22,7 @@ from django.db.models import (
     FloatField,
     ForeignKey,
     JSONField,
+    ManyToManyField,
     PositiveIntegerField,
     TextField,
     TextChoices,
@@ -74,6 +75,12 @@ class Quiz(TimeStampedUUIDModel):
     # STUDENT/PARENT uchun ko'rinmaydi (selectors.quizzes_for); o'qituvchi/admin
     # tayyorlash uchun har doim ko'radi.
     opens_at = DateTimeField(null=True, blank=True, db_index=True)
+
+    # Test guruhdagi FAQAT ba'zi o'quvchilarga berilgan bo'lsa — shular. Bo'sh = guruhdagi hamma
+    # (2026-11-10, "testni guruhga berish" kartasi). Guruhdan chiqqan o'quvchi baribir kira olmaydi.
+    assigned_students = ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True, related_name='assigned_quizzes',
+    )
 
     class Meta:
         ordering = ['-created_at']

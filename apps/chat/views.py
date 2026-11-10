@@ -400,12 +400,16 @@ class ChatRoomViewSet(viewsets.ReadOnlyModelViewSet):
         )
         return Response(ChatRoomSerializer(room, context={'request': request}).data)
 
-    @action(detail=True, methods=['post'], url_path='image')
+    @action(detail=True, methods=['post', 'delete'], url_path='image')
     def set_image(self, request, pk=None):
-        """Guruh (kurs) chat rasmini o'rnatadi — faqat kurs o'qituvchisi."""
-        room = services.set_group_image(
-            teacher=request.user, room_id=pk, image=request.FILES.get('image'), request=request,
-        )
+        """Guruh (kurs) yoki kanal rasmini o'rnatadi (`POST` multipart `image`) / olib tashlaydi (`DELETE`) —
+        faqat guruh o'qituvchisi yoki kanal egasi."""
+        if request.method == 'DELETE':
+            room = services.remove_group_image(teacher=request.user, room_id=pk, request=request)
+        else:
+            room = services.set_group_image(
+                teacher=request.user, room_id=pk, image=request.FILES.get('image'), request=request,
+            )
         return Response(ChatRoomSerializer(room, context={'request': request}).data)
 
     @action(detail=False)
@@ -482,6 +486,17 @@ class ChannelViewSet(viewsets.ViewSet):
         """Guruhni kanaldan ajratish: faqat shu guruh orqali kelgan (alohida tanlanmagan) a'zolar chiqariladi -> `{removed: n}`."""
         removed = channel_service.unlink_course(teacher=request.user, room_id=pk, course_id=course_id, request=request)
         return Response({'removed': removed})
+
+    @action(detail=True, methods=['post', 'delete'], url_path='image')
+    def image(self, request, pk=None):
+        """Kanal rasmi: `POST` multipart `image` / `DELETE` — olib tashlash (`/chat/rooms/<id>/image/` bilan bir xil)."""
+        if request.method == 'DELETE':
+            room = services.remove_group_image(teacher=request.user, room_id=pk, request=request)
+        else:
+            room = services.set_group_image(
+                teacher=request.user, room_id=pk, image=request.FILES.get('image'), request=request,
+            )
+        return Response(self._room(request, room))
 
     @action(detail=True, methods=['delete'], url_path=r'members/(?P<user_id>[^/.]+)')
     def remove_member(self, request, pk=None, user_id=None):

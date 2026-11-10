@@ -156,12 +156,14 @@ class QuizCreateSerializer(serializers.ModelSerializer):
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     questions = QuestionWriteSerializer(many=True)
     groups = GroupWriteSerializer(many=True, required=False)
+    # Faqat shu o'quvchilarga berish (bo'sh/yo'q = guruhdagi hamma)
+    student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
 
     class Meta:
         model = Quiz
         fields = [
             'course', 'subject', 'lesson', 'topic', 'title', 'description', 'due_at', 'opens_at',
-            'questions', 'groups',
+            'questions', 'groups', 'student_ids',
         ]
 
     def validate_questions(self, questions):
@@ -170,8 +172,6 @@ class QuizCreateSerializer(serializers.ModelSerializer):
         return questions
 
     def validate(self, attrs):
-        if attrs.get('course') is None and not attrs.get('subject'):
-            raise serializers.ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
         return attrs
 
 
@@ -192,8 +192,6 @@ class ImportSaveSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
 
     def validate(self, attrs):
-        if attrs.get('course') is None and not attrs.get('subject'):
-            raise serializers.ValidationError({'subject': _('Guruh yoki fan tanlanishi shart.')})
         return attrs
 
 
@@ -210,10 +208,13 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
     groups = GroupWriteSerializer(many=True, required=False)
     # Guruhsiz testni guruhga biriktirish (services.update_quiz tekshiradi)
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False)
+    student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
 
     class Meta:
         model = Quiz
-        fields = ['topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course']
+        fields = [
+            'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course', 'student_ids',
+        ]
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
             'description': {'required': False, 'allow_blank': True},
@@ -225,14 +226,27 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
         return questions
 
 
-class QuizListSerializer(SubjectLabelMixin, serializers.ModelSerializer):
+class AudienceMixin(serializers.Serializer):
+    """`student_ids`: test faqat shu o'quvchilarga berilgan; `null` — guruhdagi hamma. Faqat o'qituvchi/admin ko'radi."""
+
+    student_ids = serializers.SerializerMethodField()
+
+    def get_student_ids(self, obj):
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is None or getattr(user, 'role', None) not in ('teacher', 'admin', 'super_admin'):
+            return None
+        ids = [str(pk) for pk in obj.assigned_students.values_list('pk', flat=True)]
+        return ids or None
+
+
+class QuizListSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSerializer):
     question_count = serializers.IntegerField(source='questions.count', read_only=True)
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'question_count', 'created_at',
+            'due_at', 'opens_at', 'question_count', 'student_ids', 'created_at',
         ]
 
 
@@ -351,7 +365,7 @@ class QuestionDetailSerializer(serializers.Serializer):
         return data
 
 
-class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
+class QuizDetailSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSerializer):
     """Faqat o'qituvchi/admin uchun — to'g'ri javoblar bilan (javob kaliti)."""
 
     questions = QuestionDetailSerializer(many=True, read_only=True)
@@ -361,7 +375,7 @@ class QuizDetailSerializer(SubjectLabelMixin, serializers.ModelSerializer):
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'groups', 'questions', 'created_at',
+            'due_at', 'opens_at', 'student_ids', 'groups', 'questions', 'created_at',
         ]
 
 
