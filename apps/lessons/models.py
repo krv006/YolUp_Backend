@@ -273,6 +273,13 @@ class LessonRecording(TimeStampedUUIDModel):
     status = CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     error = TextField(blank=True)
     ended_at = DateTimeField(null=True, blank=True)
+    # 2026-11-10: dars tugatilganda o'qituvchi tanlaydi — yozuv tayyor bo'lgach guruh chatiga avtomatik tushsinmi (standart: ha).
+    # Yozuv sahifasidagi "Chatga yuborish" (`share_recording`) bundan mustaqil: o'qituvchi keyin qo'lda yubora oladi.
+    post_to_chat = BooleanField(default=True)
+    # Guruhga e'lon qilingan payt (bir marta). Yangi yozuvlar MP4 nusxa tayyor bo'lgunicha hech kimga ochilmaydi va e'lon qilinmaydi
+    # (`convert_required`); eski yozuvlar (maydon yo'q paytdagilar) avvalgidek WebM bilan ochiladi va qayta e'lon qilinmaydi.
+    announced_at = DateTimeField(null=True, blank=True)
+    convert_required = BooleanField(default=False)
 
     # ── Video (Track Egress) ──
     video_file_name = CharField(max_length=255, blank=True)

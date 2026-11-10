@@ -24,6 +24,56 @@ logger = logging.getLogger('apps')
 CONVERTING = 'converting'
 STALE_AFTER = timedelta(hours=6)  # "converting" shundan uzoq tursa (jarayon o'lgan) — qayta navbatga qaytariladi
 TIMEOUT_SECONDS = 4 * 3600
+# 2026-11-10: MP4 tayyor bo'lguncha yangi yozuv hech kimga ochilmaydi. Server band paytda (jonli darslar) konvertatsiya
+# boshlanmaydi (yuklama chegarasi), lekin yozuv `MAX_WAIT` dan uzoq kutmasligi uchun shundan keyin baribir boshlanadi.
+# Hammasi bajarilmasa ham yozuv `HIDE_MAX` dan keyin asl WebM bilan ochiladi (konvertatsiya xizmati o'lib qolsa abadiy yopiq qolmasin).
+MAX_WAIT = timedelta(hours=2)
+HIDE_MAX = timedelta(hours=12)
+
+
+def needs_mp4(recording) -> bool:
+    """Yozuv iOS ochmaydigan formatda (WebM) va MP4 nusxasi hali yo'q."""
+    name = (recording.file_name or '').lower()
+    return bool(name) and not name.endswith('.mp4') and not recording.mp4_file_name
+
+
+def is_converting(recording, now=None) -> bool:
+    """Yozuv MP4 nusxa kutmoqda va hozircha hech kimga ochilmaydi. Konvertatsiya xato bilan tugagan yoki juda uzoq cho'zilgan bo'lsa —
+    False (asl WebM bilan ochiladi)."""
+    if not recording.convert_required or recording.mp4_file_name:
+        return False
+    if recording.mp4_error not in ('', CONVERTING):
+        return False
+    started = recording.ended_at or recording.created_at
+    return not (started and (now or timezone.now()) - started > HIDE_MAX)
+
+
+def system_busy() -> bool:
+    """1 daqiqalik o'rtacha yuklama yadrolar soniga nisbatan chegaradan oshgan (standart 0,7; `TRANSCODE_MAX_LOAD_RATIO`)."""
+    try:
+        load = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        return False
+    return load > (os.cpu_count() or 1) * float(os.getenv('TRANSCODE_MAX_LOAD_RATIO', '0.7'))
+
+
+def should_wait(recording, now=None) -> bool:
+    """Server band va yozuv hali `MAX_WAIT` dan kam kutgan bo'lsa — keyinroq (yuklama kamayganda)."""
+    if not system_busy():
+        return False
+    waited_since = recording.ended_at or recording.created_at
+    return not (waited_since and (now or timezone.now()) - waited_since > MAX_WAIT)
+
+
+def _after_conversion(recording_pk) -> None:
+    """Konvertatsiya tugadi (muvaffaqiyatli yoki xato — xatoda asl WebM bilan ochiladi): endi yozuv ochiq, guruhga e'lon qilinadi.
+    Faqat yangi (`convert_required`) yozuvlar uchun — eskilari allaqachon e'lon qilingan."""
+    recording = LessonRecording.objects.select_related('lesson', 'lesson__course').get(pk=recording_pk)
+    if not recording.convert_required:
+        return
+    from apps.live.services import _announce_recording_ready
+
+    _announce_recording_ready(recording)
 
 
 def _pending() -> 'QuerySet':
@@ -106,7 +156,16 @@ def convert(recording_pk) -> str:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
         LessonRecording.objects.filter(pk=recording_pk).update(mp4_error=(str(exc) or 'xato')[:500])
+        _safe_after(recording_pk)
         return 'failed'
     LessonRecording.objects.filter(pk=recording_pk).update(mp4_file_name=final_name, mp4_error='')
     logger.info('recording %s -> %s', recording_pk, final_name)
+    _safe_after(recording_pk)
     return 'done'
+
+
+def _safe_after(recording_pk) -> None:
+    try:
+        _after_conversion(recording_pk)
+    except Exception:  # noqa: BLE001 — e'lon xatosi konvertatsiya natijasini buzmasin
+        logger.exception('recording %s: post-conversion announce failed', recording_pk)

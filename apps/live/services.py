@@ -1349,7 +1349,7 @@ def finalize_single_side(lesson_id) -> None:
     if updated:
         logging.getLogger('apps').info('recording %s finalized %s', recording.pk, label)
         recording.refresh_from_db()
-        _announce_recording_ready(recording)
+        recording_became_ready(recording)
 
 
 _EBML_MAGIC = b'\x1a\x45\xdf\xa3'
@@ -1729,7 +1729,7 @@ def _merge_recording(recording_pk) -> None:
             file_name=output_name, status=LessonRecording.Status.COMPLETED,
         )
         recording.refresh_from_db()
-        _announce_recording_ready(recording)
+        recording_became_ready(recording)
     except Exception as exc:  # noqa: BLE001
         logging.getLogger('apps').exception('recording merge failed: %s', exc)
         LessonRecording.objects.filter(pk=recording_pk).update(
@@ -1741,15 +1741,37 @@ def _merge_recording(recording_pk) -> None:
         close_old_connections()
 
 
+def recording_became_ready(recording) -> None:
+    """Yozuv fayli tayyor bo'ldi. Yangi yozuvlar MP4 nusxa (iOS) tayyor bo'lgunicha HECH KIMGA ochilmaydi va guruhga e'lon
+    qilinmaydi (2026-11-10): konvertatsiya (`apps.lessons.transcode`) tugagach e'lon qilinadi. Allaqachon MP4 bo'lsa — darhol."""
+    from apps.lessons import transcode
+    from apps.lessons.models import LessonRecording as Recording
+
+    if transcode.needs_mp4(recording):
+        Recording.objects.filter(pk=recording.pk).update(convert_required=True)
+        return
+    _announce_recording_ready(recording)
+
+
 def _announce_recording_ready(recording) -> None:
     """Yozuv (video+audio birlashgan, yoki faqat bittasi) tayyor bo'lganda
     guruh chatga e'lon qiladi. Bu — endi `finish_lesson` ichida EMAS,
     chunki brauzer video/audio yuklashni finish tugmasi bosilgandan KEYIN
     ham davom ettirishi mumkin (chunked upload asinxron); e'lon faqat
-    fayl HAQIQATAN tayyor bo'lganda yuboriladi."""
+    fayl HAQIQATAN tayyor bo'lganda yuboriladi.
+
+    O'qituvchi darsni tugatishda "guruhga yuborish"ni o'chirgan bo'lsa (`post_to_chat=False`) e'lon ham, bildirishnoma ham
+    yuborilmaydi; e'lon bir martadan (`announced_at`)."""
     import logging
 
+    from apps.lessons.models import LessonRecording as Recording
+
     try:
+        if not recording.post_to_chat:
+            return
+        claimed = Recording.objects.filter(pk=recording.pk, announced_at__isnull=True).update(announced_at=timezone.now())
+        if not claimed:
+            return
         from apps.lessons.services import publish_recording_message
         title = recording.title or recording.lesson.title or recording.lesson.course.title
         publish_recording_message(recording.lesson, title)

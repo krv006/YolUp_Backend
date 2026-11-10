@@ -508,7 +508,7 @@ def delete_course(*, teacher: User, course: Course, request=None) -> None:
 
 
 @transaction.atomic
-def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', request=None) -> Lesson:
+def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', request=None, post_recording: bool = True) -> Lesson:
     """Darsni yakunlash — davomatlar yopiladi, doska PDF chatga tushadi,
     video yozuv to'xtatilib O'QITUVCHI BERGAN NOM bilan guruh chatga e'lon qilinadi."""
     if lesson.course.teacher_id != teacher.id:
@@ -558,7 +558,8 @@ def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', r
         title = (recording_title or '').strip() or lesson.title or lesson.course.title
         recording.title = title[:200]
         recording.ended_at = timezone.now()
-        recording.save(update_fields=['title', 'ended_at', 'updated_at'])
+        recording.post_to_chat = bool(post_recording)  # yozuv tayyor bo'lgach guruhga avtomatik tushsinmi
+        recording.save(update_fields=['title', 'ended_at', 'post_to_chat', 'updated_at'])
     except Exception:  # noqa: BLE001
         import logging
         logging.getLogger('apps').exception('recording finalize failed')
@@ -1073,7 +1074,9 @@ def share_recording(*, teacher: User, lesson: Lesson):
     if lesson.course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi yozuvni chatga yuboradi."))
     recording = LessonRecording.objects.filter(lesson=lesson).first()
-    if recording is None or recording.status != LessonRecording.Status.COMPLETED:
+    from . import transcode
+
+    if recording is None or recording.status != LessonRecording.Status.COMPLETED or transcode.is_converting(recording):
         raise ValidationError({'detail': _("Yozuv hali tayyor emas.")})
     return publish_recording_message(lesson, recording.title or lesson.title or lesson.course.title)
 
@@ -1127,11 +1130,17 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
             )
             recording.save(update_fields=['status', 'error', 'updated_at'])
 
+    from . import transcode
+
+    # MP4 nusxa tayyor bo'lguncha yangi yozuv hech kimga (o'qituvchiga ham) ochilmaydi: `status: "converting"`, `stream_url: null`.
+    # Konvertatsiya xato bilan tugasa yoki juda cho'zilsa — asl WebM bilan ochiladi.
+    converting = file_ready and recording.status == LessonRecording.Status.COMPLETED and transcode.is_converting(recording)
     data = {
         'lesson_id': str(lesson.id),
         'title': recording.title or lesson.title or lesson.course.title,
-        'status': recording.status,
-        'ready': file_ready,
+        'status': 'converting' if converting else recording.status,
+        'ready': file_ready and not converting,
+        'post_to_chat': recording.post_to_chat,
         'created_at': recording.created_at,
         'ended_at': recording.ended_at,
         'error': recording.error,
@@ -1142,7 +1151,7 @@ def recording_info(*, user: User, lesson: Lesson) -> dict:
     }
     previews = data.get('board_page_previews') or []
     data['thumbnail_url'] = previews[0].get('image_url') if previews else None  # video muqovasi: doskaning birinchi sahifasi
-    if file_ready:
+    if file_ready and not converting:
         # Imzolangan, muddatli havola — <video src> uchun (headerlarsiz),
         # 3 soatdan keyin yaroqsiz. Foydalanuvchi tekshiruvi SHU yerda bo'ldi.
         token = signing.TimestampSigner().sign(str(lesson.id))
@@ -1165,6 +1174,10 @@ def recording_stream_path(*, lesson: Lesson, token: str):
     recording = LessonRecording.objects.filter(lesson=lesson).first()
     if recording is None or not recording.file_name:
         raise NotFound(_("Yozuv topilmadi."))
+    from . import transcode
+
+    if transcode.is_converting(recording):
+        raise NotFound(_("Yozuv hali tayyor emas."))
     path = _recording_path(recording)  # iOS ham ochadigan MP4 nusxa tayyor bo'lsa — shu (WebM iOS'da ochilmaydi)
     if not path.exists():
         raise NotFound(_("Yozuv fayli hali tayyor emas."))

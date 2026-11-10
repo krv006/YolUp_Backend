@@ -22,5 +22,8 @@ class Command(BaseCommand):
         if released:
             self.stdout.write(f'{released} ta qotib qolgan yozuv navbatga qaytarildi')
         for recording in transcode.next_pending(retry_failed=options['retry_failed'], limit=options['limit']):
+            if transcode.should_wait(recording):  # server band (jonli darslar) — yuklama kamayganda; MAX_WAIT dan keyin baribir
+                self.stdout.write(f'{recording.pk}: server band, keyinroq')
+                continue
             result = transcode.convert(recording.pk)
             self.stdout.write(f'{recording.pk}: {result}')

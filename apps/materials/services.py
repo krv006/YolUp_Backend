@@ -133,8 +133,8 @@ def _recording_exists(lesson_ref, viewer_is_teacher: bool):
     from apps.lessons.models import LessonRecording
 
     qs = LessonRecording.objects.filter(lesson=lesson_ref)
-    if not viewer_is_teacher:
-        qs = qs.filter(status=LessonRecording.Status.COMPLETED)
+    if not viewer_is_teacher:  # o'quvchi/ota-ona: tayyor va MP4 kutmayotgan yozuvlar (`convert_required` va hali nusxa yo'q = yopiq)
+        qs = qs.filter(status=LessonRecording.Status.COMPLETED).exclude(convert_required=True, mp4_file_name='', mp4_error__in=['', 'converting'])
     return Exists(qs)
 
 
@@ -178,15 +178,20 @@ def lesson_folder(*, user: User, lesson_id) -> dict:
     from apps.lessons.models import LessonRecording
 
     is_owner = lesson.course.teacher_id == user.id or user.role in (User.Role.ADMIN, User.Role.SUPER_ADMIN)
+    from apps.lessons import transcode
+
     recording = LessonRecording.objects.filter(lesson=lesson).first()
-    if recording is not None and not is_owner and recording.status != LessonRecording.Status.COMPLETED:
+    if recording is not None and not is_owner and (
+        recording.status != LessonRecording.Status.COMPLETED or transcode.is_converting(recording)
+    ):
         recording = None
     has_board = BoardSheet.objects.filter(lesson=lesson).exclude(strokes=[]).exists()
     return {
         'lesson': {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'starts_at': lesson.starts_at, 'status': lesson.status},
         'files': list(Material.objects.filter(lesson=lesson).select_related('course', 'uploaded_by')),
         'recording': {
-            'status': recording.status, 'info_url': f'/api/v1/lessons/{lesson.id}/recording/',
+            'status': 'converting' if transcode.is_converting(recording) else recording.status,
+            'info_url': f'/api/v1/lessons/{lesson.id}/recording/',
         } if recording is not None else None,
         'board': {'pdf_url': f'/api/v1/materials/lessons/{lesson.id}/board.pdf'} if has_board else None,
     }

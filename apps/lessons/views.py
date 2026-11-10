@@ -29,6 +29,14 @@ from .serializers import (
 )
 
 
+def _as_bool(value, default: bool) -> bool:
+    if value is None or value == '':
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 class CourseViewSet(viewsets.ModelViewSet):
     serializer_class = CourseSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]  # `avatar` rasmi multipart bilan yuklanadi
@@ -427,6 +435,8 @@ class LessonViewSet(viewsets.ModelViewSet):
             teacher=request.user, lesson=lesson,
             recording_title=request.data.get('recording_title') or '',
             request=request,
+            # `post_recording` (standart true): yozuv tayyor bo'lganda guruhga xabar va bildirishnoma boradimi
+            post_recording=_as_bool(request.data.get('post_recording'), True),
         )
         return Response(LessonSerializer(lesson).data)
 
