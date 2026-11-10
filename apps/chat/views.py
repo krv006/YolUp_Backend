@@ -477,6 +477,12 @@ class ChannelViewSet(viewsets.ViewSet):
             ))
         return Response(services.room_members(user=request.user, room_id=pk, request=request, query=request.query_params.get('query', '')))
 
+    @action(detail=True, methods=['delete'], url_path=r'courses/(?P<course_id>[^/.]+)')
+    def unlink_course(self, request, pk=None, course_id=None):
+        """Guruhni kanaldan ajratish: faqat shu guruh orqali kelgan (alohida tanlanmagan) a'zolar chiqariladi -> `{removed: n}`."""
+        removed = channel_service.unlink_course(teacher=request.user, room_id=pk, course_id=course_id, request=request)
+        return Response({'removed': removed})
+
     @action(detail=True, methods=['delete'], url_path=r'members/(?P<user_id>[^/.]+)')
     def remove_member(self, request, pk=None, user_id=None):
         channel_service.remove_member(teacher=request.user, room_id=pk, user_id=user_id, request=request)

@@ -1,5 +1,6 @@
 """Kanallar (2026-11-10): faqat o'qituvchi post yozadi, a'zolar o'qiydi va izoh qoldiradi."""
 from apps.accounts.models import ParentChildLink, User
+from apps.chat import services
 from apps.chat.models import ChatRoom, Message, RoomMember
 from apps.chat.tests_contacts import BaseChatRules, make
 from apps.lessons.models import Course, Enrollment
@@ -124,3 +125,89 @@ class ChannelTests(BaseChatRules):
         self.assertEqual(self.api(self.student).post(f'/api/v1/chat/channels/{room_id}/members/', {'student_ids': []}, format='json').status_code, 403)
         self.assertEqual(self.api(self.teacher).delete(f'/api/v1/chat/channels/{room_id}/').status_code, 204)
         self.assertFalse(ChatRoom.objects.filter(pk=room_id).exists())
+
+
+class ChannelAutoMembershipTests(BaseChatRules):
+    """2026-11-10: guruhga keyin qo'shilgan o'quvchi kanalga avtomatik a'zo; guruhdan chiqqani chiqadi (alohida tanlanmagan bo'lsa)."""
+
+    def setUp(self):
+        super().setUp()
+        self.newbie = make('c_new', User.Role.STUDENT)
+        self.newbie_parent = make('c_newp', User.Role.PARENT)
+        ParentChildLink.objects.create(parent=self.newbie_parent, student=self.newbie, status=ParentChildLink.Status.APPROVED)
+        self.channel = self.api(self.teacher).post(
+            '/api/v1/chat/channels/', {'title': 'K', 'course_ids': [str(self.course.id)], 'student_ids': [str(self.student.id)]}, format='json',
+        ).json()
+
+    def members(self):
+        return set(RoomMember.objects.filter(room_id=self.channel['id']).values_list('user__username', flat=True))
+
+    def test_channel_reports_its_linked_courses(self):
+        self.assertEqual(self.channel['course_ids'], [str(self.course.id)])
+        self.assertEqual(self.channel['courses'], [{'id': str(self.course.id), 'title': 'A'}])
+        room = next(r for r in self.api(self.teacher).get('/api/v1/chat/rooms/').json()['results'] if r['id'] == self.channel['id'])
+        self.assertEqual(room['courses'][0]['title'], 'A')
+        group = next(r for r in self.api(self.teacher).get('/api/v1/chat/rooms/').json()['results'] if r['kind'] == 'course')
+        self.assertIsNone(group['course_ids'])
+
+    def test_a_student_who_joins_the_group_later_is_added_with_his_parents(self):
+        Enrollment.objects.create(course=self.course, student=self.newbie, status=Enrollment.Status.PENDING)
+        self.assertNotIn('c_new', self.members())  # hali tasdiqlanmagan
+        Enrollment.objects.filter(student=self.newbie).first().save()  # no-op
+        enrollment = Enrollment.objects.get(student=self.newbie)
+        enrollment.status = Enrollment.Status.APPROVED
+        enrollment.save()
+        self.assertTrue({'c_new', 'c_newp'} <= self.members())
+        # kanalda o'qiy oladi
+        self.assertEqual(self.api(self.newbie).get(f'/api/v1/chat/rooms/{self.channel["id"]}/messages/').status_code, 200)
+
+    def test_approved_on_creation_path_also_adds(self):
+        Enrollment.objects.create(course=self.course, student=self.newbie, status=Enrollment.Status.APPROVED)
+        self.assertTrue({'c_new', 'c_newp'} <= self.members())
+
+    def test_leaving_the_group_removes_course_members_but_keeps_hand_picked_ones(self):
+        Enrollment.objects.create(course=self.course, student=self.newbie, status=Enrollment.Status.APPROVED)
+        Enrollment.objects.filter(student=self.newbie).delete()
+        self.assertFalse({'c_new', 'c_newp'} & self.members())
+        # c_s alohida tanlangan (student_ids): guruhdan chiqsa ham qoladi, ota-onasi ham
+        Enrollment.objects.filter(student=self.student).delete()
+        self.assertTrue({'c_s', 'c_p'} <= self.members())
+        # c_s2 faqat guruh orqali edi
+        Enrollment.objects.filter(student=self.classmate).delete()
+        self.assertNotIn('c_s2', self.members())
+
+    def test_student_in_another_linked_group_stays(self):
+        other = Course.objects.create(teacher=self.teacher, title='B')
+        self.api(self.teacher).post(f'/api/v1/chat/channels/{self.channel["id"]}/members/', {'course_ids': [str(other.id)]}, format='json')
+        Enrollment.objects.create(course=other, student=self.classmate, status=Enrollment.Status.APPROVED)
+        Enrollment.objects.filter(course=self.course, student=self.classmate).delete()
+        self.assertIn('c_s2', self.members())  # boshqa bog'langan guruhda hamon bor
+
+    def test_parent_approved_later_joins_and_removed_parent_link_leaves(self):
+        late_parent = make('c_late', User.Role.PARENT)
+        link = ParentChildLink.objects.create(parent=late_parent, student=self.classmate, status=ParentChildLink.Status.PENDING)
+        self.assertNotIn('c_late', self.members())
+        link.status = ParentChildLink.Status.APPROVED
+        link.save()
+        self.assertIn('c_late', self.members())
+        link.delete()
+        self.assertNotIn('c_late', self.members())
+
+    def test_unlinking_a_course_removes_only_its_members(self):
+        r = self.api(self.teacher).delete(f'/api/v1/chat/channels/{self.channel["id"]}/courses/{self.course.id}/')
+        self.assertEqual((r.status_code, r.json()), (200, {'removed': 1}))  # c_s2; c_s (alohida) va ota-onasi qoladi
+        self.assertEqual(self.members(), {'c_s', 'c_p'})
+        self.assertEqual(self.api(self.teacher).delete(f'/api/v1/chat/channels/{self.channel["id"]}/courses/{self.course.id}/').status_code, 404)
+        self.assertEqual(self.api(self.student).delete(f'/api/v1/chat/channels/{self.channel["id"]}/courses/{self.course.id}/').status_code, 403)
+
+
+class CourseKindOnRoomTests(BaseChatRules):
+    def test_course_rooms_carry_the_group_or_club_kind(self):
+        club = Course.objects.create(teacher=self.teacher, title='Club', kind=Course.Kind.CLUB)
+        services.ensure_course_room(club)
+        Enrollment.objects.create(course=club, student=self.student, status=Enrollment.Status.APPROVED)
+        rooms = self.api(self.student).get('/api/v1/chat/rooms/').json()['results']
+        kinds = {r['title']: r['course_kind'] for r in rooms}
+        self.assertEqual(kinds, {'A': 'group', 'Club': 'club'})
+        one = self.api(self.student).get(f'/api/v1/chat/rooms/{club.chat_room.id}/').json()
+        self.assertEqual(one['course_kind'], 'club')

@@ -221,6 +221,10 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     can_write = serializers.SerializerMethodField()
     can_comment = serializers.SerializerMethodField()
     members_count = serializers.SerializerMethodField()
+    # Kanal: bog'langan guruhlar (`course_ids`, `courses: [{id, title}]`); kurs guruhi: `course_kind` (group | club)
+    course_ids = serializers.SerializerMethodField()
+    courses = serializers.SerializerMethodField()
+    course_kind = serializers.SerializerMethodField()
     # O'qituvchi uchun, kurs guruhi: joriy oy to'lamaganlar soni (guruh yonidagi qizil belgi); boshqalarga null
     unpaid_count = serializers.SerializerMethodField()
     overdue_count = serializers.SerializerMethodField()
@@ -230,7 +234,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         model = ChatRoom
         fields = [
             'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only', 'announcement_mode', 'can_write', 'can_comment',
-            'capabilities', 'description', 'members_count', 'unpaid_count', 'overdue_count',
+            'capabilities', 'description', 'members_count', 'course_ids', 'courses', 'course_kind', 'unpaid_count', 'overdue_count',
             'title', 'last_message', 'unread', 'unread_count', 'first_unread_message_id',
             'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'pinned_messages', 'last_read_message_id', 'has_unread_mention',
             'online_count', 'updated_at',
@@ -391,6 +395,23 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     def get_overdue_count(self, obj) -> int | None:
         row = self._unpaid(obj)
         return None if row is None else row['overdue']
+
+    def _channel_courses(self, obj):
+        if obj.kind != ChatRoom.Kind.CHANNEL:
+            return None
+        return [link.course for link in obj.course_links.select_related('course')]
+
+    def get_courses(self, obj):
+        courses = self._channel_courses(obj)
+        return None if courses is None else [{'id': str(c.id), 'title': c.title} for c in courses]
+
+    def get_course_ids(self, obj):
+        courses = self._channel_courses(obj)
+        return None if courses is None else [str(c.id) for c in courses]
+
+    def get_course_kind(self, obj):
+        """Kurs guruhi uchun `group` yoki `club` (frontend chat ro'yxatida club belgisi uchun alohida `/clubs/` so'ramasin)."""
+        return obj.course.kind if obj.kind == ChatRoom.Kind.COURSE and obj.course_id else None
 
     def get_members_count(self, obj) -> int | None:
         return len(selectors.member_ids(obj)) if obj.kind == ChatRoom.Kind.CHANNEL else None

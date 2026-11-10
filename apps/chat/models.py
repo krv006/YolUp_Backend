@@ -105,12 +105,26 @@ class RoomMember(TimeStampedUUIDModel):
     room = ForeignKey('chat.ChatRoom', CASCADE, related_name='members')
     user = ForeignKey('accounts.User', CASCADE, related_name='room_memberships')
     source = CharField(max_length=8, choices=Source.choices, default=Source.STUDENT)
+    # True — o'qituvchi shu o'quvchini (yoki uning ota-onasini) o'zi tanlab qo'shgan (`student_ids`), shuning uchun guruhdan chiqsa ham
+    # kanalda qoladi. False — faqat bog'langan guruh (`ChannelCourse`) orqali kelgan: guruhdan chiqsa kanaldan ham chiqadi.
+    explicit = BooleanField(default=True)
 
     class Meta:
         constraints = [UniqueConstraint(fields=['room', 'user'], name='unique_room_member')]
 
     def __str__(self):
         return f'{self.user} in {self.room_id}'
+
+
+class ChannelCourse(TimeStampedUUIDModel):
+    """Kanal qaysi guruhlarga bog'langan (2026-11-10): shu guruhga keyin qo'shilgan tasdiqlangan o'quvchi (va uning tasdiqlangan
+    ota-onalari) kanalga AVTOMATIK a'zo bo'ladi; guruhdan chiqqan o'quvchi — chiqadi (alohida tanlanmagan bo'lsa)."""
+
+    room = ForeignKey('chat.ChatRoom', CASCADE, related_name='course_links')
+    course = ForeignKey('lessons.Course', CASCADE, related_name='channel_links')
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['room', 'course'], name='unique_channel_course')]
 
 
 class SpamReport(TimeStampedUUIDModel):
