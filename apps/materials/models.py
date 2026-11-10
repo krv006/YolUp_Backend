@@ -8,6 +8,8 @@ from apps.core.uploads import material_path
 
 class Material(TimeStampedUUIDModel):
     course = ForeignKey('lessons.Course', CASCADE, related_name='materials')
+    # Tuzilma: Guruh -> darslar -> fayllar (2026-11-10). Bo'sh bo'lsa fayl guruhning "Umumiy" papkasida
+    lesson = ForeignKey('lessons.Lesson', SET_NULL, null=True, blank=True, related_name='materials')
     uploaded_by = ForeignKey(settings.AUTH_USER_MODEL, SET_NULL, null=True, blank=True, related_name='uploaded_materials')
     title = CharField(max_length=200)
     file = FileField(upload_to=material_path)
