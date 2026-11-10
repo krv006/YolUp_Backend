@@ -19,6 +19,9 @@ class CourseSerializer(serializers.ModelSerializer):
     my_status = serializers.SerializerMethodField()
     is_language_subject = serializers.SerializerMethodField()
     subject_label = serializers.SerializerMethodField()
+    # O'qituvchi uchun: joriy oy to'lamagan o'quvchilar soni (+ muddati o'tganlari); boshqalarga null
+    unpaid_count = serializers.SerializerMethodField()
+    overdue_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -26,12 +29,48 @@ class CourseSerializer(serializers.ModelSerializer):
             'id', 'teacher', 'title', 'subject', 'subject_label', 'description',
             'is_active', 'student_count', 'my_status', 'is_language_subject', 'created_at',
             'lessons_per_week', 'monthly_fee', 'avatar', 'kind',
+            'payment_day', 'payment_reminder_days', 'unpaid_count', 'overdue_count',
         ]
         read_only_fields = ['is_active', 'kind']
         extra_kwargs = {
             'lessons_per_week': {'min_value': 1, 'max_value': 14},
             'monthly_fee': {'min_value': 0, 'max_value': 1_000_000_000},
+            'payment_day': {'min_value': 1, 'max_value': 28, 'allow_null': True},
         }
+
+    def validate_payment_reminder_days(self, value):
+        from .payments import REMINDER_CHOICES
+
+        if not isinstance(value, list) or any(not isinstance(d, int) or isinstance(d, bool) or d not in REMINDER_CHOICES for d in value):
+            raise serializers.ValidationError(_("Eslatma kunlari: 3, 5 va/yoki 7 (ro'yxat)."))
+        return sorted(set(value), reverse=True)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        days = attrs.get('payment_reminder_days', getattr(self.instance, 'payment_reminder_days', None))
+        day = attrs.get('payment_day', getattr(self.instance, 'payment_day', None))
+        if days and not day:
+            raise serializers.ValidationError({'payment_day': _("Eslatma uchun avval to'lov kunini belgilang (1-28).")})
+        return attrs
+
+    def _unpaid(self, obj):
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is None or obj.teacher_id != getattr(user, 'id', None):
+            return None
+        cache = self.context.setdefault('_unpaid_counts', {})
+        if 'data' not in cache:
+            from .payments import unpaid_counts_for_teacher
+
+            cache['data'] = unpaid_counts_for_teacher(user)
+        return cache['data'].get(obj.pk, {'unpaid': 0, 'overdue': 0})
+
+    def get_unpaid_count(self, obj) -> int | None:
+        row = self._unpaid(obj)
+        return None if row is None else row['unpaid']
+
+    def get_overdue_count(self, obj) -> int | None:
+        row = self._unpaid(obj)
+        return None if row is None else row['overdue']
 
     def validate_avatar(self, value):
         """Rasm: JPEG/PNG/WebP, ko'pi bilan 5 MB (bo'sh qiymat — rasmni o'chiradi)."""

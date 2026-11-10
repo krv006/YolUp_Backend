@@ -221,13 +221,16 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     can_write = serializers.SerializerMethodField()
     can_comment = serializers.SerializerMethodField()
     members_count = serializers.SerializerMethodField()
+    # O'qituvchi uchun, kurs guruhi: joriy oy to'lamaganlar soni (guruh yonidagi qizil belgi); boshqalarga null
+    unpaid_count = serializers.SerializerMethodField()
+    overdue_count = serializers.SerializerMethodField()
     capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatRoom
         fields = [
             'id', 'kind', 'course', 'direct_status', 'image', 'announcement_only', 'announcement_mode', 'can_write', 'can_comment',
-            'capabilities', 'description', 'members_count',
+            'capabilities', 'description', 'members_count', 'unpaid_count', 'overdue_count',
             'title', 'last_message', 'unread', 'unread_count', 'first_unread_message_id',
             'other_user', 'live_lesson', 'is_pinned', 'is_muted', 'pinned_message', 'pinned_messages', 'last_read_message_id', 'has_unread_mention',
             'online_count', 'updated_at',
@@ -369,6 +372,25 @@ class ChatRoomSerializer(serializers.ModelSerializer):
 
     def get_can_comment(self, obj) -> bool:
         return selectors.can_comment(self.context['request'].user, obj)
+
+    def _unpaid(self, obj):
+        user = self.context['request'].user
+        if obj.kind != ChatRoom.Kind.COURSE or not obj.course_id or obj.course.teacher_id != user.id:
+            return None
+        cache = self.context.setdefault('_unpaid_counts', {})
+        if 'data' not in cache:
+            from apps.lessons.payments import unpaid_counts_for_teacher
+
+            cache['data'] = unpaid_counts_for_teacher(user)
+        return cache['data'].get(obj.course_id, {'unpaid': 0, 'overdue': 0})
+
+    def get_unpaid_count(self, obj) -> int | None:
+        row = self._unpaid(obj)
+        return None if row is None else row['unpaid']
+
+    def get_overdue_count(self, obj) -> int | None:
+        row = self._unpaid(obj)
+        return None if row is None else row['overdue']
 
     def get_members_count(self, obj) -> int | None:
         return len(selectors.member_ids(obj)) if obj.kind == ChatRoom.Kind.CHANNEL else None

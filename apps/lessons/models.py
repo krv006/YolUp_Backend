@@ -79,6 +79,9 @@ class Course(TimeStampedUUIDModel, SoftDeleteModel):
     invite_expires_at = DateTimeField(null=True, blank=True)
     invite_requires_approval = BooleanField(default=False)
     monthly_fee = PositiveIntegerField(null=True, blank=True)
+    # To'lov muddati (2026-11-10): har oyning shu kuni (1-28) va necha kun oldin eslatma yuborilsin (3, 5 va/yoki 7)
+    payment_day = PositiveSmallIntegerField(null=True, blank=True)
+    payment_reminder_days = JSONField(default=list, blank=True)
     # Guruh rasmi (ro'yxatlar, dars kartalari, chat) — ixtiyoriy
     avatar = ImageField(upload_to='course_avatars/', null=True, blank=True)
 
@@ -439,6 +442,20 @@ class ReminderPref(TimeStampedUUIDModel):
     class Meta:
         constraints = [UniqueConstraint(fields=['user', 'kind', 'target_id'], name='unique_reminder_pref')]
         indexes = [Index(fields=['kind', 'target_id'])]
+
+
+class PaymentReminderLog(TimeStampedUUIDModel):
+    """Har eslatma FAQAT BIR MARTA yuboriladi: (guruh, o'quvchi, oy, necha kun oldin)."""
+
+    course = ForeignKey('lessons.Course', CASCADE, related_name='payment_reminders')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='+')
+    period = DateField()
+    days_before = PositiveSmallIntegerField()
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['course', 'student', 'period', 'days_before'], name='unique_payment_reminder'),
+        ]
 
 
 class CoursePayment(TimeStampedUUIDModel):

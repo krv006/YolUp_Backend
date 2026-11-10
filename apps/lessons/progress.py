@@ -84,10 +84,18 @@ def _enrollments(course) -> dict:
     }
 
 
-def _payment_view(payment, *, period: date, fee) -> dict:
+def _payment_view(payment, *, period: date, fee, course=None) -> dict:
+    overdue = False
+    if course is not None and not payment:
+        from .payments import is_overdue, local_today
+
+        # `overdue`: to'lanmagan va muddat o'tib ketgan (o'tgan oylar; joriy oyda to'lov kuni o'tgan bo'lsa).
+        # `status` o'zgarmaydi (paid | unpaid) — eski mijozlar uchun.
+        overdue = is_overdue(course, period, local_today())
     return {
         'period': f'{period:%Y-%m}',
         'status': 'paid' if payment else 'unpaid',
+        'overdue': overdue,
         'amount': (payment.amount if payment.amount is not None else fee) if payment else None,
         'paid_at': payment.paid_at if payment else None,
         'note': payment.note if payment else '',
@@ -208,7 +216,7 @@ def course_progress(*, course, viewer: User, range_key: str = 'all', period: dat
             },
             'homework': _homework_summary(assignments, student.pk, joined_at, latest, now),
             'payment': {
-                **_payment_view(paid.get(period), period=period, fee=course.monthly_fee),
+                **_payment_view(paid.get(period), period=period, fee=course.monthly_fee, course=course),
                 'unpaid_months': _unpaid_months(joined_at.date(), paid, today),
             },
         })
@@ -273,7 +281,7 @@ def student_progress(*, course, viewer: User, student_id, range_key: str = 'all'
 
     paid = _payments_by_student(course, [student.pk]).get(student.pk, {})
     payments = [
-        _payment_view(paid.get(month), period=month, fee=course.monthly_fee)
+        _payment_view(paid.get(month), period=month, fee=course.monthly_fee, course=course)
         for month in reversed(_months(_month_floor(joined_at.date()), today))
     ]
     return {**summary, 'course_id': str(course.pk), 'monthly_fee': course.monthly_fee, 'range': range_key,

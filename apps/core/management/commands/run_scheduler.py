@@ -34,6 +34,7 @@ JOBS = [
     ('sync_homework_ai', 'sync_homework_ai', (), 60),
     ('check_disk', 'check_disk', (), 1800),
     ('check_failed_recordings', 'check_failed_recordings', (), 1800),
+    ('send_payment_reminders', 'send_payment_reminders', (), 3600),  # to'lov muddatidan 3/5/7 kun oldin o'quvchi va ota-onaga
     ('send_absence_alerts', 'send_absence_alerts', (), 60),  # kirmagan o'quvchilar haqida ota-onaga (dars boshlanib 10 daqiqadan keyin)
     ('expire_link_requests', 'expire_link_requests', (), 3600),  # javobsiz ota-ona so'rovlari 7 kundan keyin yopiladi
     ('watchdog', 'watchdog', (), 60),  # ikkinchi serverni tekshiradi, yiqilsa/tiklansa Telegram/webhook (apps/monitoring/.../watchdog.py)
