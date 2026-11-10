@@ -224,3 +224,45 @@ class SubmissionDraft(TimeStampedUUIDModel):
 
     class Meta:
         constraints = [UniqueConstraint(fields=['assignment', 'student'], name='unique_homework_draft')]
+
+
+class AssignmentQuestion(TimeStampedUUIDModel):
+    """Vazifa ichidagi savol ("Google forma" uslubi, 2026-11-10). Test savollari (`single`/`multiple`) avtomatik baholanadi;
+    ochiq javoblar (`short`/`long`) AI (`ai_check` yoqilgan bo'lsa) yoki o'qituvchi baholaydi, yakuniy ballni o'qituvchi tasdiqlaydi."""
+
+    class Type(TextChoices):
+        SINGLE = 'single', "Bitta to'g'ri javobli test"
+        MULTIPLE = 'multiple', "Bir nechta to'g'ri javobli test"
+        SHORT = 'short', 'Qisqa ochiq javob'
+        LONG = 'long', 'Uzun ochiq javob'
+
+    assignment = ForeignKey('homework.Assignment', CASCADE, related_name='questions')
+    order = PositiveSmallIntegerField(default=0)
+    type = CharField(max_length=10, choices=Type.choices)
+    text = TextField()
+    # Test uchun variantlar matni ro'yxati va to'g'ri javoblarning INDEKSLARI (0 dan); ochiq savolda ikkalasi bo'sh
+    options = JSONField(default=list, blank=True)
+    correct = JSONField(default=list, blank=True)
+    points = PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ['order', 'created_at']
+
+    def __str__(self):
+        return f'{self.assignment_id} · #{self.order} {self.type}'
+
+
+class SubmissionAnswer(TimeStampedUUIDModel):
+    """O'quvchining savolga javobi. `answer`: test uchun tanlangan indekslar ro'yxati, ochiq savol uchun matn.
+    `auto_score` — test avtomatik bali; `ai_score` — AI taklifi (ochiq); `final_score` — natijada ko'rinadigan ball (o'qituvchi
+    o'zgartira oladi). Ballar savol `points` birligida."""
+
+    submission = ForeignKey('homework.Submission', CASCADE, related_name='answers')
+    question = ForeignKey('homework.AssignmentQuestion', CASCADE, related_name='answers')
+    answer = JSONField(default=list, blank=True)
+    auto_score = FloatField(null=True, blank=True)
+    ai_score = FloatField(null=True, blank=True)
+    final_score = FloatField(null=True, blank=True)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=['submission', 'question'], name='unique_submission_question_answer')]

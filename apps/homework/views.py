@@ -1,4 +1,6 @@
 """Homework views — yupqa qatlam (board uslubi)."""
+import json
+
 from django.http import FileResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
@@ -9,6 +11,21 @@ from rest_framework.views import APIView
 from apps.core.permissions import RequirePerm, user_has_perm
 
 from . import board, services
+
+
+def _json_field(value):
+    """Multipart'da murakkab maydonlar (`questions`, `answers`) JSON matn bo'lib keladi; JSON so'rovda allaqachon ro'yxat."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({'detail': "JSON noto'g'ri."}) from None
+    return value
 
 
 class AssignmentListCreateView(APIView):
@@ -52,6 +69,7 @@ class AssignmentListCreateView(APIView):
             ai_check=request.data.get('ai_check'),
             grading=request.data.get('grading') or 'five',
             max_score=request.data.get('max_score'),
+            questions=_json_field(request.data.get('questions')),
         )
         return Response(data, status=201)
 
@@ -78,6 +96,8 @@ class AssignmentDetailView(APIView):
                 kwargs[field] = request.data.get(field)
         if 'attachment' in request.FILES:
             kwargs['attachment'] = request.FILES.get('attachment')
+        if 'questions' in request.data:
+            kwargs['questions'] = _json_field(request.data.get('questions'))
 
         data = services.update_assignment(teacher=request.user, assignment_id=assignment_id, **kwargs)
         return Response(data)
@@ -134,7 +154,7 @@ class SubmitView(APIView):
     """O'quvchi faylini yuklaydi — topshiriq o'qituvchiga baholash uchun tushadi."""
 
     permission_classes = [RequirePerm('homework.submit')]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request, assignment_id):
         # Bitta `file` yoki bir nechta `files` (jami 5 tagacha); `comment` — o'quvchi izohi
@@ -145,6 +165,7 @@ class SubmitView(APIView):
             upload=uploads[0] if uploads else None,
             extra_uploads=uploads[1:],
             comment=request.data.get('comment') or '',
+            answers=_json_field(request.data.get('answers')),  # savolli vazifa: [{question_id, answer}] (JSON yoki multipart'da JSON matn)
         )
         return Response(data, status=201)
 
@@ -226,6 +247,7 @@ class SubmissionReviewView(APIView):
             grade_value=grade_value if grade_value is not None else request.data.get('grade_value'),
             share_with_parent=request.data.get('share_with_parent'),
             teacher_comment=request.data.get('teacher_comment'),
+            answer_scores=request.data.get('answer_scores'),
         )
         return Response(data)
 

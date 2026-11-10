@@ -25,7 +25,7 @@ from apps.lessons.models import Course, Enrollment, Lesson
 
 from apps.quizzes import llm
 
-from . import ai_client, ai_grader, rules
+from . import ai_client, ai_grader, questions as hw_questions, rules
 from .models import Assignment, AssignmentFocusEvent, Submission, SubmissionFile
 
 logger = logging.getLogger('apps')
@@ -217,11 +217,21 @@ def _assignment_dict(a: Assignment) -> dict:
     }
 
 
+def _with_questions(a: Assignment, include_correct: bool) -> dict:
+    """Vazifa + savollar (o'quvchi/ota-onaga to'g'ri javoblar ko'rsatilmaydi)."""
+    data = _assignment_dict(a)
+    questions = hw_questions.questions_payload(a, include_correct)
+    data['questions'] = questions
+    data['has_questions'] = bool(questions)
+    data['questions_points'] = sum(q['points'] for q in questions)
+    return data
+
+
 def _submission_files(s: Submission) -> list:
     """Barcha fayllar (asosiysi birinchi): `[{name, size, mime, index}]` — yuklab olish: `.../submissions/<id>/file/?index=<index>`."""
     import mimetypes
 
-    files = [{'name': s.original_name, 'size': _file_size(s.file), 'mime': mimetypes.guess_type(s.original_name)[0] or '', 'index': 0}]
+    files = [{'name': s.original_name, 'size': _file_size(s.file), 'mime': mimetypes.guess_type(s.original_name)[0] or '', 'index': 0}] if s.file else []
     for i, extra in enumerate(s.extra_files.all(), start=1):
         files.append({'name': extra.original_name, 'size': extra.size, 'mime': mimetypes.guess_type(extra.original_name)[0] or '', 'index': i})
     return files
@@ -262,6 +272,8 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
     }
     if include_result:
         data['result'] = None if hide_result else s.result
+        if s.answers.exists():
+            data['answers'] = [] if hide_result else hw_questions.answers_payload(s, is_teacher)
     if is_teacher:
         data['reviewed_at'] = s.reviewed_at
         data['reviewed_by'] = s.reviewed_by.username if s.reviewed_by_id else None
@@ -304,7 +316,7 @@ def _resolve_lesson(*, course: Course, lesson_id) -> Lesson | None:
 def create_assignment(*, teacher: User, course_id, title: str, description: str = '',
                       body: str = '', due_at=None, skill_key: str = '', lesson_id=None,
                       extra_instructions: str = '', attachment=None, status='active', announce_in_chat=True,
-                      allow_late=True, grading='five', max_score=None, ai_check=None) -> dict:
+                      allow_late=True, grading='five', max_score=None, ai_check=None, questions=None) -> dict:
     course = _get_course(course_id)
     if course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifa bera oladi."))
@@ -318,6 +330,7 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
     lesson = _resolve_lesson(course=course, lesson_id=lesson_id)
     status = _clean_status(status)
     grading, top = _clean_grading(grading, max_score)
+    cleaned_questions = hw_questions.clean_questions(questions)
 
     attachment_name = ''
     if attachment is not None:
@@ -350,9 +363,11 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
         grading=grading,
         max_score=top,
     )
+    if cleaned_questions:
+        hw_questions.set_questions(assignment, cleaned_questions)
     if status == Assignment.Status.ACTIVE:
         _publish(assignment)
-    return _assignment_dict(assignment)
+    return _with_questions(assignment, include_correct=True)
 
 
 def _enrolled_students(course: Course):
@@ -483,7 +498,7 @@ def update_assignment(
     *, teacher: User, assignment_id, title=_UNSET, description=_UNSET, body=_UNSET,
     due_at=_UNSET, skill_key=_UNSET, lesson_id=_UNSET, extra_instructions=_UNSET,
     attachment=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
-    ai_check=_UNSET,
+    ai_check=_UNSET, questions=_UNSET,
 ) -> dict:
     """Vazifani qisman yangilaydi (PATCH) — faqat yuborilgan maydonlar
     o'zgaradi, `create_assignment` bilan bir xil validatsiya."""
@@ -550,6 +565,11 @@ def update_assignment(
                 raise ValidationError({'grading': _("Baholangan topshiriqlar bor — baholash turini o'zgartirib bo'lmaydi.")})
             a.grading, a.max_score = new_grading, top
             fields += ['grading', 'max_score']
+    if questions is not _UNSET:
+        cleaned_questions = hw_questions.clean_questions(questions)
+        if a.submissions.exists():
+            raise ValidationError({'questions': _("Topshiriqlar bor — savollarni o'zgartirib bo'lmaydi.")})
+        hw_questions.set_questions(a, cleaned_questions)
     publish_now = False
     if status is not _UNSET:
         new_status = _clean_status(status)
@@ -564,7 +584,7 @@ def update_assignment(
         a.save(update_fields=fields)
     if publish_now:
         _publish(a)  # qoralama e'lon qilindi: bildirishnoma va chat kartasi endi tushadi
-    return _assignment_dict(a)
+    return _with_questions(a, include_correct=True)
 
 
 def assignment_file(*, user: User, assignment_id) -> tuple:
@@ -702,7 +722,7 @@ def get_assignment(*, user: User, assignment_id) -> dict:
     if not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu vazifani ko'rish huquqingiz yo'q."))
     _ensure_visible(user, a)
-    data = _assignment_dict(a)
+    data = _with_questions(a, include_correct=a.course.teacher_id == user.id)
     if a.course.teacher_id == user.id:
         data['ai_group_summary'] = _stored_summary(a)
         subs = list(a.submissions.select_related('student', 'assignment'))
@@ -735,20 +755,28 @@ def get_assignment(*, user: User, assignment_id) -> dict:
 MAX_SUBMISSION_FILES = 5
 
 
-def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: str = '') -> dict:
+def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: str = '', answers=None) -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
         raise PermissionDenied(_("Bu kursga yozilmagansiz — vazifa topshira olmaysiz."))
     _ensure_visible(student, a)
     if a.due_at and not a.allow_late and timezone.now() > a.due_at:
         raise ValidationError({'detail': _("Topshirish muddati tugagan — bu vazifaga endi topshirib bo'lmaydi.")})
-    if upload is None:
+    has_questions = a.questions.exists()
+    if answers not in (None, '', []) and not has_questions:
+        raise ValidationError({'answers': _("Bu vazifada savollar yo'q.")})
+    parsed_answers = hw_questions.parse_answers(a, answers) if has_questions else []
+    if upload is None and not has_questions:
         raise ValidationError({'file': _('Fayl majburiy.')})
+    if upload is None and not parsed_answers:
+        raise ValidationError({'answers': _('Javob yoki fayl kerak.')})
     extra_uploads = list(extra_uploads or [])
-    if 1 + len(extra_uploads) > MAX_SUBMISSION_FILES:
+    if upload is None and extra_uploads:
+        upload, extra_uploads = extra_uploads[0], extra_uploads[1:]
+    if (1 if upload is not None else 0) + len(extra_uploads) > MAX_SUBMISSION_FILES:
         raise ValidationError({'files': _("Bir topshiriqda ko'pi bilan %(n)s ta fayl.") % {'n': MAX_SUBMISSION_FILES}})
 
-    for item in (upload, *extra_uploads):
+    for item in ([upload] if upload is not None else []) + list(extra_uploads):
         ext = Path(item.name or '').suffix.lower()
         if ext not in rules.ALLOWED_EXTENSIONS:
             raise ValidationError({'file': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
@@ -775,8 +803,8 @@ def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: s
     submission = Submission.objects.create(
         assignment=a,
         student=student,
-        file=upload,
-        original_name=(upload.name or 'homework')[:255],
+        file=upload if upload is not None else '',
+        original_name=(upload.name or 'homework')[:255] if upload is not None else '',
         comment=(comment or '').strip()[:2000],
         status=Submission.Status.PENDING_REVIEW,
     )
@@ -784,9 +812,32 @@ def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: s
         SubmissionFile.objects.create(
             submission=submission, file=extra, original_name=(extra.name or 'file')[:255], size=extra.size, order=order,
         )
+    if has_questions:
+        return _finish_question_submission(submission, a, parsed_answers)
     if not a.ai_check or not _start_ai_check(submission):
         # AI sozlanmagan yoki ishlamayapti — o'qituvchi to'g'ridan-to'g'ri baholaydi
         _notify_new_submission(submission)
+    return _submission_dict(submission)
+
+
+def _finish_question_submission(submission: Submission, a: Assignment, parsed_answers: list) -> dict:
+    """Savolli vazifa topshirildi: testlar darhol baholanadi. Ochiq savol YO'Q bo'lsa natija avtomatik tasdiqlanadi (DONE);
+    bor bo'lsa — AI (`ai_check` + ichki OpenAI) yoki o'qituvchi baholaydi, yakuniy ballni o'qituvchi tasdiqlaydi."""
+    hw_questions.save_answers(submission, parsed_answers)
+    percent = hw_questions.percent(submission)
+    submission.overall_score = percent
+    if a.grading != Assignment.Grading.NONE and percent is not None:
+        submission.grade = rules.grade_label(percent)
+        submission.grade_value = round(percent / 20, 1) if a.grading == Assignment.Grading.FIVE else round(percent * a.max_score / 100, 1)
+    if not hw_questions.has_open_questions(a):
+        submission.status = Submission.Status.DONE
+        submission.checked_at = submission.reviewed_at = timezone.now()
+        submission.save()
+        _notify_reviewed(submission, a.course.teacher, updated=False)
+        return _submission_dict(submission)
+    submission.save()
+    if not (a.ai_check and _ai_mode() == 'engine' and _start_ai_check(submission)):
+        _notify_new_submission(submission)  # ochiq javoblarni o'qituvchi baholaydi
     return _submission_dict(submission)
 
 
@@ -960,6 +1011,7 @@ def _grade_in_app(s: Submission, now) -> str:
         _release_for_manual(s, AI_FAILED_NOTE)
         return 'failed'
     _apply_ai_result(s, {'ai_result': result})
+    hw_questions.merge_ai(s, result)  # savolli vazifa: AI ballari test ballari bilan birlashtiriladi
     s.status = Submission.Status.PENDING_REVIEW
     s.checked_at = now
     s.save()
@@ -1025,7 +1077,7 @@ def sync_ai_results(*, now=None, batch: int = 50) -> dict:
 # ── o'qituvchi baholashi/tasdiqlashi ────────────────────────────────────────
 def review_submission(*, teacher: User, submission_id, overall_score=None,
                       grade: str = '', result=None, grade_value=None, share_with_parent=None,
-                      teacher_comment=None) -> dict:
+                      teacher_comment=None, answer_scores=None) -> dict:
     """O'qituvchi topshiriqni baholaydi. Vazifa baholash turiga qarab:
 
       - `five`: `grade_value` 1-5 (yoki eski `overall_score` 0-100); `overall_score` = baho*20.
@@ -1042,6 +1094,10 @@ def review_submission(*, teacher: User, submission_id, overall_score=None,
             _("Faqat baholashni kutayotgan yoki baholangan topshiriqni baholash mumkin.")
         )
     a = s.assignment
+    if answer_scores:  # savolli vazifa: har ochiq javobga ball; umumiy baho berilmasa shulardan hisoblanadi
+        percent = hw_questions.apply_teacher_scores(s, answer_scores)
+        if percent is not None and grade_value in (None, '') and overall_score is None:
+            overall_score = percent
 
     def number(value, field):
         try:

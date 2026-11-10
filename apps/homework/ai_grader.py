@@ -101,6 +101,10 @@ def _task_text(assignment) -> str:
             parts.append(f'Task file text:\n{text}')
         except Exception:  # noqa: BLE001 — shart fayli o'qilmasa ham baholayveramiz (rasm/doc bo'lishi mumkin)
             pass
+    open_questions = [q for q in assignment.questions.all() if q.type in ('short', 'long')]
+    if open_questions:  # savolli vazifa: AI faqat ochiq savollarni baholaydi (har biri alohida element, ball og'irligi bilan)
+        parts.append('Open questions (grade each separately; points are weights):\n' + '\n'.join(
+            f'{number}. ({q.points} points) {q.text}' for number, q in enumerate(open_questions, start=1)))
     return '\n'.join(parts)[:TASK_CHARS]
 
 
@@ -140,6 +144,13 @@ def _pdf_images(data: bytes) -> list:
 
 def student_work(submission) -> tuple:
     """(matn, rasmlar) — AI'ga beriladigan o'quvchi ishi. O'qib bo'lmasa `GraderError`."""
+    if not submission.file:  # savolli vazifa: faqat ochiq javoblar matni (testlar avtomatik baholangan)
+        from . import questions as hw_questions
+
+        text = hw_questions.open_answers_text(submission)
+        if not text:
+            raise GraderError("Baholash uchun ochiq javob yo'q.")
+        return text, []
     name = submission.original_name or submission.file.name
     ext = Path(name).suffix.lower()
     if ext in rules.AUDIO_EXTENSIONS:
