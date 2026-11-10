@@ -159,7 +159,7 @@ Prod'ga o'xshash muhitda (DEBUG=False + manifest static) lokal tekshirish:
 
 - ✅ Telegram uslubidagi chat, 1 martalik direct so'rov, block
 - ✅ Kurs = guruh chat; o'quvchilar orasida DM yo'q
-- ✅ Random diqqat tekshiruvi (3-5 marta, 15s, vaqti sirlangan)
+- ✅ Diqqat tekshiruvi (dars bo'ylab teng yoyilgan: har ~24 daqiqaga 1 ta, 2 soat = 5 ta; 15s; vaqti sirlangan)
 - ✅ Doska: ruxsat so'rash, chizish, sheet'lar, sababli o'chirish, PDF→chat, faqat platformada
 - ✅ Fokus jurnali (oynadan chiqib-kirish — ota-onaga): necha marta chiqdi,
   HAR BIR chiqishda qancha turdi, qachon qaytdi, jami/eng uzun yo'qlik —

@@ -8,6 +8,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -25,6 +26,11 @@ TEACHER_PUBLISH_SOURCES = ('camera', 'microphone', 'screen_share', 'screen_share
 
 ATTENTION_WINDOW_SEC = 15  # popup ekranda turadigan vaqt (EduTech.docx)
 ATTENTION_GRACE_SEC = 8    # tarmoq kechikishi uchun qo'shimcha imkon
+ATTENTION_EVERY_MIN = 24   # har ~24 daqiqaga bitta tekshiruv (2 soatlik dars = 5 ta)
+ATTENTION_MIN_COUNT = 3
+ATTENTION_MAX_COUNT = 8
+ATTENTION_EDGE_SEC = 120   # dars boshi va oxiridagi 2 daqiqada tekshiruv yo'q
+ATTENTION_SEGMENT_PAD = 0.15  # har bo'lakning chetidan 15% — qo'shni tekshiruvlar yaqin kelmasin
 
 # Ulanish navbati (FIFO, cheklangan parallellik) — production'da o'lchangan
 # (2026-09-02): bir darsga qisqa vaqt ichida ko'p o'quvchi ulansa, LiveKit'da
@@ -170,7 +176,7 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
         lesson.save(update_fields=['live_started_at'])
     if user.role == User.Role.STUDENT:
         lesson_services.mark_joined(lesson=lesson, student=user)
-        _ensure_attention_schedule(lesson=lesson, student=user)
+        _ensure_attention_schedule_once(lesson_id=lesson.id, student=user, lesson=lesson)
 
     audit.record(action='room.join', actor=user, target=lesson, request=request)
     # O'qituvchi hech qachon kutmaydi — dars boshlanishi kechikmasin.
@@ -193,30 +199,89 @@ def leave_room(*, user: User, lesson_id, request=None) -> bool:
 
 # ── "Siz shu yerdamisiz?" — diqqat tekshiruvi ──────────────────────────────
 
-def _ensure_attention_schedule(*, lesson: Lesson, student: User):
-    """Dars oynasi ichida 3-5 ta tasodifiy tekshiruv vaqti yaratadi (server tomonda —
-    o'quvchi jadvalni oldindan ko'ra olmaydi)."""
+def _attention_offsets(lesson: Lesson, real_start) -> list[int]:
+    """Darsning HAQIQIY boshlanishidan hisoblangan tekshiruv sekundlari (soni va vaqti).
+
+    2026-11-10: avval har o'quvchiga o'z kirgan vaqtidan boshlab 3-5 ta TASODIFIY
+    vaqt tanlanardi (`random.sample`) — ular dars boshida/oxirida to'planib
+    qolishi, kech kirgan o'quvchida esa dars oxirigacha siqilib chiqishi mumkin
+    edi. Endi dars teng `count` ta bo'lakka bo'linadi va har bo'lakda BITTA
+    tasodifiy vaqt tanlanadi (bo'lak chetlaridan padding bilan) — shunda
+    tekshiruvlar butun dars bo'ylab teng yoyiladi va hech qachon ketma-ket
+    kelmaydi. Soni darsning uzunligiga qarab: har ~24 daqiqaga bitta
+    (2 soatlik dars = 5 ta), kamida 3, ko'pi bilan 8.
+
+    Jadval darsning o'zi uchun BIR XIL (barcha o'quvchiga) — lekin server
+    siri (SECRET_KEY) bilan aralashtirilgan urug'dan chiqadi, shuning uchun
+    o'quvchi uni oldindan bila olmaydi.
+    """
+    total = lesson.duration_min * 60
+    count = max(ATTENTION_MIN_COUNT, min(ATTENTION_MAX_COUNT, round(lesson.duration_min / ATTENTION_EVERY_MIN)))
+    usable_start = ATTENTION_EDGE_SEC
+    span = total - 2 * ATTENTION_EDGE_SEC  # dars boshi va oxirida bo'sh chekka qoladi
+    if span <= 0:
+        return []
+    segment = span / count
+    pad = segment * ATTENTION_SEGMENT_PAD
+    rng = random.Random(f'{settings.SECRET_KEY}:{lesson.id}:{int(real_start.timestamp())}')
+    return [int(usable_start + i * segment + rng.uniform(pad, segment - pad)) for i in range(count)]
+
+
+def _ensure_attention_schedule(*, lesson: Lesson, student: User) -> bool:
+    """O'quvchi uchun tekshiruvlarni yaratadi. Jadval tayyor (yoki endi yaratildi)
+    bo'lsa True, dars hali LIVE emas bo'lsa False qaytaradi.
+
+    DIQQAT: dars LIVE bo'lmaguncha jadval QO'YILMAYDI. Aks holda o'quvchi
+    o'qituvchidan oldin kirsa, vaqtlar rejalashtirilgan soatdan hisoblanib,
+    o'qituvchi kech boshlaganda noto'g'ri vaqtlarda chiqardi. Kech kirgan
+    o'quvchiga o'tib ketgan vaqtlar qo'yilmaydi (o'sha paytda u darsda yo'q edi)
+    — faqat qolgan tekshiruvlar keladi, ular siqilib chiqmaydi."""
+    if lesson.status != Lesson.Status.LIVE or not lesson.live_started_at:
+        return False
     if AttentionCheck.objects.filter(lesson=lesson, student=student).exists():
-        return
-    now = timezone.now()
-    # HAQIQIY boshlanish (o'qituvchi kech yoki erta boshlagan bo'lishi mumkin) — rejalashtirilgan soat emas;
-    # aks holda kechikib boshlangan darsda tekshiruv oynasi "tugagan" chiqib, hech qanday tekshiruv qo'yilmasdi.
-    real_start = lesson.live_started_at or lesson.starts_at
-    end = real_start + timedelta(minutes=lesson.duration_min)
-    start = max(now + timedelta(minutes=1), real_start)
-    window = (end - start).total_seconds()
-    if window < 120:  # dars deyarli tugagan — tekshiruv qo'yilmaydi
-        return
-    count = random.randint(3, 5)
-    offsets = sorted(random.sample(range(30, int(window) - 30), k=count))
+        return True
+    real_start = lesson.live_started_at  # HAQIQIY boshlanish (o'qituvchi kech/erta boshlashi mumkin)
+    earliest = timezone.now() + timedelta(minutes=1)  # kirgan zahoti popup chiqmasin
+    due = [real_start + timedelta(seconds=o) for o in _attention_offsets(lesson, real_start)]
     AttentionCheck.objects.bulk_create([
-        AttentionCheck(lesson=lesson, student=student, due_at=start + timedelta(seconds=o))
-        for o in offsets
+        AttentionCheck(lesson=lesson, student=student, due_at=when) for when in due if when >= earliest
     ])
+    return True
+
+
+def _ensure_attention_schedule_once(*, lesson_id, student: User, lesson: Lesson | None = None):
+    """Polling (har 3s) har safar bazaga bormasligi uchun: jadval tayyor bo'lgach
+    kesh belgisi qo'yiladi; parallel so'rovlar ikki marta yaratmasin deb qisqa qulf."""
+    done_key = f'attn:done:{lesson_id}:{student.id}'
+    if cache.get(done_key):
+        return
+    lock_key = f'attn:lock:{lesson_id}:{student.id}'
+    if not cache.add(lock_key, 1, 10):
+        return
+    try:
+        if lesson is None:
+            lesson = Lesson.objects.select_related('course').filter(pk=lesson_id).first()
+            if lesson is None or not lesson.course.enrollments.filter(
+                student=student, status=Enrollment.Status.APPROVED,
+            ).exists():
+                return
+        if _ensure_attention_schedule(lesson=lesson, student=student):
+            cache.set(done_key, 1, 8 * 3600)
+    finally:
+        # Qulf faqat bajarilayotgan paytda kerak. Dars hali LIVE bo'lmasa ham
+        # darhol bo'shatiladi, aks holda o'qituvchi boshlagach keyingi polling
+        # 10s bloklanib qolardi.
+        cache.delete(lock_key)
 
 
 def pending_attention(*, user: User, lesson_id) -> AttentionCheck | None:
     """Hozir ko'rsatilishi kerak bo'lgan tekshiruv (15s oynasi ichida, javobsiz)."""
+    # O'quvchi dars LIVE bo'lmasdan kirgan bo'lsa, jadval shu yerda (polling orqali) yaratiladi.
+    if user.role == User.Role.STUDENT and lesson_id:
+        try:
+            _ensure_attention_schedule_once(lesson_id=lesson_id, student=user)
+        except (ValueError, TypeError, DjangoValidationError):  # noto'g'ri lesson_id
+            return None
     now = timezone.now()
     return AttentionCheck.objects.filter(
         lesson_id=lesson_id, student=user, answered_at__isnull=True,
