@@ -113,6 +113,13 @@ class User(AbstractUser):
     updated_at = DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
+        # 2026-11-10: telefon HAR DOIM `+998XXXXXXXXX` ko'rinishida saqlanadi (frontend "901234567",
+        # "+998 90 123 45 67" kabi turlicha yuborgan, shuning uchun bitta odamning rol-akkauntlari
+        # bir-biriga bog'lanmay, akkaunt almashtirish ishlamay qolgan edi). Noto'g'ri raqam o'zgarishsiz qoladi.
+        if self.phone:
+            from apps.core.sms import canonical_phone
+
+            self.phone = canonical_phone(self.phone) or self.phone
         if self.role == self.Role.STUDENT and not self.invite_code:
             code = generate_invite_code()
             while User.objects.filter(invite_code=code).exists():

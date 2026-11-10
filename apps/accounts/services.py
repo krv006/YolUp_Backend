@@ -1121,8 +1121,10 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     if not current_user.phone:
         raise ValidationError({'role': _("Rol almashtirish uchun avval telefon raqamingizni kiriting.")})
 
-    target = User.objects.filter(
-        phone=current_user.phone, role=role,
+    from . import selectors
+
+    target = selectors.users_with_phone(current_user.phone).filter(
+        role=role,
     ).exclude(pk=current_user.pk).first()
     if target is not None and not target.is_active:
         raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))

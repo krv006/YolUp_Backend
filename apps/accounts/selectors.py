@@ -153,4 +153,20 @@ def linked_accounts(user: User) -> QuerySet[User]:
     `phone` bo'sh bo'lsa — bo'sh natija (bo'sh qiymat bo'yicha "bog'lash" mantiqsiz)."""
     if not user.phone:
         return User.objects.none()
-    return User.objects.filter(phone=user.phone, is_active=True).exclude(pk=user.pk).order_by('role', 'username')
+    return users_with_phone(user.phone).filter(is_active=True).exclude(pk=user.pk).order_by('role', 'username')
+
+
+def users_with_phone(raw_phone: str) -> QuerySet[User]:
+    """Shu raqamli BARCHA akkauntlar — raqamlarni (faqat raqamlar) solishtirib: `901234567`,
+    `+998 90 123 45 67` va `+998901234567` bir xil raqam hisoblanadi (2026-11-10: avval aniq satr
+    solishtirilgani uchun bitta odamning akkauntlari bog'lanmay qolgan edi)."""
+    from apps.core.sms import normalize_phone, phone_variants
+
+    digits = normalize_phone(raw_phone)
+    if not digits:
+        return User.objects.none()
+    ids = [
+        u.pk for u in User.objects.filter(phone__in=phone_variants(raw_phone)).only('pk', 'phone')
+        if normalize_phone(u.phone) == digits
+    ]
+    return User.objects.filter(pk__in=ids)

@@ -41,6 +41,12 @@ def normalize_phone(raw: str) -> str:
     return digits if 9 <= len(digits) <= 15 else ''
 
 
+def canonical_phone(raw: str) -> str:
+    """Saqlash uchun yagona ko'rinish: `+998XXXXXXXXX`. Bo'sh/noto'g'ri -> '' (chaqiruvchi asl qiymatni saqlab qoladi)."""
+    digits = normalize_phone(raw)
+    return f'+{digits}' if digits else ''
+
+
 def phone_variants(raw: str) -> list:
     """Bazada telefon turli ko'rinishda saqlangan bo'lishi mumkin — qidirish uchun mumkin bo'lgan yozilishlar."""
     digits = normalize_phone(raw)
