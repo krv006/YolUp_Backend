@@ -696,7 +696,8 @@ def send_personal_reminders(*, now=None) -> int:
         if now < starts_at - timedelta(minutes=pref.minutes_before):
             continue
         send_notification(
-            sender=sender, description=f'«{title}» {pref.minutes_before} daqiqadan keyin boshlanadi.',
+            sender=sender,
+            description=f"«{title}» {pref.minutes_before} daqiqadan keyin boshlanadi ({timezone.localtime(starts_at).strftime('%d.%m.%Y %H:%M')}).",
             target_type=Notification.Target.USER, user_id=pref.user_id, kind=kind, link_type=link, link_id=str(pref.target_id),
         )
         ReminderPref.objects.filter(pk=pref.pk).update(sent_at=now)
@@ -749,7 +750,8 @@ def send_lesson_reminders(*, now=None) -> int:
                 sender=lesson.course.teacher,
                 description=(
                     f'«{lesson.title or lesson.course.title}» darsi '
-                    f'{user.lesson_reminder_minutes} daqiqadan keyin boshlanadi.'
+                    f'{user.lesson_reminder_minutes} daqiqadan keyin boshlanadi '
+                    f"({timezone.localtime(lesson.starts_at).strftime('%d.%m.%Y %H:%M')})."
                 ),
                 target_type=Notification.Target.USER, user_id=user.id,
                 kind='lesson_reminder', link_type='lesson', link_id=str(lesson.id),
@@ -852,7 +854,7 @@ def notify_parents_attendance(*, lesson: Lesson, student: User, at) -> None:
     from apps.accounts.services import _display_name
 
     late_minutes = int((at - _lesson_real_start(lesson)).total_seconds() // 60) if lesson.live_started_at else 0
-    clock = timezone.localtime(at).strftime('%H:%M')
+    clock = timezone.localtime(at).strftime('%d.%m.%Y %H:%M')  # 2026-11-10: sana ham (avval faqat soat edi)
     name, course = _display_name(student), lesson.course.title
     if late_minutes > LATE_AFTER_MINUTES:
         _attendance_event(

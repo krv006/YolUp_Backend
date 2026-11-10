@@ -5,6 +5,7 @@ apps.core.permissions registry'sida.
 """
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.translation import gettext_lazy as _
 from rest_framework import generics, serializers, status
 from rest_framework.exceptions import APIException, NotFound, ValidationError
@@ -15,6 +16,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from apps.core import audit
 from apps.core.permissions import RequirePerm
 
 from . import selectors, services, sessions
@@ -697,11 +699,19 @@ class UserSearchView(APIView):
         return Response(UserSerializer(users, many=True).data)
 
 
+class AdminTeacherSerializer(UserSerializer):
+    """Admin ro'yxati: o'qituvchi + test yaratish xizmati yoqilganmi."""
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ['can_create_tests']
+        read_only_fields = UserSerializer.Meta.read_only_fields + ['can_create_tests']
+
+
 class TeacherStatsListView(generics.ListAPIView):
-    """Admin: barcha o'qituvchilar ro'yxati, har birining umumiy reytingi bilan."""
+    """Admin: barcha o'qituvchilar ro'yxati, har birining umumiy reytingi bilan (+ `can_create_tests`)."""
 
     permission_classes = [RequirePerm('user.manage')]
-    serializer_class = UserSerializer
+    serializer_class = AdminTeacherSerializer
 
     def get_queryset(self):
         return selectors.teacher_list()
@@ -865,3 +875,25 @@ class ConsentListCreateView(generics.ListCreateAPIView):
             request=request,
         )
         return Response(ConsentSerializer(consent).data, status=status.HTTP_201_CREATED)
+
+
+class AdminTestAccessView(APIView):
+    """Admin: o'qituvchiga test yaratishni yoqadi/o'chiradi — `PATCH /admin/users/<id>/test-access/ {enabled: bool}` ->
+    `{id, username, can_create_tests}`. Mavjud testlar o'z joyida qoladi; faqat yangi test yaratish (qo'lda, import, AI) yopiladi."""
+
+    permission_classes = [RequirePerm('user.manage')]
+
+    def patch(self, request, pk):
+        from rest_framework.exceptions import NotFound
+
+        enabled = request.data.get('enabled')
+        if not isinstance(enabled, bool):
+            raise ValidationError({'enabled': _("true yoki false bo'lishi kerak.")})
+        try:
+            user = User.objects.get(pk=pk, role=User.Role.TEACHER)
+        except (User.DoesNotExist, ValueError, DjangoValidationError):
+            raise NotFound(_("O'qituvchi topilmadi."))
+        user.can_create_tests = enabled
+        user.save(update_fields=['can_create_tests'])
+        audit.record(action='user.test_access', actor=request.user, target=user, meta={'enabled': enabled}, request=request)
+        return Response({'id': str(user.id), 'username': user.username, 'can_create_tests': user.can_create_tests})

@@ -14,7 +14,7 @@ class CustomUserAdmin(UserAdmin):
     list_filter = ['role', 'is_active']
     readonly_fields = ['linked_accounts_display']
     fieldsets = UserAdmin.fieldsets + (
-        ('EdTech', {'fields': ('role', 'phone', 'invite_code', 'linked_accounts_display')}),
+        ('EdTech', {'fields': ('role', 'phone', 'invite_code', 'can_create_tests', 'linked_accounts_display')}),
     )
 
     @admin.display(description='Shu raqamdagi boshqa akkauntlar')

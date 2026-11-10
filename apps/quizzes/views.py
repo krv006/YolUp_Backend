@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
-from apps.core.permissions import RequirePerm
+from apps.core.permissions import RequirePerm, TestCreationAllowed
 
 from . import ai_jobs, attempts_export, export, selectors, services
 from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizDraft
@@ -72,7 +72,7 @@ class QuizListCreateView(generics.ListCreateAPIView):
 
     def get_permissions(self):
         perm = 'quiz.create' if self.request.method == 'POST' else 'quiz.view'
-        return [RequirePerm(perm)()]
+        return [RequirePerm(perm)(), TestCreationAllowed()]
 
     def get_queryset(self):
         return selectors.quizzes_for(self.request.user)
@@ -106,7 +106,7 @@ class QuizImportView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def post(self, request):
         result = services.import_quiz_file(upload=request.FILES.get('file'))
@@ -122,7 +122,7 @@ class QuizAiGenerateView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def get(self, request):
         jobs = AiQuizJob.objects.filter(teacher=request.user)[:50]
@@ -160,7 +160,7 @@ class QuizGoogleDocImportView(APIView):
     kerak emas — `QuizImportView` bilan bir xil preview shakli."""
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def post(self, request):
         result = services.import_google_doc(url=request.data.get('url'))
@@ -174,7 +174,7 @@ class QuizGoogleFormImportView(APIView):
     to'g'ri variantni o'zi belgilaydi."""
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def post(self, request):
         result = services.import_google_form(url=request.data.get('url'))
@@ -391,7 +391,7 @@ class QuizBankGenerateView(APIView):
     """O'qituvchi: savollar bankidan test yig'ish (AI'siz) — `POST {topic, count?, course?, title?}` -> qoralama test (201)."""
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def post(self, request):
         from apps.lessons.models import Course
@@ -523,7 +523,7 @@ class QuizMiniTestView(APIView):
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_permissions(self):
-        return [RequirePerm('quiz.create')()]
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
 
     def post(self, request):
         if not _is_uuid(request.data.get('quiz_id')):

@@ -8,7 +8,7 @@ Foydalanish:
     permission_classes = [RequirePerm('course.create')]
     yoki viewset ichida: self.require('lesson.finish')
 """
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 # Rol kodlari (apps.accounts.models.User.Role bilan mos — import sikliga yo'l
 # qo'ymaslik uchun satr ko'rinishida)
@@ -103,3 +103,16 @@ def RequirePerm(*perms: str):
 
     _RequirePerm.__name__ = f'RequirePerm[{",".join(perms)}]'
     return _RequirePerm
+
+
+class TestCreationAllowed(BasePermission):
+    """Test yaratish (qo'lda, fayldan/Google'dan import, AI bilan) pullik xizmat (2026-11-10): admin foydalanuvchi bo'yicha
+    yoqadi/o'chiradi (`User.can_create_tests`, hozircha hammada yoqilgan). O'qish so'rovlari (GET) cheklanmaydi."""
+
+    code = 'test_creator_locked'
+    message = "Test yaratish xizmati sizda yoqilmagan. Administrator bilan bog'laning."
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(getattr(request.user, 'can_create_tests', True)) or request.user.role != TEACHER
