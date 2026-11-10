@@ -163,6 +163,94 @@ def child_summary(*, viewer: User, student_id, now=None) -> dict:
     }
 
 
+SCORE_RANGES = ('8w', '6m', 'all')
+
+
+def _score_points(student: User, viewer: User, now) -> list:
+    """Ball tarixi nuqtalari: uy vazifasi (tasdiqlangan, eng so'nggi topshiriq), test (har testning eng so'nggi urinishi) va
+    mock imtihon (natijasi ochiq bo'lgan). Hammasi 10 ballik shkalada."""
+    from apps.exams import services as exam_services
+    from apps.exams.models import Exam, ExamAttempt
+    from apps.quizzes.models import QuizAttempt
+
+    points = []
+    latest = set()
+    homework = Submission.objects.filter(student=student).select_related('assignment').order_by('assignment_id', '-created_at')
+    for sub in homework:
+        if sub.assignment_id in latest:
+            continue
+        latest.add(sub.assignment_id)
+        if sub.status == Submission.Status.DONE and sub.overall_score is not None:
+            points.append({
+                'date': sub.reviewed_at or sub.checked_at or sub.created_at, 'kind': 'homework',
+                'title': sub.assignment.title, 'score_10': round(sub.overall_score / 10, 1),
+            })
+    seen_quizzes = set()
+    for attempt in QuizAttempt.objects.filter(student=student, max_score__gt=0).select_related('quiz').order_by('-created_at'):
+        if attempt.quiz_id in seen_quizzes:
+            continue
+        seen_quizzes.add(attempt.quiz_id)
+        points.append({
+            'date': attempt.created_at, 'kind': 'quiz', 'title': attempt.quiz.title or attempt.quiz.topic,
+            'score_10': round(attempt.score * 10 / attempt.max_score, 1),
+        })
+    attempts = ExamAttempt.objects.filter(student=student).select_related('exam')
+    for attempt in attempts:
+        result = exam_services.child_result(attempt.exam, viewer, student)  # natija ochiq bo'lmasa (imtihon tugamagan) — None
+        if result and result.get('participated') and result.get('score') is not None and result.get('max'):
+            points.append({
+                'date': attempt.finished_at or attempt.exam.ends_at, 'kind': 'exam', 'title': attempt.exam.title,
+                'score_10': round(result['score'] * 10 / result['max'], 1),
+            })
+    return sorted(points, key=lambda p: p['date'])
+
+
+def _bucket_averages(points: list) -> dict:
+    by_kind = {}
+    for kind in ('homework', 'quiz', 'exam'):
+        values = [p['score_10'] for p in points if p['kind'] == kind]
+        by_kind[kind] = round(sum(values) / len(values), 1) if values else None
+    values = [p['score_10'] for p in points]
+    return {'overall': round(sum(values) / len(values), 1) if values else None, **by_kind, 'count': len(points)}
+
+
+def child_scores(*, viewer: User, student_id, range_key: str = '8w', now=None) -> dict:
+    """GET /analytics/child/<id>/scores/?range=8w|6m|all — ball tarixi: uy vazifasi + test + mock imtihon (10 ballik),
+    davrlar bo'yicha o'rtachalar (8w — haftalar, 6m va all — oylar). `analytics` roziligi o'chiq bo'lsa 403."""
+    from rest_framework.exceptions import ValidationError
+
+    if range_key not in SCORE_RANGES:
+        raise ValidationError({'range': "8w, 6m yoki all bo'lishi kerak."})
+    student = consent.approved_child(viewer, student_id)
+    consent.require(student, Consent.Kind.ANALYTICS)
+    now = now or timezone.now()
+    points = _score_points(student, viewer, now)
+    if range_key == '8w':
+        first, step, count = week_start(now, -7), 'week', 8
+    elif range_key == '6m':
+        first, step, count = month_start(now, -5), 'month', 6
+    else:
+        earliest = timezone.localtime(points[0]['date']) if points else timezone.localtime(now)
+        first = month_start(earliest)
+        count = min(24, max(1, (month_start(now).year - first.year) * 12 + month_start(now).month - first.month + 1))
+        if count == 24:  # juda uzoq tarix — oxirgi 24 oy
+            first = month_start(now, -23)
+        step = 'month'
+    in_range = [p for p in points if p['date'] >= first]
+    periods = []
+    for index in range(count):
+        if step == 'week':
+            start, end = first + timedelta(weeks=index), first + timedelta(weeks=index + 1)
+        else:
+            start, end = month_start(first, index), month_start(first, index + 1)
+        bucket = [p for p in in_range if start <= p['date'] < end]
+        periods.append({'start': timezone.localtime(start).date().isoformat(), **_bucket_averages(bucket)})
+    return {
+        'student_id': str(student.pk), 'range': range_key, 'scale': SCALE, 'period_type': step,
+        'summary': _bucket_averages(in_range), 'periods': periods, 'points': in_range,
+    }
+
+
 def children_summary(*, viewer: User, period: str, now=None) -> list:
     """GET /analytics/children/summary/?period=week|month — barcha tasdiqlangan farzandlar bitta javobda (N+1 yo'q)."""
     now = now or timezone.now()

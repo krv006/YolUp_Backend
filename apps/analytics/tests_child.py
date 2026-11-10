@@ -2,6 +2,7 @@
 
 Hamma hisob aniq bir `now` (2026-11-11 chorshanba 12:00 Toshkent) atrofida — oy/hafta chegaralarida tasodifiy yiqilmasligi uchun."""
 from datetime import datetime, timedelta
+from unittest import mock
 
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
@@ -103,6 +104,8 @@ class ChildSummaryTests(ChildAnalyticsBase):
 
     def test_only_the_latest_submission_per_assignment_counts(self):
         newer = self.score(self.student, self.a1, 50, at(10))  # qayta topshirilgan: eng so'nggisi 50
+        # vaqtlar qat'iy qo'yiladi (avval eski topshiriq HAQIQIY "hozir" bilan yaratilib, sana o'tgach testni sindirardi)
+        Submission.objects.filter(student=self.student, assignment=self.a1).exclude(pk=newer.pk).update(created_at=at(3))
         Submission.objects.filter(pk=newer.pk).update(created_at=at(10))
         data = child.child_summary(viewer=self.parent, student_id=self.student.pk, now=NOW)
         self.assertEqual(data['score']['average'], 7.0)  # (50 + 90) / 2
@@ -217,3 +220,69 @@ class ChildRankTests(ChildAnalyticsBase):
         other = APIClient()
         other.force_authenticate(self.other_parent)
         self.assertEqual(other.get(f'{base}?course={self.course.pk}').status_code, 403)
+
+
+class ChildScoresTests(ChildAnalyticsBase):
+    """2026-11-10: ball tarixiga test va mock imtihon ham qo'shildi; 8w / 6m / all davrlari."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.exams.models import Exam, ExamAttempt
+        from apps.quizzes.models import Quiz, QuizAttempt
+
+        self.quiz = Quiz.objects.create(course=self.course, title='Unit 1 test', topic='Unit 1')
+        old = QuizAttempt.objects.create(quiz=self.quiz, student=self.student, score=2, max_score=10)
+        new = QuizAttempt.objects.create(quiz=self.quiz, student=self.student, score=9, max_score=10)
+        QuizAttempt.objects.filter(pk=old.pk).update(created_at=at(6))
+        QuizAttempt.objects.filter(pk=new.pk).update(created_at=at(10))  # eng so'nggi urinish hisobga olinadi
+        QuizAttempt.objects.create(quiz=self.quiz, student=self.rival, score=1, max_score=10)  # boshqa o'quvchi kirmaydi
+        self.exam = Exam.objects.create(
+            course=self.course, title='Mock IELTS', template_key='ielts', starts_at=at(8, 9), ends_at=at(8, 12),
+        )
+        ExamAttempt.objects.create(exam=self.exam, student=self.student, finished_at=at(8, 11))
+
+    def scores(self, range_key='8w', user=None):
+        client = APIClient()
+        client.force_authenticate(user or self.parent)
+        with mock.patch('apps.analytics.child.timezone.now', return_value=NOW), mock.patch(
+            'apps.exams.services.child_result', return_value={'participated': True, 'score': 7.0, 'max': 9.0},
+        ):
+            return client.get(f'/api/v1/analytics/child/{self.student.id}/scores/', {'range': range_key})
+
+    def test_points_cover_homework_quiz_and_exam_in_ten_point_scale(self):
+        r = self.scores('8w')
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        got = {(p['kind'], p['title']): p['score_10'] for p in body['points']}
+        self.assertEqual(got[('homework', 'A1')], 8.0)
+        self.assertEqual(got[('homework', 'A2')], 9.0)
+        self.assertEqual(got[('quiz', 'Unit 1 test')], 9.0)  # eng so'nggi urinish 9/10
+        self.assertEqual(got[('exam', 'Mock IELTS')], 7.8)    # 7/9 * 10
+        self.assertEqual(len([p for p in body['points'] if p['kind'] == 'quiz']), 1)
+        dates = [p['date'] for p in body['points']]
+        self.assertEqual(dates, sorted(dates))
+        self.assertEqual(body['scale'], 10)
+
+    def test_weekly_buckets_for_8w_and_monthly_for_6m(self):
+        body = self.scores('8w').json()
+        self.assertEqual((body['period_type'], len(body['periods'])), ('week', 8))
+        week = next(p for p in body['periods'] if p['start'] == '2026-11-09')  # 9-15 noyabr: A2 (9) + test (9)
+        self.assertEqual((week['homework'], week['quiz'], week['exam'], week['overall'], week['count']), (9.0, 9.0, None, 9.0, 2))
+        body = self.scores('6m').json()
+        self.assertEqual((body['period_type'], len(body['periods'])), ('month', 6))
+        november = next(p for p in body['periods'] if p['start'] == '2026-11-01')
+        self.assertEqual(november['exam'], 7.8)
+        self.assertEqual(november['count'], 4)  # A1, A2, test, imtihon (A3 oktabrda)
+        self.assertEqual(body['summary']['count'], len(body['points']))
+
+    def test_all_starts_at_the_first_result_and_old_points_stay_out_of_8w(self):
+        everything = self.scores('all').json()
+        self.assertEqual(everything['periods'][0]['start'], '2026-10-01')  # eng birinchi ball: A3 (oktabr)
+        short = self.scores('8w').json()
+        self.assertTrue(all(p['date'] >= '2026-09-14' for p in short['points']))
+
+    def test_access_rules(self):
+        self.assertEqual(self.scores('3y').status_code, 400)
+        self.assertEqual(self.scores('8w', user=self.other_parent).status_code, 403)  # tasdiqlanmagan farzand
+        Consent.objects.create(student=self.student, granted_by=self.parent, kind=Consent.Kind.ANALYTICS, granted=False)
+        self.assertEqual(self.scores('8w').status_code, 403)

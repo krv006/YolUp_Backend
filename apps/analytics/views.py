@@ -87,6 +87,18 @@ class ChildSummaryView(APIView):
         return Response(child.child_summary(viewer=request.user, student_id=student_id))
 
 
+class ChildScoresView(APIView):
+    """GET /analytics/child/<student_id>/scores/?range=8w|6m|all — ball tarixi (uy vazifasi + test + mock imtihon, 10 ballik)
+    va davrlar bo'yicha o'rtachalar. `analytics` roziligi o'chiq bo'lsa 403 `consent_required`."""
+
+    permission_classes = [RequirePerm('link.view')]
+
+    def get(self, request, student_id):
+        return Response(child.child_scores(
+            viewer=request.user, student_id=student_id, range_key=request.query_params.get('range', '8w'),
+        ))
+
+
 class ChildRankView(APIView):
     """GET /analytics/child/<student_id>/rank/?course=<uuid>&month=YYYY-MM — farzandning guruhdagi o'rni (rank, total,
     top_percent, percentile, delta)."""
