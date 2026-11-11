@@ -22,10 +22,12 @@ from django.db.models import (
     FloatField,
     ForeignKey,
     JSONField,
+    ManyToManyField,
     PositiveIntegerField,
     PositiveSmallIntegerField,
     TextChoices,
     TextField,
+    URLField,
     UniqueConstraint,
 )
 
@@ -36,7 +38,17 @@ from apps.core.uploads import homework_submission_path, homework_task_path
 class Assignment(TimeStampedUUIDModel):
     """O'qituvchi bergan uy vazifasi. Fan kursdan olinadi (course.subject)."""
 
-    course = ForeignKey('lessons.Course', CASCADE, related_name='assignments')
+    # `course` bo'sh bo'lsa — "vazifalar bazasi"dagi vazifa (status=bank): faqat muallifga ko'rinadi, keyin
+    # `assign` orqali guruh(lar)ga nusxa qilib beriladi (2026-11-11).
+    course = ForeignKey('lessons.Course', CASCADE, null=True, blank=True, related_name='assignments')
+    # Vazifani yaratgan o'qituvchi (bazadagi vazifa egasi); eski vazifalarda bo'sh — ega kursning o'qituvchisi.
+    author = ForeignKey(settings.AUTH_USER_MODEL, SET_NULL, null=True, blank=True, related_name='authored_assignments')
+    # Bazadagi vazifadan yaratilgan nusxa uchun — manba
+    source = ForeignKey('self', SET_NULL, null=True, blank=True, related_name='copies')
+    # Faqat guruhdagi shu o'quvchilarga berilgan (bo'sh = guruhdagi hamma)
+    assigned_students = ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='assigned_homework')
+    # Google Form havolasi: o'quvchi formani shu yerda ochib to'ldiradi, platformada izoh bilan topshiradi
+    google_form_url = URLField(max_length=500, blank=True, default='')
     # Vazifa qaysi (tugagan) darsga/mavzuga tegishli — ixtiyoriy, bir dars
     # bo'yicha bir nechta vazifa berish mumkin (FK, cheklovsiz).
     lesson = ForeignKey(
@@ -56,6 +68,7 @@ class Assignment(TimeStampedUUIDModel):
     class Status(TextChoices):
         DRAFT = 'draft', 'Qoralama'
         ACTIVE = 'active', 'Faol'
+        BANK = 'bank', 'Vazifalar bazasida'
 
     status = CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE, db_index=True)
     # Guruhga AI xulosa va tavsiya: oxirgi tayyor natija saqlanadi (sahifa ochilganda qayta hisoblamaslik uchun)

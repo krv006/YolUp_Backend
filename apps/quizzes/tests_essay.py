@@ -29,7 +29,8 @@ class EssayQuestionTests(QuizTestBase):
         created = self.quiz()
         essay = self.of_type(created['questions'], 'essay')
         single = self.of_type(created['questions'], 'single')
-        right = next(o['id'] for o in self.take(created['id'])['questions'][0]['options'] if o['text'] == '4')
+        shown = next(q for q in self.take(created['id'])['questions'] if str(q['id']) == str(single['id']))  # savollar aralash tartibda
+        right = next(o['id'] for o in shown['options'] if o['text'] == '4')
         text = 'In my opinion ' + 'word ' * 300
         resp = self.submit(created['id'], [
             {'question': single['id'], 'selected_option': right}, {'question': essay['id'], 'value_text': text}])

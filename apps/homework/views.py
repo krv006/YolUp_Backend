@@ -39,6 +39,10 @@ class AssignmentListCreateView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
+        if request.query_params.get('bank') in ('1', 'true', 'yes'):  # vazifalar bazasi (guruhsiz vazifalar) — faqat o'qituvchi
+            if not user_has_perm(request.user, 'homework.assign'):
+                return Response({'detail': "Vazifalar bazasi faqat o'qituvchi uchun."}, status=403)
+            return Response(services.list_bank(user=request.user))
         student = request.query_params.get('student')
         if student and request.user.role == 'parent':  # ota-ona: `?student=<farzand>` — farzandning hamma kurslari vazifalari
             return Response(services.list_child_assignments(
@@ -70,6 +74,7 @@ class AssignmentListCreateView(APIView):
             grading=request.data.get('grading') or 'five',
             max_score=request.data.get('max_score'),
             questions=_json_field(request.data.get('questions')),
+            google_form_url=request.data.get('google_form_url') or '',
         )
         return Response(data, status=201)
 
@@ -90,7 +95,7 @@ class AssignmentDetailView(APIView):
         kwargs = {}
         for field in (
             'title', 'description', 'body', 'due_at', 'skill_key', 'lesson_id', 'extra_instructions',
-            'status', 'announce_in_chat', 'allow_late', 'ai_check', 'grading', 'max_score',
+            'status', 'announce_in_chat', 'allow_late', 'ai_check', 'grading', 'max_score', 'google_form_url',
         ):
             if field in request.data:
                 kwargs[field] = request.data.get(field)
@@ -107,6 +112,41 @@ class AssignmentDetailView(APIView):
             return Response({'detail': "O'chirish faqat o'qituvchi uchun."}, status=403)
         services.delete_assignment(teacher=request.user, assignment_id=assignment_id)
         return Response(status=204)
+
+
+class AssignmentAssignView(APIView):
+    """Bazadagi vazifani guruh(lar)ga va/yoki alohida o'quvchilarga berish:
+    `POST {course_ids?: [], student_ids?: [], due_at?, allow_late?, announce_in_chat?}` -> `201 {count, assignments}`."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def post(self, request, assignment_id):
+        data = services.assign_from_bank(
+            teacher=request.user, assignment_id=assignment_id,
+            course_ids=_json_field(request.data.get('course_ids')), student_ids=_json_field(request.data.get('student_ids')),
+            due_at=request.data.get('due_at') or None, allow_late=request.data.get('allow_late'),
+            announce_in_chat=request.data.get('announce_in_chat'),
+        )
+        return Response(data, status=201)
+
+
+class AssignmentAudienceView(APIView):
+    """Vazifa guruhning kimlariga berilgan: `GET`; `PUT {student_ids: [...]}` — faqat shularga (bo'sh ro'yxat — hammaga)."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get(self, request, assignment_id):
+        return Response(services.assignment_audience(teacher=request.user, assignment_id=assignment_id))
+
+    def put(self, request, assignment_id):
+        ids = request.data.get('student_ids')
+        if ids is None:
+            raise ValidationError({'student_ids': "O'quvchilar ro'yxatini yuboring (bo'sh ro'yxat — hammaga)."})
+        return Response(services.set_assignment_audience(
+            teacher=request.user, assignment_id=assignment_id, student_ids=_json_field(ids) or [],
+        ))
 
 
 class AssignmentFileView(APIView):

@@ -1,8 +1,11 @@
 """Quizzes service qatlami — barcha yozuvchi biznes-logika shu yerda."""
+import random
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -19,7 +22,7 @@ from . import (
     test_creator_import,
     xlsx_import,
 )
-from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
+from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt, QuizSession
 
 _IMPORT_PARSERS = {
     '.docx': docx_import.parse_docx_questions,
@@ -211,7 +214,7 @@ def create_quiz(
     *, teacher: User, topic: str, questions: list, course: Course | None = None,
     subject: str = '', lesson: Lesson | None = None, title: str = '', description: str = '',
     due_at=None, opens_at=None, status: str = Quiz.Status.PUBLISHED, groups: list | None = None,
-    student_ids=None,
+    student_ids=None, time_limit_minutes=None, max_attempts=None, questions_per_attempt=None,
 ) -> Quiz:
     if not topic.strip():
         raise ValidationError({'topic': _('Mavzu bo\'sh bo\'lishi mumkin emas.')})
@@ -226,9 +229,14 @@ def create_quiz(
             raise ValidationError({'lesson': _('Bu dars ushbu kursga tegishli emas.')})
         subject = course.subject  # guruh testi fanini kursdan oladi
 
+    _check_limits(
+        question_count=len(questions), has_groups=any(q.get('group') is not None for q in questions),
+        time_limit_minutes=time_limit_minutes, max_attempts=max_attempts, questions_per_attempt=questions_per_attempt,
+    )
     quiz = Quiz.objects.create(
         course=course, author=teacher, subject=subject, lesson=lesson, topic=topic, title=title,
         description=description, due_at=due_at, opens_at=opens_at, status=status,
+        time_limit_minutes=time_limit_minutes, max_attempts=max_attempts, questions_per_attempt=questions_per_attempt,
     )
     group_objs = sync_groups(quiz, groups or [])
     for q_index, q_data in enumerate(questions):
@@ -361,6 +369,7 @@ def build_quiz_template(*, fmt: str, count) -> bytes:
 
 _EDITABLE_FIELDS = (
     'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course', 'student_ids',
+    'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
 )
 
 
@@ -385,6 +394,13 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
     new_course = fields.pop('course', None)
     requested_status = fields.pop('status', None)
     student_ids = fields.pop('student_ids', None)
+    if {'time_limit_minutes', 'max_attempts', 'questions_per_attempt'} & set(fields):
+        _check_limits(
+            question_count=len(questions) if questions is not None else quiz.questions.count(),
+            has_groups=bool(groups) if groups is not None else quiz.groups.exists(),
+            time_limit_minutes=fields.get('time_limit_minutes'), max_attempts=fields.get('max_attempts'),
+            questions_per_attempt=fields.get('questions_per_attempt'),
+        )
     moved = False
     if new_course is not None and new_course.id != quiz.course_id:
         # Faqat guruhsiz (fan bo'yicha, masalan AI yaratgan) testni o'z guruhiga biriktirish mumkin
@@ -487,6 +503,98 @@ def remove_group_audio(*, teacher: User, quiz: Quiz, group_id) -> None:
         group.audio.delete(save=True)
 
 
+# ── Topshirish sozlamalari: vaqt, urinishlar soni, har urinishdagi savollar (2026-11-11) ─────────────────
+SESSION_GRACE = timedelta(seconds=30)  # tarmoq kechikishi uchun: avto-topshirish vaqt tugashidan bir oz keyin kelishi mumkin
+
+
+def _expired_sessions(quiz: Quiz, student: User):
+    """Vaqti tugagan va topshirilmagan seanslar — urinish sarflangan hisoblanadi."""
+    return QuizSession.objects.filter(
+        quiz=quiz, student=student, attempt__isnull=True, ends_at__isnull=False, ends_at__lt=timezone.now() - SESSION_GRACE,
+    )
+
+
+def attempts_used(quiz: Quiz, student: User) -> int:
+    return QuizAttempt.objects.filter(quiz=quiz, student=student).count() + _expired_sessions(quiz, student).count()
+
+
+def attempts_left(quiz: Quiz, used: int):
+    return None if not quiz.max_attempts else max(0, quiz.max_attempts - used)
+
+
+def active_session(quiz: Quiz, student: User):
+    """Boshlangan, hali topshirilmagan va vaqti tugamagan seans."""
+    now = timezone.now()
+    return QuizSession.objects.filter(quiz=quiz, student=student, attempt__isnull=True).filter(
+        Q(ends_at__isnull=True) | Q(ends_at__gte=now - SESSION_GRACE),
+    ).order_by('-started_at').first()
+
+
+def shuffle_seed(quiz: Quiz, student: User, used: int) -> str:
+    """Bitta urinish davomida o'zgarmaydi (sahifa yangilansa ham), yangi urinishda boshqacha: urinish raqamiga bog'liq."""
+    return f'{quiz.id}:{student.id}:{used}'
+
+
+def plan_questions(quiz: Quiz, student: User, used: int | None = None) -> list:
+    """Shu o'quvchining shu urinishida tushadigan savollar, ko'rsatiladigan tartibda: guruhsiz testda aralashtirilgan
+    (va `questions_per_attempt` bo'lsa shundan N tasi); matn/audioga bog'langan (guruhli) testda savollar o'z tartibida."""
+    used = attempts_used(quiz, student) if used is None else used
+    questions = list(quiz.questions.prefetch_related('options'))
+    if any(q.group_id for q in questions):
+        return questions
+    random.Random(shuffle_seed(quiz, student, used)).shuffle(questions)
+    if quiz.questions_per_attempt:
+        questions = questions[:quiz.questions_per_attempt]
+    return questions
+
+
+def take_state(quiz: Quiz, student: User) -> dict:
+    """O'quvchi uchun: urinishlar, faol seans va savollarni ko'rsatish mumkinmi."""
+    used = attempts_used(quiz, student)
+    left = attempts_left(quiz, used)
+    session = active_session(quiz, student)
+    return {
+        'used': used, 'left': left, 'session': session, 'seed': shuffle_seed(quiz, student, used),
+        'needs_start': bool(quiz.time_limit_minutes) and session is None,
+        'exhausted': left == 0,
+    }
+
+
+@transaction.atomic
+def start_quiz(*, student: User, quiz: Quiz) -> dict:
+    """Testni boshlash: taymer shu paytdan serverda hisoblanadi (`ends_at`). Qayta chaqirilsa mavjud faol seansni qaytaradi."""
+    if not can_attend(quiz, student):
+        raise PermissionDenied(_("Bu test sizga berilmagan."))
+    state = take_state(quiz, student)
+    if state['exhausted']:
+        raise ValidationError({'detail': _("Urinishlar tugagan: bu testni yana topshirib bo'lmaydi.")})
+    session = state['session']
+    if session is None:
+        now = timezone.now()
+        session = QuizSession.objects.create(
+            quiz=quiz, student=student, started_at=now,
+            ends_at=now + timedelta(minutes=quiz.time_limit_minutes) if quiz.time_limit_minutes else None,
+        )
+    return {
+        'started_at': session.started_at, 'ends_at': session.ends_at, 'time_limit_minutes': quiz.time_limit_minutes,
+        'attempts_used': state['used'], 'attempts_left': state['left'],
+        'question_count': len(plan_questions(quiz, student, state['used'])),
+    }
+
+
+def _check_limits(*, question_count: int, has_groups: bool, time_limit_minutes=None, max_attempts=None,
+                  questions_per_attempt=None) -> None:
+    if time_limit_minutes is not None and not 1 <= time_limit_minutes <= 600:
+        raise ValidationError({'time_limit_minutes': _("Vaqt 1 dan 600 daqiqagacha bo'lishi kerak.")})
+    if max_attempts is not None and not 1 <= max_attempts <= 20:
+        raise ValidationError({'max_attempts': _("Urinishlar soni 1 dan 20 gacha bo'lishi kerak.")})
+    if questions_per_attempt is not None:
+        if has_groups:
+            raise ValidationError({'questions_per_attempt': _("Matn/audioga bog'langan testda savollar sonini cheklab bo'lmaydi.")})
+        if not 1 <= questions_per_attempt <= max(question_count, 1):
+            raise ValidationError({'questions_per_attempt': _("Savollar soni 1 dan testdagi savollar sonigacha bo'lishi kerak.")})
+
+
 @transaction.atomic
 def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds=None) -> QuizAttempt:
     is_enrolled = Enrollment.objects.filter(
@@ -496,12 +604,21 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds
         raise PermissionDenied(_('Siz bu kursga yozilmagansiz.'))
     if not can_attend(quiz, student):
         raise PermissionDenied(_("Bu test sizga berilmagan."))
+    used = attempts_used(quiz, student)
+    if quiz.max_attempts and used >= quiz.max_attempts:
+        raise ValidationError({'detail': _("Urinishlar tugagan: bu testni yana topshirib bo'lmaydi.")})
+    session = active_session(quiz, student)
+    if quiz.time_limit_minutes and session is None:
+        raise ValidationError({'detail': _("Test vaqti tugagan yoki test hali boshlanmagan — avval testni boshlang.")})
 
-    questions = list(quiz.questions.prefetch_related('options'))
+    questions = plan_questions(quiz, student, used)  # shu urinishda tushgan savollar
+    allowed_ids = {q.id for q in questions}
+    if session is not None and duration_seconds is None:
+        duration_seconds = max(0, int((timezone.now() - session.started_at).total_seconds()))
     given_by_question = {}
     for answer in answers:
         question = answer['question']
-        if question.quiz_id != quiz.id:
+        if question.quiz_id != quiz.id or question.id not in allowed_ids:
             raise ValidationError({'answers': _('Savol ushbu testga tegishli emas.')})
         if question.id in given_by_question:
             raise ValidationError({'answers': _("Bir savolga faqat bitta javob yuborilishi mumkin.")})
@@ -524,6 +641,9 @@ def submit_attempt(*, student: User, quiz: Quiz, answers: list, duration_seconds
     attempt.score = grading.round_points(score)
     attempt.max_score = sum(q.points for q in questions if q.type != T.ESSAY)  # insho avtomatik baholanmaydi
     attempt.save(update_fields=['score', 'max_score'])
+    if session is not None:
+        session.attempt = attempt
+        session.save(update_fields=['attempt', 'updated_at'])
     return attempt
 
 

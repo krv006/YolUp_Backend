@@ -22,8 +22,11 @@ from django.db.models import (
     FloatField,
     ForeignKey,
     JSONField,
+    Index,
     ManyToManyField,
+    OneToOneField,
     PositiveIntegerField,
+    PositiveSmallIntegerField,
     TextField,
     TextChoices,
     UniqueConstraint,
@@ -81,6 +84,13 @@ class Quiz(TimeStampedUUIDModel):
     assigned_students = ManyToManyField(
         settings.AUTH_USER_MODEL, blank=True, related_name='assigned_quizzes',
     )
+    # Topshirish sozlamalari (2026-11-11), hammasi ixtiyoriy (bo'sh = cheklov yo'q):
+    # - vaqt: o'quvchi testni boshlagandan (`QuizSession.started_at`) shuncha daqiqa ichida topshirishi kerak
+    # - urinishlar soni: shundan ko'p topshirib bo'lmaydi
+    # - har urinishda testdagi savollardan nechtasi (tasodifiy) tushadi
+    time_limit_minutes = PositiveSmallIntegerField(null=True, blank=True)
+    max_attempts = PositiveSmallIntegerField(null=True, blank=True)
+    questions_per_attempt = PositiveSmallIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']
@@ -176,6 +186,21 @@ class QuizAttempt(TimeStampedUUIDModel):
 
     def __str__(self):
         return f'{self.student.username} · {self.quiz.title} · {self.score}/{self.max_score}'
+
+
+class QuizSession(TimeStampedUUIDModel):
+    """Testni BOSHLASH (`POST /quizzes/<id>/start/`): taymer serverda hisoblanadi. Topshirilganda `attempt` bog'lanadi;
+    vaqt tugab topshirilmasa — urinish sarflangan (forfeited) hisoblanadi."""
+
+    quiz = ForeignKey(Quiz, CASCADE, related_name='sessions')
+    student = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='quiz_sessions')
+    started_at = DateTimeField()
+    ends_at = DateTimeField(null=True, blank=True)  # vaqt chegarasi bo'lmasa — bo'sh
+    attempt = OneToOneField(QuizAttempt, SET_NULL, null=True, blank=True, related_name='session')
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [Index(fields=['quiz', 'student'])]
 
 
 class AnswerResponse(TimeStampedUUIDModel):

@@ -87,11 +87,53 @@ def _get_course(course_id) -> Course:
         raise NotFound(_('Kurs topilmadi.'))
 
 
-def _get_assignment(assignment_id) -> Assignment:
+def _get_assignment(assignment_id, allow_bank: bool = False) -> Assignment:
     try:
-        return Assignment.objects.select_related('course', 'lesson').get(pk=assignment_id)
+        a = Assignment.objects.select_related('course', 'lesson').get(pk=assignment_id)
     except (Assignment.DoesNotExist, ValueError, TypeError):
         raise NotFound(_('Vazifa topilmadi.'))
+    if a.course_id is None and not allow_bank:
+        # Bazadagi (guruhsiz) vazifaga topshirib/baholab bo'lmaydi — faqat `assign` qilingan nusxaga
+        raise NotFound(_('Vazifa topilmadi.'))
+    return a
+
+
+def _is_owner(a: Assignment, user: User) -> bool:
+    """Vazifa egasi: guruh vazifasida — kursning o'qituvchisi; bazadagi vazifada — muallif."""
+    if a.course_id:
+        return a.course.teacher_id == user.id
+    return a.author_id == user.id
+
+
+def _in_audience(a: Assignment, student: User) -> bool:
+    """O'quvchi shu vazifani ko'rishi/topshirishi mumkinmi (vazifa guruhning faqat ba'zi o'quvchilariga berilgan bo'lishi mumkin)."""
+    if not a.assigned_students.exists():
+        return True
+    return a.assigned_students.filter(pk=student.pk).exists()
+
+
+def _audience_students(a: Assignment):
+    """Vazifa berilgan o'quvchilar: belgilangan bo'lsa shular, aks holda guruhdagi hamma."""
+    students = _enrolled_students(a.course).distinct()
+    if a.assigned_students.exists():
+        students = students.filter(assigned_homework=a)
+    return students
+
+
+def _filter_audience(queryset, user: User):
+    """O'quvchi/ota-ona uchun: faqat ba'zi o'quvchilarga berilgan vazifalardan o'zi (yoki farzandi) kirmaganlarini olib tashlaydi."""
+    from django.db.models import Exists, OuterRef
+
+    through = Assignment.assigned_students.through
+    restricted = Exists(through.objects.filter(assignment=OuterRef('pk')))
+    if user.role == 'parent':
+        mine = Exists(through.objects.filter(
+            assignment=OuterRef('pk'), user__parent_links__parent=user,
+            user__parent_links__status=ParentChildLink.Status.APPROVED,
+        ))
+    else:
+        mine = Exists(through.objects.filter(assignment=OuterRef('pk'), user=user))
+    return queryset.filter(~restricted | mine)
 
 
 def _get_submission(submission_id) -> Submission:
@@ -117,8 +159,10 @@ def _is_parent_of(parent: User, student: User) -> bool:
 
 def _ensure_visible(user: User, a: Assignment) -> None:
     """Qoralama vazifa faqat o'z o'qituvchisiga ko'rinadi; boshqalar uchun u yo'q."""
-    if a.status == Assignment.Status.DRAFT and a.course.teacher_id != user.id:
+    if a.status in (Assignment.Status.DRAFT, Assignment.Status.BANK) and not _is_owner(a, user):
         raise NotFound(_('Topshiriq topilmadi.'))
+    if a.course_id and not _is_owner(a, user) and user.role == 'student' and not _in_audience(a, user):
+        raise NotFound(_('Topshiriq topilmadi.'))  # bu vazifa o'quvchiga berilmagan
 
 
 def _bool(value, default=None):
@@ -129,11 +173,29 @@ def _bool(value, default=None):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+_GOOGLE_FORM_HOSTS = ('docs.google.com', 'forms.gle', 'forms.google.com')
+
+
+def _clean_form_url(value) -> str:
+    """Google Form havolasi: bo'sh (olib tashlash) yoki `https://docs.google.com/forms/...` / `https://forms.gle/...`."""
+    from urllib.parse import urlparse
+
+    url = str(value or '').strip()
+    if not url:
+        return ''
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    ok_path = host != 'docs.google.com' or parsed.path.startswith('/forms')
+    if parsed.scheme != 'https' or host not in _GOOGLE_FORM_HOSTS or not ok_path or len(url) > 500:
+        raise ValidationError({'google_form_url': _("Google Form havolasi kerak (https://docs.google.com/forms/... yoki https://forms.gle/...).")})
+    return url
+
+
 def _clean_status(value) -> str:
     value = str(value or Assignment.Status.ACTIVE).strip().lower()
     if value == 'published':  # ikkinchi frontend hujjatidagi nom
         value = Assignment.Status.ACTIVE
-    if value not in Assignment.Status.values:
+    if value not in (Assignment.Status.DRAFT, Assignment.Status.ACTIVE):  # `bank` ni faqat tizim qo'yadi
         raise ValidationError({'status': _("draft yoki active (published) bo'lishi kerak.")})
     return value
 
@@ -161,7 +223,7 @@ def _publish(assignment: Assignment) -> None:
     assignment.published_at = timezone.now()
     assignment.save(update_fields=['published_at'])
     _notify_new_assignment(assignment)
-    if assignment.announce_in_chat:
+    if assignment.announce_in_chat and not assignment.assigned_students.exists():  # chat kartasi butun guruhga ko'rinadi
         from apps.chat.services import post_assignment_card
 
         post_assignment_card(assignment)  # kurs chatida vazifa kartasi
@@ -199,9 +261,12 @@ def _assignment_dict(a: Assignment) -> dict:
         'grading': a.grading,
         'max_score': a.max_score,
         'id': str(a.id),
-        'course_id': str(a.course_id),
-        'course_title': a.course.title,
-        'subject': a.course.subject,
+        'course_id': str(a.course_id) if a.course_id else None,
+        'course_title': a.course.title if a.course_id else None,
+        'subject': a.course.subject if a.course_id else '',
+        'is_bank': a.status == Assignment.Status.BANK,
+        'source_id': str(a.source_id) if a.source_id else None,
+        'google_form_url': a.google_form_url,
         'title': a.title,
         'description': a.description,
         'body': a.body,
@@ -211,7 +276,7 @@ def _assignment_dict(a: Assignment) -> dict:
         'due_at': a.due_at,
         'skill_key': a.skill_key,
         'lesson_id': str(a.lesson_id) if a.lesson_id else None,
-        'lesson_title': (a.lesson.title or a.course.title) if a.lesson_id else None,
+        'lesson_title': (a.lesson.title or (a.course.title if a.course_id else '')) if a.lesson_id else None,
         'lesson_starts_at': a.lesson.starts_at if a.lesson_id else None,
         'created_at': a.created_at,
     }
@@ -323,9 +388,12 @@ def _resolve_lesson(*, course: Course, lesson_id) -> Lesson | None:
 def create_assignment(*, teacher: User, course_id, title: str, description: str = '',
                       body: str = '', due_at=None, skill_key: str = '', lesson_id=None,
                       extra_instructions: str = '', attachment=None, status='active', announce_in_chat=True,
-                      allow_late=True, grading='five', max_score=None, ai_check=None, questions=None) -> dict:
-    course = _get_course(course_id)
-    if course.teacher_id != teacher.id:
+                      allow_late=True, grading='five', max_score=None, ai_check=None, questions=None,
+                      google_form_url='') -> dict:
+    """`course_id` bo'sh bo'lsa — vazifa "bazaga" tushadi (faqat muallifga ko'rinadi), keyin `assign_from_bank` bilan beriladi."""
+    in_bank = course_id in (None, '')
+    course = None if in_bank else _get_course(course_id)
+    if course is not None and course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifa bera oladi."))
     if not (title or '').strip():
         raise ValidationError({'title': _('Vazifa nomi majburiy.')})
@@ -334,8 +402,11 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
         raise ValidationError({
                 'skill_key': _("Noto'g'ri ko'nikma: %(skills)s") % {'skills': sorted(rules.SKILL_KEYS)},
             })
-    lesson = _resolve_lesson(course=course, lesson_id=lesson_id)
-    status = _clean_status(status)
+    if in_bank and lesson_id:
+        raise ValidationError({'lesson_id': _("Bazadagi (guruhsiz) vazifani darsga bog'lab bo'lmaydi.")})
+    lesson = None if in_bank else _resolve_lesson(course=course, lesson_id=lesson_id)
+    status = Assignment.Status.BANK if in_bank else _clean_status(status)
+    form_url = _clean_form_url(google_form_url)
     grading, top = _clean_grading(grading, max_score)
     cleaned_questions = hw_questions.clean_questions(questions)
 
@@ -354,6 +425,8 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
 
     assignment = Assignment.objects.create(
         course=course,
+        author=teacher,
+        google_form_url=form_url,
         lesson=lesson,
         title=title.strip(),
         description=(description or '').strip(),
@@ -389,7 +462,7 @@ def _notify_new_assignment(assignment: Assignment) -> None:
     from apps.notifications.services import send_notification
 
     description = f'«{assignment.course.title}»: yangi uy vazifasi — «{assignment.title}».'
-    for student in _enrolled_students(assignment.course):
+    for student in _audience_students(assignment):
         send_notification(
             sender=assignment.course.teacher, description=description,
             target_type=Notification.Target.USER, user_id=student.id,
@@ -454,7 +527,7 @@ def send_deadline_reminders(*, now=None) -> dict:
         submitted_ids = set(
             Submission.objects.filter(assignment=a).values_list('student_id', flat=True)
         )
-        pending = [s for s in _enrolled_students(a.course) if s.id not in submitted_ids]
+        pending = [s for s in _audience_students(a) if s.id not in submitted_ids]
         if not pending:
             continue
 
@@ -492,8 +565,8 @@ def send_deadline_reminders(*, now=None) -> dict:
 
 
 def delete_assignment(*, teacher: User, assignment_id) -> None:
-    a = _get_assignment(assignment_id)
-    if a.course.teacher_id != teacher.id:
+    a = _get_assignment(assignment_id, allow_bank=True)
+    if not _is_owner(a, teacher):
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifani o'chira oladi."))
     a.delete()
 
@@ -505,13 +578,14 @@ def update_assignment(
     *, teacher: User, assignment_id, title=_UNSET, description=_UNSET, body=_UNSET,
     due_at=_UNSET, skill_key=_UNSET, lesson_id=_UNSET, extra_instructions=_UNSET,
     attachment=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
-    ai_check=_UNSET, questions=_UNSET,
+    ai_check=_UNSET, questions=_UNSET, google_form_url=_UNSET,
 ) -> dict:
     """Vazifani qisman yangilaydi (PATCH) — faqat yuborilgan maydonlar
     o'zgaradi, `create_assignment` bilan bir xil validatsiya."""
-    a = _get_assignment(assignment_id)
-    if a.course.teacher_id != teacher.id:
+    a = _get_assignment(assignment_id, allow_bank=True)
+    if not _is_owner(a, teacher):
         raise PermissionDenied(_("Faqat kurs o'qituvchisi vazifani tahrirlashi mumkin."))
+    in_bank = a.course_id is None
 
     fields = []
     if title is not _UNSET:
@@ -536,9 +610,16 @@ def update_assignment(
             })
         a.skill_key = skill_key
         fields.append('skill_key')
+    if google_form_url is not _UNSET:
+        a.google_form_url = _clean_form_url(google_form_url)
+        fields.append('google_form_url')
     if lesson_id is not _UNSET:
-        a.lesson = _resolve_lesson(course=a.course, lesson_id=lesson_id)
-        fields.append('lesson')
+        if in_bank:
+            if lesson_id:
+                raise ValidationError({'lesson_id': _("Bazadagi (guruhsiz) vazifani darsga bog'lab bo'lmaydi.")})
+        else:
+            a.lesson = _resolve_lesson(course=a.course, lesson_id=lesson_id)
+            fields.append('lesson')
     if extra_instructions is not _UNSET:
         a.extra_instructions = (extra_instructions or '').strip()
         fields.append('extra_instructions')
@@ -578,7 +659,7 @@ def update_assignment(
             raise ValidationError({'questions': _("Topshiriqlar bor — savollarni o'zgartirib bo'lmaydi.")})
         hw_questions.set_questions(a, cleaned_questions)
     publish_now = False
-    if status is not _UNSET:
+    if status is not _UNSET and not in_bank:
         new_status = _clean_status(status)
         if new_status != a.status:
             if new_status == Assignment.Status.DRAFT:
@@ -595,8 +676,11 @@ def update_assignment(
 
 
 def assignment_file(*, user: User, assignment_id) -> tuple:
-    a = _get_assignment(assignment_id)
-    if not _can_view_course(user, a.course):
+    a = _get_assignment(assignment_id, allow_bank=True)
+    if a.course_id is None:
+        if not _is_owner(a, user):
+            raise NotFound(_('Vazifa topilmadi.'))
+    elif not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu faylni ko'rish huquqingiz yo'q."))
     _ensure_visible(user, a)
     if not a.attachment:
@@ -638,6 +722,11 @@ def list_child_assignments(*, parent: User, student_id, course_id=None, status=N
     qs = Assignment.objects.filter(
         course__enrollments__student=child, course__enrollments__status=Enrollment.Status.APPROVED, status=Assignment.Status.ACTIVE,
     ).select_related('lesson', 'course').distinct().order_by('-created_at')
+    from django.db.models import Exists, OuterRef
+
+    through = Assignment.assigned_students.through  # farzandga berilmagan (faqat ba'zi o'quvchilarga) vazifalar ko'rinmaydi
+    qs = qs.filter(~Exists(through.objects.filter(assignment=OuterRef('pk'))) | Exists(
+        through.objects.filter(assignment=OuterRef('pk'), user=child)))
     if course_id:
         qs = qs.filter(course_id=course_id)
     assignments = list(qs)
@@ -702,13 +791,14 @@ def list_assignments(*, user: User, course_id, status=None) -> list:
     result = []
     queryset = course.assignments.select_related('lesson').all()
     if course.teacher_id != user.id:
-        queryset = queryset.filter(status=Assignment.Status.ACTIVE)  # qoralamalar faqat o'qituvchiga
+        queryset = _filter_audience(queryset.filter(status=Assignment.Status.ACTIVE), user)  # qoralamalar faqat o'qituvchiga
     elif status in ('draft', 'active', 'published'):
         queryset = queryset.filter(status=_clean_status(status))
     for a in queryset:
         item = _assignment_dict(a)
         if course.teacher_id == user.id:
             item['submissions_count'] = a.submissions.count()
+            item['student_ids'] = [str(pk) for pk in a.assigned_students.values_list('pk', flat=True)] or None
         else:
             # O'quvchi (yoki ota-ona — bolasining) oxirgi topshirig'i holati
             student_ids = [user.id]
@@ -724,13 +814,166 @@ def list_assignments(*, user: User, course_id, status=None) -> list:
     return result
 
 
-def get_assignment(*, user: User, assignment_id) -> dict:
+def list_bank(*, user: User) -> list:
+    """Vazifalar bazasi: o'qituvchining guruhsiz (hali berilmagan) vazifalari + nechta guruhga berilgani."""
+    rows = []
+    for a in Assignment.objects.filter(course__isnull=True, author=user).order_by('-created_at'):
+        item = _assignment_dict(a)
+        item['copies_count'] = a.copies.count()
+        item['questions_count'] = a.questions.count()
+        rows.append(item)
+    return rows
+
+
+def _copy_questions(src: Assignment, dst: Assignment) -> None:
+    from .models import AssignmentQuestion
+
+    AssignmentQuestion.objects.bulk_create([
+        AssignmentQuestion(assignment=dst, order=q.order, type=q.type, text=q.text, options=q.options, correct=q.correct, points=q.points)
+        for q in src.questions.all()
+    ])
+
+
+def _uuid_list(raw, field: str) -> list:
+    import uuid
+
+    if raw in (None, ''):
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise ValidationError({field: _("Identifikatorlar ro'yxati kerak.")})
+    try:
+        return list(dict.fromkeys(str(uuid.UUID(str(i))) for i in raw))
+    except ValueError:
+        raise ValidationError({field: _("Noto'g'ri identifikator.")}) from None
+
+
+@transaction.atomic
+def assign_from_bank(*, teacher: User, assignment_id, course_ids=None, student_ids=None, due_at=None,
+                     allow_late=None, announce_in_chat=None) -> dict:
+    """Bazadagi vazifani berish: har guruh uchun ALOHIDA nusxa (topshiriqlar, muddat va baholash guruh bo'yicha mustaqil bo'lsin
+    deb). `course_ids` — butun guruhga; `student_ids` — faqat shu o'quvchilarga (o'quvchi o'qituvchining bitta guruhida bo'lsa guruh
+    o'zi aniqlanadi, bir nechtasida bo'lsa `course_ids` bilan ko'rsating). Ikkalasi birga bo'lsa — birlashtiriladi.
+    Qaytaradi: `{count, assignments: [...]}`."""
+    bank = _get_assignment(assignment_id, allow_bank=True)
+    if bank.status != Assignment.Status.BANK or bank.author_id != teacher.id:
+        raise NotFound(_('Vazifa bazada topilmadi.'))
+    course_ids = _uuid_list(course_ids, 'course_ids')
+    student_ids = _uuid_list(student_ids, 'student_ids')
+    if not course_ids and not student_ids:
+        raise ValidationError({'course_ids': _("Guruh yoki o'quvchilarni tanlang.")})
+
+    courses = {str(c.pk): c for c in Course.objects.filter(pk__in=course_ids)}
+    if len(courses) != len(course_ids):
+        raise NotFound(_('Kurs topilmadi.'))
+    if any(c.teacher_id != teacher.id for c in courses.values()):
+        raise PermissionDenied(_("Faqat o'z guruhlaringizga vazifa bera olasiz."))
+
+    plan: dict = {str(cid): None for cid in course_ids}  # None = butun guruh
+    if student_ids:
+        students = {str(u.pk) for u in User.objects.filter(pk__in=student_ids, role=User.Role.STUDENT)}
+        if students != set(student_ids):
+            raise ValidationError({'student_ids': _("O'quvchi topilmadi.")})
+        enrolled: dict = {}
+        for row in Enrollment.objects.filter(
+            student_id__in=student_ids, course__teacher=teacher, status=Enrollment.Status.APPROVED,
+        ).select_related('course'):
+            enrolled.setdefault(str(row.student_id), []).append(str(row.course_id))
+        for sid in student_ids:
+            mine = enrolled.get(sid, [])
+            if not mine:
+                raise ValidationError({'student_ids': _("Bu o'quvchi sizning guruhingizda emas.")})
+            if any(c in plan and plan[c] is None for c in mine):
+                continue  # o'quvchining guruhi allaqachon to'liq tanlangan
+            target = [c for c in mine if c in plan] or mine
+            if len(target) != 1:
+                raise ValidationError({'student_ids': _("O'quvchi bir nechta guruhingizda — guruhni course_ids bilan ko'rsating.")})
+            plan.setdefault(target[0], set())
+            if plan[target[0]] is not None:
+                plan[target[0]].add(sid)
+    due = _parse_due(due_at)
+    created = []
+    for cid, only in plan.items():
+        course = courses.get(cid) or _get_course(cid)
+        copy = Assignment.objects.create(
+            course=course, author=teacher, source=bank, title=bank.title, description=bank.description, body=bank.body,
+            attachment=bank.attachment.name if bank.attachment else None, attachment_name=bank.attachment_name,
+            due_at=due, skill_key=bank.skill_key, extra_instructions=bank.extra_instructions,
+            status=Assignment.Status.ACTIVE,
+            announce_in_chat=_bool(announce_in_chat, True) and not only,
+            allow_late=_bool(allow_late, bank.allow_late), ai_check=bank.ai_check, grading=bank.grading,
+            max_score=bank.max_score, google_form_url=bank.google_form_url,
+        )
+        _copy_questions(bank, copy)
+        if only:
+            copy.assigned_students.set(User.objects.filter(pk__in=only))
+        _publish(copy)
+        created.append(_with_questions(copy, include_correct=True))
+    return {'count': len(created), 'assignments': created}
+
+
+def assignment_audience(*, teacher: User, assignment_id) -> dict:
+    """Vazifa guruhning qaysi o'quvchilariga berilgan: `{restricted, total, assigned_count, students: [{id, name, username,
+    assigned, can_submit, submitted}]}`."""
     a = _get_assignment(assignment_id)
+    if not _is_owner(a, teacher):
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi ko'ra oladi."))
+    restricted = set(a.assigned_students.values_list('pk', flat=True))
+    submitted = set(a.submissions.values_list('student_id', flat=True))
+    rows = []
+    for student in sorted(_enrolled_students(a.course).distinct(), key=lambda u: (u.get_full_name() or u.username).lower()):
+        assigned = not restricted or student.pk in restricted
+        rows.append({
+            'id': str(student.pk), 'name': student.get_full_name() or student.username, 'username': student.username,
+            'assigned': assigned, 'can_submit': assigned, 'submitted': student.pk in submitted,
+        })
+    return {'restricted': bool(restricted), 'total': len(rows), 'assigned_count': sum(1 for r in rows if r['assigned']), 'students': rows}
+
+
+@transaction.atomic
+def set_assignment_audience(*, teacher: User, assignment_id, student_ids) -> dict:
+    """Vazifani guruhning faqat ba'zi o'quvchilariga berish (bo'sh ro'yxat yoki hamma o'quvchi = cheklovsiz). Yangi qo'shilganlarga xabar."""
+    a = _get_assignment(assignment_id)
+    if not _is_owner(a, teacher):
+        raise PermissionDenied(_("Faqat kurs o'qituvchisi o'zgartira oladi."))
+    ids = set(_uuid_list(student_ids, 'student_ids'))
+    enrolled = {str(u.pk): u for u in _enrolled_students(a.course).distinct()}
+    if ids - set(enrolled):
+        raise ValidationError({'student_ids': _("Ba'zi o'quvchilar bu guruhda emas.")})
+    before = set(a.assigned_students.values_list('pk', flat=True))
+    everyone_before = not before
+    if not ids or ids == set(enrolled):
+        a.assigned_students.clear()
+        newly = [] if everyone_before else [u for u in enrolled.values() if u.pk not in before]
+    else:
+        a.assigned_students.set([enrolled[i] for i in ids])
+        newly = [] if everyone_before else [enrolled[i] for i in ids if enrolled[i].pk not in before]
+    if newly and a.status == Assignment.Status.ACTIVE:
+        from apps.notifications.models import Notification
+        from apps.notifications.services import send_notification
+
+        description = f'«{a.course.title}»: yangi uy vazifasi — «{a.title}».'
+        for student in newly:
+            transaction.on_commit(lambda student=student: send_notification(
+                sender=a.course.teacher, description=description, target_type=Notification.Target.USER,
+                user_id=student.id, link_type='assignment', link_id=str(a.id),
+            ))
+    return assignment_audience(teacher=teacher, assignment_id=assignment_id)
+
+
+def get_assignment(*, user: User, assignment_id) -> dict:
+    a = _get_assignment(assignment_id, allow_bank=True)
+    if a.course_id is None:  # bazadagi vazifa — faqat muallif
+        if not _is_owner(a, user):
+            raise NotFound(_('Vazifa topilmadi.'))
+        data = _with_questions(a, include_correct=True)
+        data['copies_count'] = a.copies.count()
+        return data
     if not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu vazifani ko'rish huquqingiz yo'q."))
     _ensure_visible(user, a)
     data = _with_questions(a, include_correct=a.course.teacher_id == user.id)
     if a.course.teacher_id == user.id:
+        data['student_ids'] = [str(pk) for pk in a.assigned_students.values_list('pk', flat=True)] or None
         data['ai_group_summary'] = _stored_summary(a)
         subs = list(a.submissions.select_related('student', 'assignment'))
         data['submissions'] = [
@@ -739,9 +982,7 @@ def get_assignment(*, user: User, assignment_id) -> dict:
         # Statistika: nechta o'quvchidan nechtasi topshirdi, o'rtacha ball
         scores = [s.overall_score for s in subs if s.overall_score is not None]
         data['stats'] = {
-            'students_count': Enrollment.objects.filter(
-                course=a.course, status=Enrollment.Status.APPROVED,
-            ).count(),
+            'students_count': _audience_students(a).count(),
             'submitted_count': len({s.student_id for s in subs}),
             'avg_score': round(sum(scores) / len(scores), 1) if scores else None,
         }
@@ -1220,7 +1461,7 @@ def remind_missing(*, teacher: User, assignment_id, message=None, notify_parents
         raise ValidationError({'detail': _("Eslatma yaqinda yuborilgan. Birozdan keyin qayta urinib ko'ring."), 'retry_after': REMIND_COOLDOWN})
     submitted = set(Submission.objects.filter(assignment=a).values_list('student_id', flat=True))
     description = custom or f'«{a.course.title}»: «{a.title}» vazifasini hali topshirmadingiz.'
-    missing = [student for student in _enrolled_students(a.course) if student.id not in submitted]
+    missing = [student for student in _audience_students(a) if student.id not in submitted]
     for student in missing:
         send_notification(
             sender=teacher, description=description, target_type=Notification.Target.USER, user_id=student.id,

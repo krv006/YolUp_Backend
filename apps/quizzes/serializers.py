@@ -158,12 +158,15 @@ class QuizCreateSerializer(serializers.ModelSerializer):
     groups = GroupWriteSerializer(many=True, required=False)
     # Faqat shu o'quvchilarga berish (bo'sh/yo'q = guruhdagi hamma)
     student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
+    time_limit_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=600)
+    max_attempts = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=20)
+    questions_per_attempt = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
     class Meta:
         model = Quiz
         fields = [
             'course', 'subject', 'lesson', 'topic', 'title', 'description', 'due_at', 'opens_at',
-            'questions', 'groups', 'student_ids',
+            'questions', 'groups', 'student_ids', 'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
         ]
 
     def validate_questions(self, questions):
@@ -209,11 +212,15 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
     # Guruhsiz testni guruhga biriktirish (services.update_quiz tekshiradi)
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all(), required=False)
     student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
+    time_limit_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=600)
+    max_attempts = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=20)
+    questions_per_attempt = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
     class Meta:
         model = Quiz
         fields = [
             'topic', 'title', 'description', 'due_at', 'opens_at', 'questions', 'groups', 'status', 'course', 'student_ids',
+            'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
         ]
         extra_kwargs = {
             'title': {'required': False, 'allow_blank': True},
@@ -246,7 +253,8 @@ class QuizListSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSeri
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'question_count', 'student_ids', 'created_at',
+            'due_at', 'opens_at', 'question_count', 'student_ids', 'time_limit_minutes', 'max_attempts',
+            'questions_per_attempt', 'created_at',
         ]
 
 
@@ -295,16 +303,23 @@ class QuestionTakeSerializer(serializers.Serializer):
         }
         key = question.answer_key or {}
         options = list(question.options.all())
+        # `seed` berilsa (quizlar: o'quvchi + urinish bo'yicha) tartib bitta urinishda o'zgarmaydi, yangi urinishda boshqacha;
+        # berilmasa (masalan imtihon) — har so'rovda tasodifiy
+        seed = self.context.get('seed')
+        rng = random.Random(f'{seed}:{question.id}') if seed else random
         if question.type in (T.SINGLE, T.MULTIPLE):
-            data['options'] = OptionTakeSerializer(options, many=True).data
+            shuffled = options[:]
+            if seed:
+                rng.shuffle(shuffled)  # to'g'ri javob doim bir joyda turmasin
+            data['options'] = OptionTakeSerializer(shuffled, many=True).data
         elif question.type == T.ORDERING:
             shuffled = options[:]
-            random.shuffle(shuffled)
+            rng.shuffle(shuffled)
             data['options'] = [{'id': o.id, 'text': o.text} for o in shuffled]
         elif question.type == T.MATCHING:
             pairs = key.get('pairs', [])
             right = [{'id': p['right_id'], 'text': p['right']} for p in pairs]
-            random.shuffle(right)
+            rng.shuffle(right)
             data['pairs_left'] = [{'id': p['left_id'], 'text': p['left']} for p in pairs]
             data['pairs_right'] = right
         elif question.type == T.FILL_BLANK:
@@ -315,15 +330,70 @@ class QuestionTakeSerializer(serializers.Serializer):
 
 
 class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
-    questions = QuestionTakeSerializer(many=True, read_only=True)
+    """O'quvchi ko'rinishi. Savollar va variantlar shu o'quvchining shu urinishi uchun aralashtirilgan (urinish davomida o'zgarmaydi),
+    `questions_per_attempt` bo'lsa shundan N tasi. Vaqt chegarali testda `POST /quizzes/<id>/start/` dan oldin savollar yashirin
+    (`needs_start: true`), urinishlar tugagan bo'lsa ham."""
+
+    questions = serializers.SerializerMethodField()
     groups = GroupReadSerializer(many=True, read_only=True)
+    attempts_used = serializers.SerializerMethodField()
+    attempts_left = serializers.SerializerMethodField()
+    started_at = serializers.SerializerMethodField()
+    ends_at = serializers.SerializerMethodField()
+    needs_start = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'groups', 'questions',
+            'due_at', 'opens_at', 'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
+            'attempts_used', 'attempts_left', 'started_at', 'ends_at', 'needs_start', 'groups', 'questions',
         ]
+
+    def _state(self, obj):
+        cache = self.__dict__.setdefault('_state_cache', {})
+        if obj.pk not in cache:
+            from . import services
+
+            cache[obj.pk] = services.take_state(obj, self.context['request'].user)
+        return cache[obj.pk]
+
+    def _hidden(self, obj) -> bool:
+        state = self._state(obj)
+        return state['needs_start'] or state['exhausted']
+
+    def get_questions(self, obj):
+        if self._hidden(obj):
+            return []
+        from . import services
+
+        user = self.context['request'].user
+        state = self._state(obj)
+        planned = services.plan_questions(obj, user, state['used'])
+        return QuestionTakeSerializer(planned, many=True, context={**self.context, 'seed': state['seed']}).data
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if self._hidden(instance):
+            data['groups'] = []  # matn/audio ham test boshlangunicha yashirin
+        return data
+
+    def get_attempts_used(self, obj):
+        return self._state(obj)['used']
+
+    def get_attempts_left(self, obj):
+        return self._state(obj)['left']
+
+    def get_started_at(self, obj):
+        session = self._state(obj)['session']
+        return session.started_at if session else None
+
+    def get_ends_at(self, obj):
+        session = self._state(obj)['session']
+        return session.ends_at if session else None
+
+    def get_needs_start(self, obj):
+        return self._state(obj)['needs_start']
 
 
 class OptionDetailSerializer(serializers.ModelSerializer):
@@ -375,7 +445,8 @@ class QuizDetailSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSe
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
-            'due_at', 'opens_at', 'student_ids', 'groups', 'questions', 'created_at',
+            'due_at', 'opens_at', 'student_ids', 'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
+            'groups', 'questions', 'created_at',
         ]
 
 

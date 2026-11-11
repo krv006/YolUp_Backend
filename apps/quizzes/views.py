@@ -93,7 +93,8 @@ class QuizListCreateView(generics.ListCreateAPIView):
             title=data.get('title', ''), description=data.get('description', ''),
             due_at=data.get('due_at'), opens_at=data.get('opens_at'), questions=data['questions'],
             groups=data.get('groups'), status=Quiz.Status.DRAFT if as_draft else Quiz.Status.PUBLISHED,
-            student_ids=data.get('student_ids'),
+            student_ids=data.get('student_ids'), time_limit_minutes=data.get('time_limit_minutes'),
+            max_attempts=data.get('max_attempts'), questions_per_attempt=data.get('questions_per_attempt'),
         )
         return Response(
             QuizDetailSerializer(quiz, context={'request': request}).data, status=status.HTTP_201_CREATED,
@@ -403,6 +404,18 @@ class QuizPublishView(APIView):
         quiz = _get_quiz(request.user, pk)
         quiz = services.publish_quiz(teacher=request.user, quiz=quiz)
         return Response(QuizDetailSerializer(quiz, context={'request': request}).data)
+
+
+class QuizStartView(APIView):
+    """`POST /quizzes/<id>/start/` — o'quvchi testni boshlaydi: taymer serverda hisoblanadi. Javob: `{started_at, ends_at,
+    time_limit_minutes, attempts_used, attempts_left, question_count}`. Qayta chaqirilsa shu faol seansni qaytaradi."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.attempt')()]
+
+    def post(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        return Response(services.start_quiz(student=request.user, quiz=quiz))
 
 
 class QuizAttemptListCreateView(APIView):
