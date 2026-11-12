@@ -1118,8 +1118,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     shu telefon raqamida o'sha rol hali mavjud bo'lmasa, ro'yxatdan
     o'tishsiz avtomatik yaratiladi ("ochiladi") va darhol shunga o'tiladi.
 
-    O'quvchi hisobi ham o'qituvchi/ota-ona rolini ochib o'ta oladi (2026-11-12, mahsulot talabi): o'qituvchi
-    rolini baribir to'g'ridan-to'g'ri ro'yxatdan o'tib olish mumkin, shuning uchun taqiq qo'shimcha himoya bermas edi."""
+    O'quvchi hisobi faqat boshqa rol-akkaunti bor bo'lsa (masalan o'qituvchidan o'quvchi rolini ochib o'tgan va
+    orqaga qaytmoqchi) almashtira oladi. O'zi o'quvchi bo'lib ro'yxatdan o'tgan, boshqa akkaunti yo'q kishiga
+    yangi rol ochish mumkin emas (2026-11-12)."""
     if role not in _SELF_SERVICE_ROLES:
         raise ValidationError({'role': _("Noto'g'ri rol.")})
     if role == current_user.role:
@@ -1128,6 +1129,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
         raise ValidationError({'role': _("Rol almashtirish uchun avval telefon raqamingizni kiriting.")})
 
     from . import selectors
+
+    if current_user.role == User.Role.STUDENT and not selectors.linked_accounts(current_user).exists():
+        raise PermissionDenied(_("O'quvchi hisobidan boshqa rolga o'tib bo'lmaydi."))
 
     target = selectors.users_with_phone(current_user.phone).filter(
         role=role,
