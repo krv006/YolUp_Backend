@@ -2,6 +2,7 @@
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.core.permissions import RequirePerm
@@ -168,6 +169,24 @@ class LessonPresenceView(APIView):
 
     def get(self, request, lesson_id):
         return Response(services.lesson_presence(user=request.user, lesson_id=lesson_id))
+
+
+class ClientHealthView(APIView):
+    """Brauzer jonli darsda har ~30 s da yuboradi: `{cpu_constrained?, hardware_concurrency?, device_memory?, connection_quality?,
+    page_visible?, events?: [str], tracks: [{source, fps?, width?, height?, target_bitrate?, bitrate?, quality_limitation_reason?,
+    packets_lost?, jitter?, rtt?}]}` -> `201 {id}`. Faqat dars o'qituvchisi/yozilgan o'quvchisi; chastota cheklovi 12/min."""
+
+    permission_classes = [RequirePerm('room.token')]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'client_health'
+
+    def post(self, request, lesson_id):
+        from apps.monitoring import client_health
+
+        report = client_health.record(
+            user=request.user, lesson_id=lesson_id, data=request.data, user_agent=request.META.get('HTTP_USER_AGENT', ''),
+        )
+        return Response({'id': str(report.id)}, status=201)
 
 
 class LessonSignalsView(APIView):

@@ -132,6 +132,7 @@ REST_FRAMEWORK = {
         # Faqat login (parol/2FA/ijtimoiy): maktab/markaz Wi-Fi'sida ko'p o'quvchi bitta IP'dan kiradi. Brute-force uchun alohida
         # (IP + login) chegarasi bor (accounts.views.LOGIN_FAIL_LIMIT).
         'login': os.getenv('THROTTLE_LOGIN', '300/min'),
+        'client_health': os.getenv('THROTTLE_CLIENT_HEALTH', '12/min'),  # mijoz salomatlik hisoboti (darsda ~har 30 s)
         'lookup': os.getenv('THROTTLE_LOOKUP', '120/min'),  # yozish paytidagi tekshiruvlar (login bandligi)
     },
     'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',

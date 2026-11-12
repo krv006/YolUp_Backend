@@ -14,6 +14,7 @@ urlpatterns = [
     path('release-media/', views.ReleaseMediaView.as_view(), name='room-release-media'),
     path('lesson/<uuid:lesson_id>/media-mode/', views.LessonMediaModeView.as_view(), name='lesson-media-mode'),
     path('lesson/<uuid:lesson_id>/presence/', views.LessonPresenceView.as_view(), name='lesson-presence'),
+    path('lesson/<uuid:lesson_id>/client-health/', views.ClientHealthView.as_view(), name='lesson-client-health'),
     path('lesson/<uuid:lesson_id>/signals/', views.LessonSignalsView.as_view(), name='lesson-signals'),
     path('lesson/<uuid:lesson_id>/mic-request/', views.CancelMicRequestView.as_view(), name='lesson-mic-request-cancel'),
     path('lesson/<uuid:lesson_id>/camera-request/', views.CancelCameraRequestView.as_view(), name='lesson-camera-request-cancel'),

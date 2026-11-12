@@ -50,3 +50,21 @@ class ResourceHistoryView(APIView):
             'samples': ResourceSampleSerializer(samples, many=True).data,
             'peak': ResourceSampleSerializer(peak).data if peak else None,
         })
+
+
+class ClientHealthSummaryView(APIView):
+    """Admin: `GET /monitoring/client-health/?hours=24&lesson=<id>&user=<id>` — foydalanuvchilar kesimida xulosa
+    (CPU/tarmoq tufayli sifati tushgan hisobotlar soni, eng past FPS, kompyuter xususiyatlari) + so'nggi hisobotlar."""
+
+    permission_classes = [RequirePerm('audit.view')]
+
+    def get(self, request):
+        from . import client_health
+
+        try:
+            hours = max(1, min(int(request.query_params.get('hours', 24)), 24 * 14))
+        except ValueError:
+            hours = 24
+        return Response(client_health.summary(
+            hours=hours, lesson_id=request.query_params.get('lesson') or None, user_id=request.query_params.get('user') or None,
+        ))

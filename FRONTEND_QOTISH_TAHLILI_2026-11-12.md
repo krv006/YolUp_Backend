@@ -38,7 +38,7 @@ Chrome kadrlarni tashlaydi va kamera "qotadi". Bu **eng ehtimolli sabab**, lekin
    Unda o'qituvchiga "Kompyuter zo'riqmoqda: kamera sifati pasaytirildi" deb ko'rsating va avtomatik pastroq sifatga o'ting (masalan kamera 360p, yozuv bitreyti pastroq).
 6. **Diagnostika (keyingi safar sababni aniq bilish uchun).** Darsda har 30 soniyada `localTrack.getSenderStats()` dan `framesPerSecond`, `qualityLimitationReason`,
    `targetBitrate` va `navigator.hardwareConcurrency`, `navigator.deviceMemory`, brauzer/OT ni yig'ib backendga yuboring.
-   Backendda shu ma'lumotni qabul qiladigan endpoint kerak bo'lsa ayting (`POST /live/lesson/{id}/client-health/`), qilib beramiz.
+   Backend endpoint **tayyor** (6-band uchun, pastga qarang).
 
 ## Hozir tekshirib ko'rish uchun
 
@@ -50,3 +50,32 @@ Chrome kadrlarni tashlaydi va kamera "qotadi". Bu **eng ehtimolli sabab**, lekin
 
 Bugun 11:22 va 11:37 da backend deploy paytida API va WebSocket so'rovlari ~4 va ~16 soniya xato bergan (konteynerlar qayta yaratilgan). Bu videoga emas, chat/bildirishnoma/doskaga ta'sir qiladi.
 Jonli dars vaqtida deploy qilmaslik qoidasi qo'llanyapti.
+
+## Diagnostika endpoint'i (backend tayyor)
+
+`POST /api/v1/live/lesson/{lesson_id}/client-health/` — darsda har ~30 soniyada yuboring (o'qituvchi ham, o'quvchi ham; faqat shu darsning o'qituvchisi/yozilgan o'quvchisi, aks holda `404`).
+Chastota cheklovi: **12 so'rov/daqiqa** (oshsa `429`). Javob: `201 {"id": "..."}`. Kerakmas maydonlar tashlab yuborilsa bo'ladi, noma'lum maydonlar e'tiborga olinmaydi.
+
+```json
+{
+  "cpu_constrained": true,
+  "hardware_concurrency": 8,
+  "device_memory": 8,
+  "connection_quality": "good",
+  "page_visible": true,
+  "events": ["cpu_constrained"],
+  "tracks": [
+    { "source": "camera", "fps": 9.5, "width": 1280, "height": 720,
+      "target_bitrate": 1700000, "bitrate": 400000,
+      "quality_limitation_reason": "cpu", "packets_lost": 0, "jitter": 0.004, "rtt": 35 },
+    { "source": "screen_share", "fps": 15, "width": 1920, "height": 1080, "quality_limitation_reason": "none" }
+  ]
+}
+```
+
+- `tracks[].source`: `camera` | `screen_share` | `microphone` | `screen_share_audio` (ko'pi bilan 8 ta). `quality_limitation_reason`: `none` | `cpu` | `bandwidth` | `other`
+  (`getSenderStats()` / `outbound-rtp` dan). Raqamlar sonlar bo'lishi kerak (matn emas), `fps` ≤ 240, o'lcham ≤ 8192.
+- `connection_quality`: `excellent` | `good` | `poor` | `lost` | `unknown` (LiveKit `ConnectionQuality`). `events`: ko'pi bilan 10 ta qisqa matn (masalan `cpu_constrained`, `reconnecting`).
+- Xato bo'lsa `400` (`error.details` da qaysi maydon).
+- Admin ko'radi: `GET /api/v1/monitoring/client-health/?hours=24&lesson=<id>&user=<id>` — foydalanuvchilar kesimida xulosa (CPU tufayli sifati tushgan hisobotlar soni, eng past FPS,
+  protsessor yadrolari, xotira, brauzer) va so'nggi hisobotlar. Hisobotlar 14 kun saqlanadi.
