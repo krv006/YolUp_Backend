@@ -1118,12 +1118,8 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     shu telefon raqamida o'sha rol hali mavjud bo'lmasa, ro'yxatdan
     o'tishsiz avtomatik yaratiladi ("ochiladi") va darhol shunga o'tiladi.
 
-    XAVFSIZLIK: STUDENT hisob HECH QAYSI rolga o'ta olmaydi (hatto mavjud
-    bo'lsa ham) — bu ochiq (hech qanday tasdiqsiz) ro'yxatdan o'tish yo'li,
-    shuning uchun aks holda istalgan kishi o'quvchi sifatida ro'yxatdan
-    o'tib, bir zumda o'qituvchi imkoniyatlariga "o'tib" olar edi."""
-    if current_user.role == User.Role.STUDENT:
-        raise PermissionDenied(_("O'quvchi hisobidan boshqa rolga o'tib bo'lmaydi."))
+    O'quvchi hisobi ham o'qituvchi/ota-ona rolini ochib o'ta oladi (2026-11-12, mahsulot talabi): o'qituvchi
+    rolini baribir to'g'ridan-to'g'ri ro'yxatdan o'tib olish mumkin, shuning uchun taqiq qo'shimcha himoya bermas edi."""
     if role not in _SELF_SERVICE_ROLES:
         raise ValidationError({'role': _("Noto'g'ri rol.")})
     if role == current_user.role:

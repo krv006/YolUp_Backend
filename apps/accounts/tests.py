@@ -739,21 +739,36 @@ class SwitchRoleTests(APITestCase):
         self.assertEqual(resp.json()['user']['id'], str(existing_parent_id))
         self.assertEqual(User.objects.filter(phone=self.PHONE, role='parent').count(), 1)
 
-    def test_student_cannot_switch_role_at_all(self):
+    def test_student_can_open_and_switch_to_teacher_and_parent(self):
         register(self.client, 'srs_student', 'student', phone=self.PHONE)
         self.auth(login(self.client, 'srs_student'))
 
-        resp = self.switch_role('teacher')
-        self.assertEqual(resp.status_code, 403)
-        self.assertFalse(User.objects.filter(phone=self.PHONE, role='teacher').exists())
+        for role in ('teacher', 'parent'):
+            resp = self.switch_role(role)
+            self.assertEqual(resp.status_code, 200, resp.content)
+            self.assertEqual(resp.data['user']['role'], role)
+            self.assertTrue(resp.data['access'] and resp.data['refresh'])
+            self.assertTrue(User.objects.filter(phone=self.PHONE, role=role).exists())
+            self.auth(login(self.client, 'srs_student'))  # keyingi rolni yana o'quvchidan ochamiz
+        me = self.client.get('/api/v1/auth/me/').data
+        self.assertEqual({a['role'] for a in me['linked_accounts']}, {'teacher', 'parent'})
 
-    def test_student_cannot_switch_even_if_role_already_exists(self):
+    def test_student_switches_to_an_existing_role_instead_of_creating_a_second_one(self):
         register(self.client, 'sre2_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sre2_student', 'student', phone=self.PHONE)
         self.auth(login(self.client, 'sre2_student'))
 
         resp = self.switch_role('teacher')
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['user']['username'], 'sre2_teacher')
+        self.assertEqual(User.objects.filter(phone=self.PHONE, role='teacher').count(), 1)
+
+    def test_student_without_a_phone_gets_a_clear_400(self):
+        register(self.client, 'srnp_student', 'student')
+        self.auth(login(self.client, 'srnp_student'))
+        resp = self.switch_role('teacher')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('role', resp.data['error']['details'])
 
     def test_cannot_switch_to_own_current_role(self):
         register(self.client, 'srown_teacher', 'teacher', phone=self.PHONE)
