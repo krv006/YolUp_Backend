@@ -117,6 +117,22 @@ class HomeworkBankTests(BankBase):
         self.assertEqual(again.status_code, 201)
         self.assertEqual(Assignment.objects.filter(source_id=uuid_of(aid)).count(), 2)
 
+    def test_bank_detail_lists_the_copies_with_their_groups(self):
+        aid = self.api(self.teacher).post('/api/v1/homework/assignments/', {'title': 'Savolsiz'}, format='json').data['id']
+        self.assign(aid, course_ids=[str(self.course.id)])
+        self.assign(aid, student_ids=[str(self.s3.id)])
+        detail = self.api(self.teacher).get(f'/api/v1/homework/assignments/{aid}/').data
+        self.assertEqual(detail['copies_count'], 2)
+        by_course = {c['course_id']: c for c in detail['copies']}
+        self.assertEqual(set(by_course), {str(self.course.id), str(self.course2.id)})
+        self.assertEqual(by_course[str(self.course.id)]['submissions_count'], 0)
+        self.assertIsNone(by_course[str(self.course.id)]['student_ids'])
+        self.assertEqual(by_course[str(self.course2.id)]['student_ids'], [str(self.s3.id)])
+        self.assertTrue(by_course[str(self.course.id)]['id'] and by_course[str(self.course.id)]['due_at'])
+        self.api(self.student).post(f'/api/v1/homework/assignments/{by_course[str(self.course.id)]["id"]}/submit/', {'comment': 'x'}, format='multipart')
+        again = self.api(self.teacher).get(f'/api/v1/homework/assignments/{aid}/').data
+        self.assertEqual({c['course_id']: c['submissions_count'] for c in again['copies']}[str(self.course.id)], 1)
+
     def test_assign_to_several_groups_creates_a_copy_for_each(self):
         aid = self.bank()
         r = self.assign(aid, course_ids=[str(self.course.id), str(self.course2.id)])
@@ -170,6 +186,76 @@ class HomeworkBankTests(BankBase):
     def test_a_normal_assignment_cannot_be_assigned_again(self):
         normal = self.assignment()
         self.assertEqual(self.assign(normal, course_ids=[str(self.course2.id)]).status_code, 404)
+
+
+class AssignTargetsTests(BankBase):
+    """`targets: [{course_id, student_ids?}]` — har guruh uchun aniq ro'yxat (2026-11-12)."""
+
+    def setUp(self):
+        super().setUp()
+        self.club = Course.objects.create(teacher=self.teacher, title='Club', subject=Course.Subject.MATH, kind='club')
+        Enrollment.objects.create(course=self.club, student=self.student, status=Enrollment.Status.APPROVED)  # guruh + club
+        self.aid = self.bank()
+
+    def assign_targets(self, targets, **extra):
+        return self.assign(self.aid, targets=targets, **extra)
+
+    def test_a_student_in_two_groups_can_be_chosen_inside_one_of_them(self):
+        r = self.assign_targets([{'course_id': str(self.course.id), 'student_ids': [str(self.student.id)]}])
+        self.assertEqual((r.status_code, r.data['count']), (201, 1), r.content)
+        copy = Assignment.objects.get(pk=r.data['assignments'][0]['id'])
+        self.assertEqual(copy.course_id, self.course.id)
+        self.assertEqual(list(copy.assigned_students.values_list('pk', flat=True)), [self.student.pk])
+        self.assertFalse(copy.announce_in_chat)  # chat butun guruhga ko'rinadi — karta yuborilmaydi
+
+    def test_notification_goes_only_to_the_chosen_students_and_nothing_leaks_to_the_rest(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            r = self.assign_targets([{'course_id': str(self.course.id), 'student_ids': [str(self.student.id)]}])
+        copy_id = r.data['assignments'][0]['id']
+        self.assertTrue(NotificationRecipient.objects.filter(user=self.student).exists())
+        self.assertFalse(NotificationRecipient.objects.filter(user=self.s2).exists())
+        self.assertEqual(self.api(self.s2).get(f'/api/v1/homework/assignments/{copy_id}/').status_code, 404)
+        from apps.chat.models import Message
+        self.assertFalse(Message.objects.filter(message_type='assignment').exists())
+
+    def test_whole_group_and_chosen_students_of_another_group_in_one_request(self):
+        r = self.assign_targets([
+            {'course_id': str(self.course.id)},
+            {'course_id': str(self.club.id), 'student_ids': [str(self.student.id)]},
+        ])
+        self.assertEqual((r.status_code, r.data['count']), (201, 2), r.content)
+        by_course = {a['course_id']: Assignment.objects.get(pk=a['id']) for a in r.data['assignments']}
+        self.assertFalse(by_course[str(self.course.id)].assigned_students.exists())
+        self.assertTrue(by_course[str(self.course.id)].announce_in_chat)
+        self.assertEqual(by_course[str(self.club.id)].assigned_students.count(), 0)  # club'da faqat shu o'quvchi bor = butun guruh
+
+    def test_all_students_chosen_is_the_same_as_the_whole_group(self):
+        r = self.assign_targets([{'course_id': str(self.course.id), 'student_ids': [str(self.student.id), str(self.s2.id)]}])
+        copy = Assignment.objects.get(pk=r.data['assignments'][0]['id'])
+        self.assertFalse(copy.assigned_students.exists())
+        self.assertTrue(copy.announce_in_chat)
+
+    def test_an_empty_student_list_means_the_whole_group(self):
+        r = self.assign_targets([{'course_id': str(self.course.id), 'student_ids': []}])
+        self.assertFalse(Assignment.objects.get(pk=r.data['assignments'][0]['id']).assigned_students.exists())
+
+    def test_validation_errors_name_the_target(self):
+        outsider = str(self.s3.id)  # course2 da, course da emas
+        r = self.assign_targets([{'course_id': str(self.course.id)}, {'course_id': str(self.course.id), 'student_ids': [outsider]}])
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('1', r.data['error']['details']['targets'])  # ikki marta kiritilgan guruh
+        r = self.assign_targets([{'course_id': str(self.course.id), 'student_ids': [outsider]}])
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('student_ids', r.data['error']['details']['targets']['0'])
+        self.assertEqual(self.assign_targets([]).status_code, 400)
+        self.assertEqual(self.assign_targets([{'student_ids': []}]).status_code, 400)
+        foreign = Course.objects.create(teacher=make('t_x', User.Role.TEACHER), title='X')
+        self.assertEqual(self.assign_targets([{'course_id': str(foreign.id)}]).status_code, 403)
+        self.assertEqual(Assignment.objects.filter(source_id=uuid_of(self.aid)).count(), 0)  # hech narsa yaratilmadi
+
+    def test_the_old_course_ids_and_student_ids_still_work(self):
+        r = self.assign(self.aid, course_ids=[str(self.course.id)])
+        self.assertEqual((r.status_code, r.data['count']), (201, 1))
 
 
 def uuid_of(value):

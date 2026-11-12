@@ -849,14 +849,91 @@ def _uuid_list(raw, field: str) -> list:
 
 @transaction.atomic
 def assign_from_bank(*, teacher: User, assignment_id, course_ids=None, student_ids=None, due_at=None,
-                     allow_late=None, announce_in_chat=None) -> dict:
+                     allow_late=None, announce_in_chat=None, targets=None) -> dict:
     """Bazadagi vazifani berish: har guruh uchun ALOHIDA nusxa (topshiriqlar, muddat va baholash guruh bo'yicha mustaqil bo'lsin
     deb). `course_ids` — butun guruhga; `student_ids` — faqat shu o'quvchilarga (o'quvchi o'qituvchining bitta guruhida bo'lsa guruh
     o'zi aniqlanadi, bir nechtasida bo'lsa `course_ids` bilan ko'rsating). Ikkalasi birga bo'lsa — birlashtiriladi.
-    Qaytaradi: `{count, assignments: [...]}`."""
+    `targets: [{course_id, student_ids?}]` — har guruh uchun aniq ro'yxat (berilsa, yuqoridagi ikki maydon e'tiborga olinmaydi):
+    `student_ids` yo'q/bo'sh — butun guruhga (chat kartasi bilan); bor — faqat shu guruh o'quvchilariga (bildirishnoma ham faqat ularga,
+    chat kartasi yo'q). Qaytaradi: `{count, assignments: [...]}`."""
     bank = _get_assignment(assignment_id, allow_bank=True)
     if bank.status != Assignment.Status.BANK or bank.author_id != teacher.id:
         raise NotFound(_('Vazifa bazada topilmadi.'))
+    if targets is not None:
+        courses, plan = _plan_from_targets(teacher, targets)
+    else:
+        courses, plan = _plan_from_ids(teacher, course_ids, student_ids)
+    due = _parse_due(due_at)
+    created = []
+    for cid, only in plan.items():
+        course = courses.get(cid) or _get_course(cid)
+        copy = Assignment.objects.create(
+            course=course, author=teacher, source=bank, title=bank.title, description=bank.description, body=bank.body,
+            attachment=bank.attachment.name if bank.attachment else None, attachment_name=bank.attachment_name,
+            due_at=due, skill_key=bank.skill_key, extra_instructions=bank.extra_instructions,
+            status=Assignment.Status.ACTIVE,
+            announce_in_chat=_bool(announce_in_chat, True) and not only,
+            allow_late=_bool(allow_late, bank.allow_late), ai_check=bank.ai_check, grading=bank.grading,
+            max_score=bank.max_score, google_form_url=bank.google_form_url,
+        )
+        _copy_questions(bank, copy)
+        if only:
+            copy.assigned_students.set(User.objects.filter(pk__in=only))  # `_publish` dan OLDIN: xabar faqat tanlanganlarga boradi
+        _publish(copy)
+        created.append(_with_questions(copy, include_correct=True))
+    return {'count': len(created), 'assignments': created}
+
+
+def _plan_from_targets(teacher: User, targets) -> tuple:
+    """`targets: [{course_id, student_ids?}]` -> (kurslar, {course_id: None (butun guruh) | {student_id}})."""
+    if not isinstance(targets, list) or not targets:
+        raise ValidationError({'targets': _("Kamida bitta guruhni tanlang.")})
+    errors: dict = {}
+    parsed = []
+    seen = set()
+    for index, item in enumerate(targets):
+        if not isinstance(item, dict):
+            errors[str(index)] = {'non_field_errors': [_("Noto'g'ri element.")]}
+            continue
+        try:
+            cid = _uuid_list([item.get('course_id')], 'course_id')[0] if item.get('course_id') else None
+            sids = _uuid_list(item.get('student_ids'), 'student_ids')
+        except ValidationError as exc:
+            errors[str(index)] = exc.detail
+            continue
+        if cid is None:
+            errors[str(index)] = {'course_id': [_("Guruh kerak.")]}
+        elif cid in seen:
+            errors[str(index)] = {'course_id': [_("Bu guruh ro'yxatda ikki marta.")]}
+        else:
+            seen.add(cid)
+            parsed.append((index, cid, sids))
+    if errors:
+        raise ValidationError({'targets': errors})
+    courses = {str(c.pk): c for c in Course.objects.filter(pk__in=[cid for _i, cid, _s in parsed])}
+    if len(courses) != len(parsed):
+        raise NotFound(_('Kurs topilmadi.'))
+    if any(c.teacher_id != teacher.id for c in courses.values()):
+        raise PermissionDenied(_("Faqat o'z guruhlaringizga vazifa bera olasiz."))
+    plan: dict = {}
+    for index, cid, sids in parsed:
+        if not sids:
+            plan[cid] = None
+            continue
+        in_group = {str(pk) for pk in Enrollment.objects.filter(
+            course_id=cid, student_id__in=sids, status=Enrollment.Status.APPROVED).values_list('student_id', flat=True)}
+        if in_group != set(sids):
+            errors[str(index)] = {'student_ids': [_("Ba'zi o'quvchilar bu guruhda emas.")]}
+            continue
+        total = Enrollment.objects.filter(course_id=cid, status=Enrollment.Status.APPROVED).count()
+        plan[cid] = None if len(in_group) == total else set(sids)  # hamma o'quvchi tanlangan = butun guruh
+    if errors:
+        raise ValidationError({'targets': errors})
+    return courses, plan
+
+
+def _plan_from_ids(teacher: User, course_ids, student_ids) -> tuple:
+    """Eski shakl: `course_ids` (butun guruh) va/yoki `student_ids` (guruh o'zi aniqlanadi)."""
     course_ids = _uuid_list(course_ids, 'course_ids')
     student_ids = _uuid_list(student_ids, 'student_ids')
     if not course_ids and not student_ids:
@@ -890,25 +967,7 @@ def assign_from_bank(*, teacher: User, assignment_id, course_ids=None, student_i
             plan.setdefault(target[0], set())
             if plan[target[0]] is not None:
                 plan[target[0]].add(sid)
-    due = _parse_due(due_at)
-    created = []
-    for cid, only in plan.items():
-        course = courses.get(cid) or _get_course(cid)
-        copy = Assignment.objects.create(
-            course=course, author=teacher, source=bank, title=bank.title, description=bank.description, body=bank.body,
-            attachment=bank.attachment.name if bank.attachment else None, attachment_name=bank.attachment_name,
-            due_at=due, skill_key=bank.skill_key, extra_instructions=bank.extra_instructions,
-            status=Assignment.Status.ACTIVE,
-            announce_in_chat=_bool(announce_in_chat, True) and not only,
-            allow_late=_bool(allow_late, bank.allow_late), ai_check=bank.ai_check, grading=bank.grading,
-            max_score=bank.max_score, google_form_url=bank.google_form_url,
-        )
-        _copy_questions(bank, copy)
-        if only:
-            copy.assigned_students.set(User.objects.filter(pk__in=only))
-        _publish(copy)
-        created.append(_with_questions(copy, include_correct=True))
-    return {'count': len(created), 'assignments': created}
+    return courses, plan
 
 
 def assignment_audience(*, teacher: User, assignment_id) -> dict:
@@ -966,7 +1025,15 @@ def get_assignment(*, user: User, assignment_id) -> dict:
         if not _is_owner(a, user):
             raise NotFound(_('Vazifa topilmadi.'))
         data = _with_questions(a, include_correct=True)
-        data['copies_count'] = a.copies.count()
+        copies = list(a.copies.select_related('course').order_by('-created_at'))
+        data['copies_count'] = len(copies)
+        data['copies'] = [{
+            'id': str(c.id), 'course_id': str(c.course_id) if c.course_id else None,
+            'course_title': c.course.title if c.course_id else None, 'due_at': c.due_at, 'status': c.status,
+            'submissions_count': c.submissions.count(),
+            'student_ids': [str(pk) for pk in c.assigned_students.values_list('pk', flat=True)] or None,
+            'created_at': c.created_at,
+        } for c in copies]
         return data
     if not _can_view_course(user, a.course):
         raise PermissionDenied(_("Bu vazifani ko'rish huquqingiz yo'q."))

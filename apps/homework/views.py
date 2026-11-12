@@ -116,7 +116,8 @@ class AssignmentDetailView(APIView):
 
 class AssignmentAssignView(APIView):
     """Bazadagi vazifani guruh(lar)ga va/yoki alohida o'quvchilarga berish:
-    `POST {course_ids?: [], student_ids?: [], due_at?, allow_late?, announce_in_chat?}` -> `201 {count, assignments}`."""
+    `POST {targets?: [{course_id, student_ids?}], course_ids?: [], student_ids?: [], due_at?, allow_late?, announce_in_chat?}`
+    -> `201 {count, assignments}`. `targets` berilsa har guruh uchun aniq o'quvchilar ro'yxati (bo'sh = butun guruh)."""
 
     permission_classes = [RequirePerm('homework.assign')]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
@@ -127,6 +128,7 @@ class AssignmentAssignView(APIView):
             course_ids=_json_field(request.data.get('course_ids')), student_ids=_json_field(request.data.get('student_ids')),
             due_at=request.data.get('due_at') or None, allow_late=request.data.get('allow_late'),
             announce_in_chat=request.data.get('announce_in_chat'),
+            targets=_json_field(request.data.get('targets')) if 'targets' in request.data else None,
         )
         return Response(data, status=201)
 

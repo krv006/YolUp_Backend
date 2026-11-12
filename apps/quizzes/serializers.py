@@ -248,13 +248,41 @@ class AudienceMixin(serializers.Serializer):
 
 class QuizListSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSerializer):
     question_count = serializers.IntegerField(source='questions.count', read_only=True)
+    # O'quvchi uchun (boshqa rollarda null): urinishlar va boshlangan, hali tugamagan vaqtli seans
+    attempts_used = serializers.SerializerMethodField()
+    attempts_left = serializers.SerializerMethodField()
+    session_ends_at = serializers.SerializerMethodField()
+
+    def _student_state(self, obj):
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is None or getattr(user, 'role', None) != 'student' or not obj.course_id:
+            return None
+        cache = self.context.setdefault('_take_state', {})
+        if obj.pk not in cache:
+            from . import services
+
+            cache[obj.pk] = services.take_state(obj, user)
+        return cache[obj.pk]
+
+    def get_attempts_used(self, obj):
+        state = self._student_state(obj)
+        return state['used'] if state else None
+
+    def get_attempts_left(self, obj):
+        state = self._student_state(obj)
+        return state['left'] if state else None
+
+    def get_session_ends_at(self, obj):
+        state = self._student_state(obj)
+        session = state['session'] if state else None
+        return session.ends_at if session else None
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'question_count', 'student_ids', 'time_limit_minutes', 'max_attempts',
-            'questions_per_attempt', 'created_at',
+            'questions_per_attempt', 'attempts_used', 'attempts_left', 'session_ends_at', 'created_at',
         ]
 
 
@@ -341,13 +369,14 @@ class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
     started_at = serializers.SerializerMethodField()
     ends_at = serializers.SerializerMethodField()
     needs_start = serializers.SerializerMethodField()
+    question_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
-            'attempts_used', 'attempts_left', 'started_at', 'ends_at', 'needs_start', 'groups', 'questions',
+            'attempts_used', 'attempts_left', 'started_at', 'ends_at', 'needs_start', 'question_count', 'groups', 'questions',
         ]
 
     def _state(self, obj):
@@ -377,6 +406,12 @@ class QuizTakeSerializer(SubjectLabelMixin, serializers.ModelSerializer):
         if self._hidden(instance):
             data['groups'] = []  # matn/audio ham test boshlangunicha yashirin
         return data
+
+    def get_question_count(self, obj):
+        """Shu urinishda tushadigan savollar soni — test boshlanmagan (`needs_start`) bo'lsa ham."""
+        from . import services
+
+        return len(services.plan_questions(obj, self.context['request'].user, self._state(obj)['used']))
 
     def get_attempts_used(self, obj):
         return self._state(obj)['used']

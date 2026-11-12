@@ -253,3 +253,54 @@ class TimeLimitTests(LimitsBase):
         services.set_audience(teacher=self.teacher, quiz=self.quiz, student_ids=[self.student.id])
         self.assertEqual(self.start(user=restricted).status_code, 404)
         self.assertEqual(self.start().status_code, 200)
+
+
+class ListAndCountTests(LimitsBase):
+    """O'quvchi ro'yxatida urinishlar/seans va boshlashdan oldin savollar soni (2026-11-12)."""
+
+    def row(self, user, quiz):
+        listed = self.api(user).get('/api/v1/quizzes/')
+        self.assertEqual(listed.status_code, 200)
+        return next(i for i in listed.data.get('results', listed.data) if str(i['id']) == str(quiz.id))
+
+    def test_student_list_has_attempts_and_the_running_session(self):
+        quiz = self.make_quiz(time_limit_minutes=15, max_attempts=3)
+        row = self.row(self.student, quiz)
+        self.assertEqual((row['attempts_used'], row['attempts_left'], row['session_ends_at']), (0, 3, None))
+        started = self.start(quiz=quiz).data
+        row = self.row(self.student, quiz)
+        self.assertIsNotNone(row['session_ends_at'])
+        self.assertEqual(row['session_ends_at'], started['ends_at'])
+        self.quiz = quiz
+        self.assertEqual(self.submit(self.answers_for(self.take(quiz=quiz)), quiz=quiz).status_code, 201)
+        row = self.row(self.student, quiz)
+        self.assertEqual((row['attempts_used'], row['attempts_left'], row['session_ends_at']), (1, 2, None))
+
+    def test_a_spent_expired_session_counts_in_the_list_and_does_not_show_as_running(self):
+        quiz = self.make_quiz(time_limit_minutes=10, max_attempts=2)
+        self.start(quiz=quiz)
+        QuizSession.objects.update(started_at=timezone.now() - timedelta(minutes=30), ends_at=timezone.now() - timedelta(minutes=20))
+        row = self.row(self.student, quiz)
+        self.assertEqual((row['attempts_used'], row['attempts_left'], row['session_ends_at']), (1, 1, None))
+
+    def test_unlimited_quiz_has_null_attempts_left(self):
+        row = self.row(self.student, self.quiz)
+        self.assertEqual((row['attempts_used'], row['attempts_left']), (0, None))
+
+    def test_the_teacher_list_has_no_student_state(self):
+        row = self.row(self.teacher, self.quiz)
+        self.assertEqual((row['attempts_used'], row['attempts_left'], row['session_ends_at']), (None, None, None))
+
+    def test_question_count_is_known_before_the_quiz_is_started(self):
+        quiz = self.make_quiz(count=7, time_limit_minutes=10, questions_per_attempt=4)
+        data = self.take(quiz=quiz)
+        self.assertEqual((data['needs_start'], data['questions'], data['question_count']), (True, [], 4))
+        plain = self.take(quiz=self.make_quiz(count=5))
+        self.assertEqual((plain['question_count'], len(plain['questions'])), (5, 5))
+
+    def test_question_count_stays_when_the_attempts_are_used_up(self):
+        quiz = self.make_quiz(count=3, max_attempts=1)
+        self.quiz = quiz
+        self.submit(self.answers_for(self.take(quiz=quiz)), quiz=quiz)
+        data = self.take(quiz=quiz)
+        self.assertEqual((data['questions'], data['question_count'], data['attempts_left']), ([], 3, 0))
