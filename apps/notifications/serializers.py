@@ -75,7 +75,9 @@ class NotificationSerializer(serializers.ModelSerializer):
         return category_of(obj.kind, obj.link_type)
 
     def get_title(self, obj) -> str:
-        return title_of(obj.kind, obj.link_type)
+        from .services import announce_title
+
+        return announce_title(obj) or title_of(obj.kind, obj.link_type)
 
     def get_body(self, obj) -> str:
         from .services import strip_html

@@ -53,6 +53,44 @@ class PostRecordingFlagTests(GateBase):
             recording.refresh_from_db()
             self.assertEqual(recording.post_to_chat, expected, value)
 
+    def live_lesson(self):
+        recording = self.recording(name='')
+        lesson = recording.lesson
+        lesson.status = 'live'
+        lesson.save(update_fields=['status'])
+        return lesson, recording
+
+    def test_the_choice_made_after_joining_is_used_when_finishing_without_a_value(self):
+        lesson, recording = self.live_lesson()
+        self.client.force_authenticate(self.teacher)
+        url = f'/api/v1/lessons/{lesson.id}/recording-choice/'
+        self.assertEqual(self.client.get(url).json(), {'post_recording': None, 'decided': False})  # hali so'ralmagan
+        patched = self.client.patch(url, {'post_recording': False}, format='json')
+        self.assertEqual((patched.status_code, patched.json()), (200, {'post_recording': False, 'decided': True}))
+        self.assertEqual(self.client.get(f'/api/v1/lessons/{lesson.id}/').json()['post_recording'], False)
+        resp = self.client.post(f'/api/v1/lessons/{lesson.id}/finish/', {}, format='json')  # finish'da qiymat yuborilmadi
+        self.assertEqual(resp.status_code, 200, resp.content)
+        recording.refresh_from_db()
+        self.assertFalse(recording.post_to_chat)
+
+    def test_an_explicit_value_at_finish_wins_over_the_earlier_choice(self):
+        lesson, recording = self.live_lesson()
+        self.client.force_authenticate(self.teacher)
+        self.client.patch(f'/api/v1/lessons/{lesson.id}/recording-choice/', {'post_recording': False}, format='json')
+        self.client.post(f'/api/v1/lessons/{lesson.id}/finish/', {'post_recording': True}, format='json')
+        recording.refresh_from_db()
+        self.assertTrue(recording.post_to_chat)
+
+    def test_recording_choice_validation_and_permissions(self):
+        lesson, _recording = self.live_lesson()
+        url = f'/api/v1/lessons/{lesson.id}/recording-choice/'
+        self.client.force_authenticate(self.teacher)
+        for bad in ({}, {'post_recording': 'yes'}, {'post_recording': None}):
+            self.assertEqual(self.client.patch(url, bad, format='json').status_code, 400, bad)
+        self.client.force_authenticate(self.student)
+        self.assertIn(self.client.get(url).status_code, (403, 404))
+        self.assertIn(self.client.patch(url, {'post_recording': False}, format='json').status_code, (403, 404))
+
     def test_nothing_is_announced_when_the_teacher_said_no_but_manual_share_still_works(self):
         recording = self.recording('done.mp4', post_to_chat=False)
         self.ready(recording)

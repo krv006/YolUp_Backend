@@ -345,11 +345,15 @@ def _submission_dict(s: Submission, include_result: bool = True, is_teacher: boo
         data['ai_overall_score'] = s.ai_overall_score
         data['ai_grade'] = s.ai_grade
         # AI holati — "AI tekshiruv natijasi" oynasi bo'sh ("— ball, Baho yo'q") qolmasligi uchun aniq holat:
-        # checking (hali tekshirilmoqda) | ready (natija bor) | failed (baholay olmadi — o'zingiz baholang) | none (AI ishlatilmagan)
+        # checking (hali tekshirilmoqda) | ready (ball bor) | unscored (AI xulosa yozdi, lekin ball qo'ymadi) | failed (baholay olmadi) |
+        # none (AI ishlatilmagan)
         data['ai_state'] = (
             'checking' if s.status == Submission.Status.CHECKING
+            else 'unscored' if s.ai_result and s.ai_overall_score is None
             else 'ready' if s.ai_result else 'failed' if s.error else 'none'
         )
+        # AI ball qo'ymagan bo'lsa ham (masalan ish o'qilmadi/baholab bo'lmadi) uning xulosasi o'qituvchiga ko'rinsin
+        data['ai_summary'] = (s.ai_result or {}).get('summary') if isinstance(s.ai_result, dict) else None
         data['ai_checking_since'] = s.updated_at if s.status == Submission.Status.CHECKING else None
         if include_result:
             data['ai_result'] = s.ai_result
@@ -798,6 +802,12 @@ def list_assignments(*, user: User, course_id, status=None) -> list:
         item = _assignment_dict(a)
         if course.teacher_id == user.id:
             item['submissions_count'] = a.submissions.count()
+            # "N / M topshirdi": M — vazifa berilgan o'quvchilar, N — shulardan topshirganlar (bitta o'quvchi ko'p marta topshirsa ham 1)
+            item['students_count'] = _audience_students(a).count()
+            item['submitted_count'] = a.submissions.values('student_id').distinct().count()
+            item['pending_review_count'] = a.submissions.filter(
+                status__in=(Submission.Status.PENDING_REVIEW, Submission.Status.CHECKING)).values('student_id').distinct().count()
+            item['graded_count'] = a.submissions.filter(status=Submission.Status.DONE).values('student_id').distinct().count()
             item['student_ids'] = [str(pk) for pk in a.assigned_students.values_list('pk', flat=True)] or None
         else:
             # O'quvchi (yoki ota-ona — bolasining) oxirgi topshirig'i holati

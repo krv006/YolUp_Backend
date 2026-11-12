@@ -117,6 +117,11 @@ def broadcast_camera_revoked(lesson_id, student_id: str) -> None:
     _send(lesson_id, {'type': 'camera_revoked', 'student_id': student_id})
 
 
+def broadcast_screen_revoked(lesson_id, student_id: str) -> None:
+    """O'quvchining ekran ulashish RUXSATI olindi (u ulashishni to'xtatdi) — qayta ulashish uchun yana so'rov kerak."""
+    _send(lesson_id, {'type': 'screen_revoked', 'student_id': student_id})
+
+
 def broadcast_media_mode(lesson_id, open_mic: bool, open_camera: bool) -> None:
     """"Hammaga mikrofon/kamera ochiq" almashtirgichlari o'zgardi."""
     _send(lesson_id, {'type': 'media_mode', 'open_mic': open_mic, 'open_camera': open_camera})

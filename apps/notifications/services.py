@@ -57,6 +57,21 @@ def strip_html(html: str) -> str:
         return re.sub(r'<[^>]+>', ' ', html).strip()
 
 
+def _display_name(user: User) -> str:
+    return (user.get_full_name() or '').strip() or user.username
+
+
+def announce_title(notification: Notification) -> str:
+    """O'qituvchi o'zi yozgan xabar uchun sarlavha: "O'qituvchi ismi · Guruh nomi" (guruhsiz bo'lsa faqat ism). Tizim xabarlari
+    (`kind` bor) va ma'lumotsiz xabarlar uchun bo'sh qaytadi — odatiy sarlavha ishlatiladi."""
+    if notification.kind:
+        return ''
+    data = notification.data or {}
+    teacher = (data.get('teacher_name') or '').strip()
+    group = (data.get('course_title') or '').strip()
+    return f'{teacher} · {group}' if teacher and group else teacher
+
+
 @transaction.atomic
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
@@ -84,9 +99,20 @@ def send_notification(
     if kind:  # foydalanuvchi o'chirib qo'ygan turdagi xabar unga yaratilmaydi (auth/me `muted_kinds`)
         recipients = [u for u in recipients if kind not in (u.muted_kinds or [])]
 
+    data = dict(data or {})
+    if not kind and sender.role == User.Role.TEACHER:
+        # O'qituvchi yozgan xabar: kim va qaysi guruhdan ekani ko'rinsin (push va ro'yxat sarlavhasi)
+        data.setdefault('teacher_name', _display_name(sender))
+        if target_type == Notification.Target.COURSE and course_id:
+            from apps.lessons.models import Course
+
+            course = Course.objects.filter(pk=course_id).only('id', 'title').first()
+            if course is not None:
+                data.setdefault('course_id', str(course.id))
+                data.setdefault('course_title', course.title)
     notification = Notification.objects.create(
         sender=sender, description=clean, target_type=target_type,
-        link_type=link_type, link_id=link_id, kind=kind, data=data or {},
+        link_type=link_type, link_id=link_id, kind=kind, data=data,
     )
     NotificationRecipient.objects.bulk_create([
         NotificationRecipient(notification=notification, user=u) for u in recipients
@@ -253,6 +279,7 @@ def send_web_push(notification: Notification, recipients: list[User], title: str
     ta'sir qilmaydi; eskirgan obuna avtomatik o'chiriladi."""
     from pywebpush import WebPushException, webpush
 
+    title = announce_title(notification) or title
     user_ids = [u.id for u in recipients]
     subs = PushSubscription.objects.filter(user_id__in=user_ids)
     if not subs:
@@ -347,6 +374,7 @@ def _firebase_messaging():
 def send_mobile_push(notification: Notification, recipients: list[User], title: str = 'Fokus') -> None:
     """`send_web_push` bilan bir xil naqsh (best-effort, eskirgan qurilma
     o'chiriladi), faqat FCM orqali mobil qurilmalarga."""
+    title = announce_title(notification) or title
     user_ids = [u.id for u in recipients]
     devices = list(PushDevice.objects.filter(user_id__in=user_ids))
     if not devices:

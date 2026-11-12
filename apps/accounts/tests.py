@@ -770,6 +770,23 @@ class SwitchRoleTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn('role', resp.data['error']['details'])
 
+    def test_me_lists_the_roles_that_can_still_be_opened(self):
+        register(self.client, 'ar_student', 'student', phone=self.PHONE)
+        self.auth(login(self.client, 'ar_student'))
+        me = self.client.get('/api/v1/auth/me/').data
+        self.assertEqual((me['available_roles'], me['role_switch_blocked']), (['teacher', 'parent'], None))
+        self.switch_role('teacher')
+        self.auth(login(self.client, 'ar_student'))
+        me = self.client.get('/api/v1/auth/me/').data
+        self.assertEqual(me['available_roles'], ['parent'])  # o'qituvchi allaqachon bor
+        self.assertEqual([a['role'] for a in me['linked_accounts']], ['teacher'])
+
+    def test_me_says_the_phone_is_required_when_there_is_none(self):
+        register(self.client, 'arnp_student', 'student')
+        self.auth(login(self.client, 'arnp_student'))
+        me = self.client.get('/api/v1/auth/me/').data
+        self.assertEqual((me['available_roles'], me['role_switch_blocked']), ([], 'phone_required'))
+
     def test_cannot_switch_to_own_current_role(self):
         register(self.client, 'srown_teacher', 'teacher', phone=self.PHONE)
         self.auth(login(self.client, 'srown_teacher'))

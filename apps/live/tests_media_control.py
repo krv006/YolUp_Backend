@@ -164,6 +164,24 @@ class ReleaseMediaTests(MediaBase):
         self.assertEqual(again.json()['revoked'], True)
         self.assertEqual(room.updates[-1], (self.uid(self.s1), set(), False))
 
+    def test_screen_share_permission_is_one_time_too(self):
+        room = FakeRoom([participant(self.uid(self.s1), [
+            TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO])])
+        resp = self.release(self.s1, 'screen', room)
+        self.assertEqual((resp.status_code, resp.json()), (200, {'revoked': True, 'open': False}))
+        # ikkala ekran manbasi (video + audio) olinadi, mikrofon qoladi; trekka tegilmaydi (o'quvchi o'zi to'xtatgan)
+        self.assertEqual(room.updates, [(self.uid(self.s1), {TrackSource.MICROPHONE}, True)])
+        self.assertEqual(room.muted, [])
+        self.assertIn({'type': 'screen_revoked', 'student_id': str(self.s1.id)}, self.events)
+        # aliaslar: screen_share
+        again = self.release(self.s1, 'screen_share', room)
+        self.assertEqual(again.json(), {'revoked': False, 'open': False})  # allaqachon olingan
+
+    def test_releasing_the_screen_keeps_mic_and_camera_permissions(self):
+        room = FakeRoom([participant(self.uid(self.s1), [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE])])
+        self.release(self.s1, 'screen', room)
+        self.assertEqual(room.updates[-1][1], {TrackSource.CAMERA, TrackSource.MICROPHONE})
+
     def test_releasing_something_never_granted_does_nothing(self):
         room = self.room()
         self.assertEqual(self.release(self.s3, 'microphone', room).json(), {'revoked': False, 'open': False})

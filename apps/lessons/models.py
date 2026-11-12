@@ -146,6 +146,8 @@ class Lesson(TimeStampedUUIDModel, SoftDeleteModel):
     # shundan hisoblaydi, aks holda kech boshlangan dars darhol "tugagan"
     # deb topilib, hali davom etayotgan safar o'rtada uzilib qolardi.
     live_started_at = DateTimeField(null=True, blank=True)
+    # O'qituvchi darsga kirgach tanlagan: yozuv tayyor bo'lganda guruhga tushsinmi (None — hali so'ralmagan/tanlanmagan)
+    post_recording = BooleanField(null=True, blank=True)
     # Ochiq rejim (2026-11-10, speaking club): yoqilganda barcha o'quvchilar (hozirgi va keyin kirganlar) so'rovsiz mikrofon/kamera
     # yoqa oladi; o'chirilganda ruxsatlar qaytarib olinadi. Ota-ona roziligi (consent camera) baribir amal qiladi.
     open_mic = BooleanField(default=False)

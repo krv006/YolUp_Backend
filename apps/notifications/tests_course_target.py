@@ -54,3 +54,53 @@ class CourseTargetTests(APITestCase):
         admin = make('ct_admin', User.Role.ADMIN)
         self.assertEqual(self.send(admin, course_id='00000000-0000-0000-0000-000000000000').status_code, 404)
         self.assertEqual(self.send(admin, course_id=str(self.course.id)).status_code, 201)
+
+
+class TeacherNotificationTitleTests(CourseTargetTests):
+    """O'qituvchi yozgan xabar: sarlavha "O'qituvchi ismi · Guruh nomi", matn — o'qituvchi yozgan xabar (2026-11-12)."""
+
+    def test_in_app_title_and_data_carry_the_teacher_and_the_group(self):
+        self.teacher.first_name, self.teacher.last_name = 'Ali', 'Valiyev'
+        self.teacher.save()
+        r = self.send(self.teacher, course_id=str(self.course.id), description='<p>Ertaga dars soat 18:00 da</p>')
+        self.assertEqual(r.status_code, 201, r.content)
+        body = r.json()
+        self.assertEqual(body['title'], 'Ali Valiyev · A')
+        self.assertEqual(body['body'], 'Ertaga dars soat 18:00 da')  # o'qituvchi yozgan matnning o'zi
+        self.assertEqual((body['data']['teacher_name'], body['data']['course_title'], body['data']['course_id']),
+                         ('Ali Valiyev', 'A', str(self.course.id)))
+
+    def test_name_falls_back_to_the_username_and_inbox_uses_the_same_title(self):
+        r = self.send(self.teacher, course_id=str(self.course.id))
+        self.assertEqual(r.json()['title'], 'ct_t · A')
+        self.client.force_authenticate(self.s1)
+        inbox = self.client.get('/api/v1/notifications/')
+        row = (inbox.json().get('results') or inbox.json())[0]
+        self.assertEqual((row.get('notification') or row)['title'], 'ct_t · A')
+
+    def test_system_notifications_keep_their_titles_and_admin_messages_are_unchanged(self):
+        from apps.notifications.services import send_notification
+
+        n = send_notification(sender=self.teacher, description='Dars bekor', target_type='user', user_id=self.s1.id, kind='lesson_cancelled')
+        self.assertEqual(n.data, {})
+        self.client.force_authenticate(self.s1)
+        inbox = self.client.get('/api/v1/notifications/').json()
+        titles = [(r.get('notification') or r)['title'] for r in (inbox.get('results') or inbox)]
+        self.assertIn('Dars bekor qilindi', titles)
+
+    def test_direct_message_without_a_group_shows_only_the_teacher(self):
+        r = self.send(self.teacher, target_type='users', user_ids=[str(self.s1.id)])
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(r.json()['title'], 'ct_t')
+
+    def test_push_uses_the_same_title(self):
+        from unittest import mock
+
+        from apps.notifications.models import PushSubscription
+
+        PushSubscription.objects.create(user=self.s1, endpoint='https://push.example/1', p256dh='k', auth='a')
+        with mock.patch('pywebpush.webpush') as webpush, self.captureOnCommitCallbacks(execute=True):
+            self.send(self.teacher, course_id=str(self.course.id), description='Salom')
+        import json
+        payload = json.loads(webpush.call_args.kwargs['data'])
+        self.assertEqual((payload['title'], payload['body']), ('ct_t · A', 'Salom'))

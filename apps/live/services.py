@@ -776,16 +776,24 @@ def deny_mic(*, teacher: User, lesson_id, student_id, request=None) -> bool:
 # ── Mikrofon/kamera ruxsatini olish va ochiq rejim (2026-11-10) ─────────────────────────────────
 
 _MEDIA = {
-    'audio': {'source': TrackSource.MICROPHONE, 'event': 'mic_revoked', 'label': 'mikrofon'},
-    'video': {'source': TrackSource.CAMERA, 'event': 'camera_revoked', 'label': 'kamera'},
+    'audio': {'source': TrackSource.MICROPHONE, 'sources': (TrackSource.MICROPHONE,), 'event': 'mic_revoked', 'label': 'mikrofon'},
+    'video': {'source': TrackSource.CAMERA, 'sources': (TrackSource.CAMERA,), 'event': 'camera_revoked', 'label': 'kamera'},
+    # Ekran ulashish ruxsati ham bir martalik (2026-11-12): o'quvchi ulashishni to'xtatgach `release-media` bilan olinadi
+    'screen': {
+        'source': TrackSource.SCREEN_SHARE, 'sources': (TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO),
+        'event': 'screen_revoked', 'label': 'ekran',
+    },
 }
-_KIND_ALIASES = {'audio': 'audio', 'mic': 'audio', 'microphone': 'audio', 'video': 'video', 'camera': 'video'}
+_KIND_ALIASES = {
+    'audio': 'audio', 'mic': 'audio', 'microphone': 'audio', 'video': 'video', 'camera': 'video',
+    'screen': 'screen', 'screen_share': 'screen', 'screenshare': 'screen',
+}
 
 
 def _media_kind(value) -> str:
     kind = _KIND_ALIASES.get(str(value or 'audio').lower())
     if kind is None:
-        raise ValidationError({'kind': _("audio (microphone) yoki video (camera) bo'lishi kerak.")})
+        raise ValidationError({'kind': _("audio (microphone), video (camera) yoki screen (screen_share) bo'lishi kerak.")})
     return kind
 
 
@@ -823,6 +831,8 @@ async def _revoke_media(room_name: str, kind: str, skip: set, only=None, mute: b
 
     spec = _MEDIA[kind]
     track_type = TrackType.AUDIO if kind == 'audio' else TrackType.VIDEO
+    if kind == 'screen':
+        mute = False  # ekran ulashish ruxsati faqat `release_media` orqali olinadi (o'quvchi o'zi to'xtatgach)
     client = LiveKitAPI(url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET)
     touched = []
     try:
@@ -843,8 +853,8 @@ async def _revoke_media(room_name: str, kind: str, skip: set, only=None, mute: b
                     ))
                     changed = True
             permission = getattr(participant, 'permission', None)
-            if permission is not None and spec['source'] in set(permission.can_publish_sources):
-                sources = set(permission.can_publish_sources) - {spec['source']}
+            if permission is not None and set(spec['sources']) & set(permission.can_publish_sources):
+                sources = set(permission.can_publish_sources) - set(spec['sources'])
                 await client.room.update_participant(UpdateParticipantRequest(
                     room=room_name, identity=participant.identity,
                     permission=ParticipantPermission(

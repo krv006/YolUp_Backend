@@ -264,6 +264,32 @@ def uuid_of(value):
     return uuid.UUID(str(value))
 
 
+class HomeworkCountsTests(BankBase):
+    """Ro'yxatdagi "N / M topshirdi" hisoblari (Trello "Count qism larni ko'rib to'g'irlash", 2026-11-12)."""
+
+    def row(self, aid):
+        listed = self.api(self.teacher).get(f'/api/v1/homework/assignments/?course={self.course.id}')
+        return next(r for r in listed.data if r['id'] == str(aid))
+
+    def test_counts_are_students_not_submissions(self):
+        aid = self.api(self.teacher).post('/api/v1/homework/assignments/', {'course_id': str(self.course.id), 'title': 'Hisob'}, format='json').data['id']
+        row = self.row(aid)
+        self.assertEqual((row['students_count'], row['submitted_count'], row['pending_review_count'], row['graded_count']), (2, 0, 0, 0))
+        for _i in range(2):  # bitta o'quvchi ikki marta topshirsa ham 1 ta
+            self.api(self.student).post(f'/api/v1/homework/assignments/{aid}/submit/', {'comment': 'javob'}, format='multipart')
+        row = self.row(aid)
+        self.assertEqual((row['students_count'], row['submitted_count'], row['pending_review_count'], row['submissions_count']), (2, 1, 1, 2))
+        sub_id = self.api(self.teacher).get(f'/api/v1/homework/assignments/{aid}/').data['submissions'][0]['id']
+        self.api(self.teacher).post(f'/api/v1/homework/submissions/{sub_id}/review/', {'overall_score': 90}, format='json')
+        row = self.row(aid)
+        self.assertEqual(row['graded_count'], 1)
+
+    def test_students_count_follows_the_audience(self):
+        aid = self.api(self.teacher).post('/api/v1/homework/assignments/', {'course_id': str(self.course.id), 'title': 'Tanlangan'}, format='json').data['id']
+        self.api(self.teacher).put(f'/api/v1/homework/assignments/{aid}/audience/', {'student_ids': [str(self.student.id)]}, format='json')
+        self.assertEqual(self.row(aid)['students_count'], 1)
+
+
 class HomeworkAudienceTests(BankBase):
     def setUp(self):
         super().setUp()

@@ -140,6 +140,10 @@ class MeSerializer(UserSerializer):
     boshqa foydalanuvchining telefon-egalari ro'yxati oshkor bo'lmasligi uchun)."""
 
     linked_accounts = serializers.SerializerMethodField()
+    # Akkauntni almashtirish oynasi uchun (2026-11-12): hali ochilmagan rollar (`switch-role` bilan ochiladi) va telefon yo'qligi sababli
+    # almashtirib bo'lmasligi. Telefon yo'q bo'lsa `available_roles` bo'sh, `role_switch_blocked` = "phone_required".
+    available_roles = serializers.SerializerMethodField()
+    role_switch_blocked = serializers.SerializerMethodField()
     # Profil maydonlari faqat o'zining profilida (boshqalarga — chat, kurs ro'yxati — chiqmaydi: email/bio oshkor bo'lmasin)
     email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
     bio = serializers.CharField(required=False, allow_blank=True, max_length=1000)
@@ -147,7 +151,7 @@ class MeSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
-            'linked_accounts', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
+            'linked_accounts', 'available_roles', 'role_switch_blocked', 'email', 'middle_name', 'birth_date', 'city', 'bio', 'experience_years', 'subject',
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
             'email_verified', 'phone_verified', 'phone_verified_at', 'target_band', 'theme', 'text_size',
             'grade', 'must_change_password', 'notify_child_absent', 'notify_child_new_device', 'notify_homework_due',
@@ -213,6 +217,15 @@ class MeSerializer(UserSerializer):
 
     def get_linked_accounts(self, obj):
         return LinkedAccountSerializer(selectors.linked_accounts(obj), many=True).data
+
+    def get_available_roles(self, obj) -> list:
+        if not obj.phone:
+            return []
+        existing = {obj.role, *selectors.linked_accounts(obj).values_list('role', flat=True)}
+        return [role for role in ('teacher', 'parent', 'student') if role not in existing]
+
+    def get_role_switch_blocked(self, obj):
+        return None if obj.phone else 'phone_required'
 
 
 class RegisterSerializer(serializers.ModelSerializer):

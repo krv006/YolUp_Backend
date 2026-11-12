@@ -163,10 +163,10 @@ class LessonSerializer(serializers.ModelSerializer):
             'duration_min', 'status', 'room_name', 'created_at',
             'avg_rating', 'rating_count', 'quiz', 'quiz_id', 'recurrence', 'recurrence_id',
             'students_count', 'participants_count', 'attendance_rate', 'joined_count', 'focus_exits', 'assignment',
-            'my_rating', 'attended', 'recording_active', 'recording_started_at',
+            'my_rating', 'attended', 'recording_active', 'recording_started_at', 'post_recording',
             'attendance_opens_at', 'has_reminder', 'reminder_minutes',
         ]
-        read_only_fields = ['room_name', 'status', 'recurrence_id']
+        read_only_fields = ['room_name', 'status', 'recurrence_id', 'post_recording']
 
     def validate_recurrence(self, value):
         """`{freq: 'weekly', weeks: 1..52, weekdays: [0..6]}` — faqat dars YARATILGANDA (seriya ochish) ma'noli."""

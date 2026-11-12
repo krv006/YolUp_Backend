@@ -153,8 +153,13 @@ class AiStateTests(HomeworkBase):
         self.assertEqual(data['ai_state'], 'checking')
         self.assertIsNotNone(data['ai_checking_since'])
 
-        ready = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result={'overall_score': 70}, error='')
+        ready = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result={'overall_score': 70}, ai_overall_score=70, error='')
         self.assertEqual(self.state(ready)['ai_state'], 'ready')
+
+        unscored = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result={'overall_score': None, 'summary': 'Ish o\'qilmadi'}, ai_overall_score=None, error='')
+        data = self.state(unscored)
+        self.assertEqual((data['ai_state'], data['ai_summary']), ('unscored', "Ish o'qilmadi"))
+        self.assertEqual(self.state(ready)['ai_summary'], None)
 
         failed = self.make_sub(status=Submission.Status.PENDING_REVIEW, ai_result=None, error="AI baholay olmadi")
         data = self.state(failed)

@@ -129,8 +129,9 @@ class CameraOffAllView(MuteAllView):
 
 
 class ReleaseMediaView(APIView):
-    """O'quvchi ruxsat berilgan mikrofon/kamerani o'zi o'chirgach chaqiradi: `{lesson_id, kind: "microphone"|"camera"}` ->
-    `{revoked, open}`. Ruxsat olinadi (qayta yoqish uchun yana so'rov kerak); ochiq rejim yoqilgan bo'lsa olinmaydi."""
+    """O'quvchi ruxsat berilgan mikrofon/kamera/ekran ulashishni o'zi to'xtatgach chaqiradi:
+    `{lesson_id, kind: "microphone"|"camera"|"screen"}` -> `{revoked, open}`. Ruxsat olinadi (qayta yoqish uchun yana so'rov kerak;
+    hodisalar: `mic_revoked` / `camera_revoked` / `screen_revoked`); ochiq rejim yoqilgan bo'lsa mikrofon/kamera ruxsati olinmaydi."""
 
     permission_classes = [RequirePerm('room.token')]
 

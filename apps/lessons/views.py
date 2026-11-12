@@ -473,10 +473,27 @@ class LessonViewSet(viewsets.ModelViewSet):
             teacher=request.user, lesson=lesson,
             recording_title=request.data.get('recording_title') or '',
             request=request,
-            # `post_recording` (standart true): yozuv tayyor bo'lganda guruhga xabar va bildirishnoma boradimi
-            post_recording=_as_bool(request.data.get('post_recording'), True),
+            # `post_recording`: yozuv tayyor bo'lganda guruhga xabar va bildirishnoma boradimi. Yuborilmasa — o'qituvchi darsga
+            # kirgach tanlagani (`recording-choice`), u ham yo'q bo'lsa true
+            post_recording=_as_bool(request.data.get('post_recording'), True if lesson.post_recording is None else lesson.post_recording),
         )
         return Response(LessonSerializer(lesson).data)
+
+    @action(detail=True, methods=['get', 'patch'], url_path='recording-choice')
+    def recording_choice(self, request, pk=None):
+        """Darsga kirgach o'qituvchidan so'raladi: "Dars yozuvi tayyor bo'lgach guruhga tashlansinmi?". `PATCH {post_recording: bool}` —
+        tanlov saqlanadi (dars tugaganda `post_recording` yuborilmasa shu ishlatiladi); `GET` -> `{post_recording: true|false|null,
+        decided: bool}` (`null` — hali tanlanmagan, ya'ni so'rash kerak). Faqat dars o'qituvchisi."""
+        lesson = self.get_object()
+        if lesson.course.teacher_id != request.user.id:
+            self.permission_denied(request, message="Faqat dars o'qituvchisi tanlay oladi.")
+        if request.method == 'PATCH':
+            value = request.data.get('post_recording')
+            if not isinstance(value, bool):
+                raise ValidationError({'post_recording': _("true yoki false bo'lishi kerak.")})
+            lesson.post_recording = value
+            lesson.save(update_fields=['post_recording', 'updated_at'])
+        return Response({'post_recording': lesson.post_recording, 'decided': lesson.post_recording is not None})
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
