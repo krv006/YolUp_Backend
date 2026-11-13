@@ -56,6 +56,11 @@ class User(AbstractUser):
     # `apps.accounts.selectors.linked_accounts()` orqali topiladi (profil —
     # o'ziniki — va admin panelida ko'rinadi).
     phone = CharField(max_length=20, null=True, blank=True, db_index=True)
+    # Bitta insonning rol-akkauntlarini ANIQ bog'laydi (telefon raqami emas): bir xil `link_group` = bog'langan.
+    # Guruh `switch-role` bilan yangi akkaunt ochilganda yoki `POST /auth/account-links/` (boshqa akkaunt parolini
+    # kiritib) yaratiladi. Telefon raqami o'zgarsa ham bog'lanish o'zgarmaydi (2026-11-13: telefon bo'yicha
+    # bog'lash begona akkauntni egallashga yo'l ochgan edi).
+    link_group = UUIDField(null=True, blank=True, db_index=True)
     # Student's invite code — parent enters it to request a link (consent flow).
     invite_code = CharField(max_length=12, unique=True, null=True, blank=True)
     avatar = ImageField(upload_to='avatars/', null=True, blank=True)

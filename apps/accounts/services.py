@@ -4,11 +4,12 @@ Qoida: view'lar faqat HTTP bilan ishlaydi (parse/serialize), qaror va yozuv —
 service'da. Har bir muhim harakat audit'ga tushadi.
 """
 import secrets
+import uuid
 
 from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from rest_framework.exceptions import NotFound, PermissionDenied, Throttled, ValidationError
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied, Throttled, ValidationError
 
 from apps.core import audit
 
@@ -1078,10 +1079,8 @@ def delete_certificate(*, teacher: User, certificate_id) -> None:
 
 
 def switch_account(*, current_user: User, target_id, request=None) -> User:
-    """Xuddi shu telefon raqamidagi boshqa rol-akkauntga (masalan
-    o'qituvchi -> ota-ona) parolsiz o'tish — joriy sessiya autentifikatsiyasi
-    yetarli, chunki ikkala akkaunt bir xil telefon raqami bilan ro'yxatdan
-    o'tgan (`selectors.linked_accounts`). Login jurnaliga ham yoziladi —
+    """ANIQ bog'langan boshqa rol-akkauntga (masalan o'qituvchi -> kuzatuvchi) parolsiz o'tish — joriy sessiya
+    autentifikatsiyasi yetarli, chunki akkauntlar `link_group` orqali bog'langan (`selectors.linked_accounts`). Login jurnaliga ham yoziladi —
     shundan keyingi "yangi qurilma/IP" solishtiruvlari to'g'ri ishlashi uchun."""
     from . import selectors
 
@@ -1100,6 +1099,22 @@ def switch_account(*, current_user: User, target_id, request=None) -> User:
 
 
 _SELF_SERVICE_ROLES = (User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT)
+LINK_FAIL_LIMIT = 5  # parol bilan bog'lashda ketma-ket xato — keyin LINK_FAIL_WINDOW soniya kutiladi
+LINK_FAIL_WINDOW = 15 * 60
+
+
+class AccountExists(APIException):
+    """Shu telefon raqamida o'sha rol akkaunti bor, lekin joriy akkauntga bog'lanmagan — parol bilan bog'lash kerak."""
+
+    status_code = 409
+    default_code = 'account_exists'
+    default_detail = _("Bu rolda akkaunt bor. Bog'lash uchun uning parolini kiriting.")
+
+
+class TwoFactorLinkBlocked(APIException):
+    status_code = 400
+    default_code = 'two_factor_enabled'
+    default_detail = _("Bu akkauntda ikki bosqichli himoya yoqilgan, uni parol bilan bog'lab bo'lmaydi.")
 
 
 def _generate_unique_username(base: str) -> str:
@@ -1112,15 +1127,26 @@ def _generate_unique_username(base: str) -> str:
     return candidate
 
 
+def _link_accounts(first: User, second: User) -> uuid.UUID:
+    """Ikki akkauntni (va ularning bog'langan guruhlarini) bitta `link_group` ga birlashtiradi."""
+    group = first.link_group or second.link_group or uuid.uuid4()
+    old_groups = {g for g in (first.link_group, second.link_group) if g and g != group}
+    User.objects.filter(pk__in=[first.pk, second.pk]).update(link_group=group)
+    if old_groups:
+        User.objects.filter(link_group__in=old_groups).update(link_group=group)
+    first.link_group = second.link_group = group
+    return group
+
+
 @transaction.atomic
 def switch_or_provision_role(*, current_user: User, role: str, request=None) -> User:
-    """Boshqa rolga (masalan o'qituvchi -> ota-ona) parolsiz o'tish — agar
-    shu telefon raqamida o'sha rol hali mavjud bo'lmasa, ro'yxatdan
-    o'tishsiz avtomatik yaratiladi ("ochiladi") va darhol shunga o'tiladi.
+    """Boshqa rolga (masalan o'qituvchi -> kuzatuvchi) parolsiz o'tish — faqat joriy akkauntga ANIQ bog'langan
+    akkauntga (`link_group`). Bog'langan akkaunt bo'lmasa va shu telefon raqamida o'sha rol ham bo'lmasa,
+    ro'yxatdan o'tishsiz avtomatik yaratiladi va bog'lanadi. Shu raqamda o'sha rol boshqa (bog'lanmagan)
+    akkaunt sifatida bor bo'lsa — o'tkazilmaydi: `409 account_exists`, uni `POST /auth/account-links/` bilan
+    parolini kiritib bog'lash kerak (telefon raqami tasdiqlanmagani uchun bu begona akkauntni egallashdan himoya).
 
-    O'quvchi hisobi faqat boshqa rol-akkaunti bor bo'lsa (masalan o'qituvchidan o'quvchi rolini ochib o'tgan va
-    orqaga qaytmoqchi) almashtira oladi. O'zi o'quvchi bo'lib ro'yxatdan o'tgan, boshqa akkaunti yo'q kishiga
-    yangi rol ochish mumkin emas (2026-11-12)."""
+    O'zi o'quvchi bo'lib ro'yxatdan o'tgan, boshqa akkaunti yo'q kishi yangi rol ocha olmaydi (2026-11-12)."""
     if role not in _SELF_SERVICE_ROLES:
         raise ValidationError({'role': _("Noto'g'ri rol.")})
     if role == current_user.role:
@@ -1133,14 +1159,19 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     if current_user.role == User.Role.STUDENT and not selectors.linked_accounts(current_user).exists():
         raise PermissionDenied(_("O'quvchi hisobidan boshqa rolga o'tib bo'lmaydi."))
 
-    target = selectors.users_with_phone(current_user.phone).filter(
-        role=role,
-    ).exclude(pk=current_user.pk).first()
-    if target is not None and not target.is_active:
-        raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
-
+    target = selectors.linked_accounts(current_user).filter(role=role).first()
     auto_provisioned = False
     if target is None:
+        if current_user.link_group and User.objects.filter(link_group=current_user.link_group, role=role, is_active=False).exists():
+            raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
+        stranger = selectors.users_with_phone(current_user.phone).filter(role=role).exclude(pk=current_user.pk).first()
+        if stranger is not None:
+            if not stranger.is_active:
+                raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
+            raise AccountExists({
+                'detail': AccountExists.default_detail,
+                'account': {'id': str(stranger.pk), 'username': stranger.username, 'role': stranger.role},
+            })
         target = User(
             username=_generate_unique_username(f'{current_user.username}_{role}'),
             role=role,
@@ -1150,6 +1181,7 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
         )
         target.set_password(secrets.token_urlsafe(32))
         target.save()
+        _link_accounts(current_user, target)
         auto_provisioned = True
         audit.record(
             action='auth.role_auto_provisioned', actor=current_user, target=target,
@@ -1162,6 +1194,54 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
         request=request,
     )
     record_login(user=target, request=request)
+    return target
+
+
+def link_account_with_password(*, current_user: User, username: str, password: str, request=None) -> User:
+    """Boshqa rol-akkauntni UNING PAROLINI kiritib joriy akkauntga bog'laydi (shundan keyin parolsiz o'tiladi).
+    Xato bo'lsa — bir xil umumiy xabar (login mavjudligi oshkor bo'lmasin); ketma-ket 5 xatodan keyin vaqtincha bloklanadi."""
+    from django.core.cache import cache
+
+    if current_user.role not in _SELF_SERVICE_ROLES:
+        raise PermissionDenied(_("Bu akkauntni bog'lab bo'lmaydi."))
+
+    fail_key = f'account-link-fail:{current_user.pk}'
+    if cache.get(fail_key, 0) >= LINK_FAIL_LIMIT:
+        raise Throttled(wait=LINK_FAIL_WINDOW)
+
+    username = (username or '').strip()
+    target = User.objects.filter(username=username).first() if username else None
+    if target is None or not target.is_active or not target.check_password(password or ''):
+        cache.add(fail_key, 0, LINK_FAIL_WINDOW)
+        try:
+            cache.incr(fail_key)
+        except ValueError:
+            cache.set(fail_key, 1, LINK_FAIL_WINDOW)
+        raise ValidationError({'password': _("Login yoki parol noto'g'ri.")})
+    cache.delete(fail_key)
+
+    if target.pk == current_user.pk:
+        raise ValidationError({'username': _("Bu sizning joriy akkauntingiz.")})
+    if target.role not in _SELF_SERVICE_ROLES:
+        raise ValidationError({'username': _("Bu akkauntni bog'lab bo'lmaydi.")})
+    if target.two_factor_enabled:
+        raise TwoFactorLinkBlocked()
+    if target.link_group and target.link_group == current_user.link_group:
+        raise ValidationError({'username': _("Bu akkaunt allaqachon bog'langan.")})
+
+    roles = {current_user.role, *User.objects.filter(link_group=current_user.link_group).values_list('role', flat=True)} \
+        if current_user.link_group else {current_user.role}
+    target_roles = {target.role, *User.objects.filter(link_group=target.link_group).values_list('role', flat=True)} \
+        if target.link_group else {target.role}
+    if roles & target_roles:
+        raise ValidationError({'username': _("Bu rolda akkaunt allaqachon bog'langan.")})
+
+    with transaction.atomic():
+        _link_accounts(current_user, target)
+    audit.record(
+        action='auth.account_linked', actor=current_user, target=target,
+        meta={'from_user_id': str(current_user.pk)}, request=request,
+    )
     return target
 
 

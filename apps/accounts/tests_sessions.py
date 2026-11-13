@@ -125,6 +125,8 @@ class SessionTests(APITestCase):
         self.assertEqual(len(authed(resp.json()).get('/api/v1/auth/sessions/').json()), 1)
         make('new1_teacher', User.Role.TEACHER, phone='+998901112233')
         target = User.objects.get(username='new1_teacher')
+        from apps.accounts import services
+        services._link_accounts(User.objects.get(username='new1'), target)
         switched = authed(resp.json()).post(f'/api/v1/auth/switch/{target.id}/')
         self.assertEqual(switched.status_code, 200, switched.content)
         self.assertTrue(RefreshToken(switched.json()['refresh'])['sid'])
@@ -183,6 +185,8 @@ class DeactivateAccountTests(APITestCase):
     def test_deactivated_account_disappears_from_linked_accounts_and_role_switch(self):
         teacher = make('t1', User.Role.TEACHER, phone='+998900000002')
         parent = make('p1', User.Role.PARENT, phone='+998900000002')
+        from apps.accounts import services
+        services._link_accounts(teacher, parent)
         tokens = login('t1')
         self.assertEqual([a['username'] for a in authed(tokens).get('/api/v1/auth/me/').json()['linked_accounts']], ['p1'])
         parent.is_active = False

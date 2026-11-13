@@ -26,6 +26,7 @@ from .serializers import (
     CertificateSerializer,
     ChildCreateSerializer,
     ConsentSerializer,
+    LinkedAccountSerializer,
     LinkRequestSerializer,
     LinkRespondSerializer,
     LinkSerializer,
@@ -503,8 +504,8 @@ class TwoFactorLoginView(APIView):
 
 
 class SwitchAccountView(APIView):
-    """Bir xil telefon raqamidagi boshqa rol-akkauntga parolsiz o'tish
-    (`linked_accounts` — /auth/me/ javobida ko'rinadi). Joriy access token
+    """ANIQ bog'langan boshqa rol-akkauntga parolsiz o'tish
+    (`linked_accounts` — /auth/me/ javobida ko'rinadi; telefon raqami bir xil bo'lishi yetarli EMAS). Joriy access token
     yetarli; yangi juft token (access+refresh) maqsad akkaunt uchun qaytadi."""
 
     permission_classes = [IsAuthenticated]
@@ -521,9 +522,9 @@ class SwitchAccountView(APIView):
 
 
 class SwitchRoleView(APIView):
-    """Boshqa rolga parolsiz o'tish — agar shu telefon raqamida o'sha rol
-    hali mavjud bo'lmasa, ro'yxatdan o'tishsiz avtomatik yaratiladi.
-    STUDENT hisoblar bu amalni bajara olmaydi (`services.switch_or_provision_role`)."""
+    """Boshqa rolga parolsiz o'tish — bog'langan akkaunt bo'lsa shunga, hech qayerda yo'q bo'lsa avtomatik
+    yaratilib bog'lanadi. Shu telefon raqamida o'sha rol bog'lanmagan holda bor bo'lsa — `409 account_exists`.
+    Faqat o'zi o'quvchi bo'lib kirganlar bajara olmaydi (`services.switch_or_provision_role`)."""
 
     permission_classes = [IsAuthenticated]
     throttle_scope = 'auth'
@@ -537,6 +538,27 @@ class SwitchRoleView(APIView):
             'refresh': str(refresh),
             'user': MeSerializer(target).data,
         })
+
+
+class AccountLinkView(APIView):
+    """Boshqa rol-akkauntni UNING PAROLINI kiritib joriy akkauntga bog'lash: `{username, password}`.
+    Bog'langandan keyin ikkalasi bir-biriga parolsiz o'tadi (`/auth/switch/<id>/`)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        target = services.link_account_with_password(
+            current_user=request.user,
+            username=request.data.get('username') or '',
+            password=request.data.get('password') or '',
+            request=request,
+        )
+        return Response({
+            'account': {'id': str(target.pk), 'username': target.username, 'role': target.role},
+            'linked_accounts': LinkedAccountSerializer(selectors.linked_accounts(request.user), many=True).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 class ChildCreateView(APIView):

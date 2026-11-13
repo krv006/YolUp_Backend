@@ -147,13 +147,13 @@ def pending_teachers() -> QuerySet[User]:
 
 
 def linked_accounts(user: User) -> QuerySet[User]:
-    """Xuddi shu telefon raqami bilan ro'yxatdan o'tgan BOSHQA akkauntlar
-    (bitta real inson — o'qituvchi + ota-ona + o'quvchi kabi bir necha
-    rol-akkaunt ochgan bo'lishi mumkin, `phone` UNIQUE emas — apps.accounts.models).
-    `phone` bo'sh bo'lsa — bo'sh natija (bo'sh qiymat bo'yicha "bog'lash" mantiqsiz)."""
-    if not user.phone:
+    """Shu insonning ANIQ bog'langan BOSHQA rol-akkauntlari (`User.link_group`) — o'qituvchi + kuzatuvchi +
+    o'quvchi kabi. Telefon raqami bo'yicha emas (2026-11-13): raqam tasdiqlanmaydi, shuning uchun begona
+    kishi o'zgalar raqami bilan ro'yxatdan o'tib, akkauntni egallab olmasin. Bog'lanish `switch-role` bilan
+    yangi akkaunt ochilganda yoki `services.link_account_with_password` orqali (boshqa akkaunt paroli bilan) paydo bo'ladi."""
+    if not user.link_group:
         return User.objects.none()
-    return users_with_phone(user.phone).filter(is_active=True).exclude(pk=user.pk).order_by('role', 'username')
+    return User.objects.filter(link_group=user.link_group, is_active=True).exclude(pk=user.pk).order_by('role', 'username')
 
 
 def users_with_phone(raw_phone: str) -> QuerySet[User]:

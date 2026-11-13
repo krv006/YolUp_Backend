@@ -5,7 +5,7 @@ from django.apps import apps as django_apps
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.accounts import selectors
+from apps.accounts import selectors, services
 from apps.accounts.models import User
 
 
@@ -26,23 +26,27 @@ class PhoneNormalizeTests(TestCase):
         self.assertIsNone(make('g2', phone=None).phone)
         self.assertEqual(make('g3', phone='').phone, '')
 
-    def test_accounts_saved_in_different_styles_are_linked(self):
+    def test_accounts_saved_in_different_styles_are_found_by_phone(self):
         teacher = make('t1', User.Role.TEACHER, '901234567')
         parent = make('p1', User.Role.PARENT, '+998 90 123 45 67')
         student = make('s1', User.Role.STUDENT, '998901234567')
-        self.assertEqual({u.pk for u in selectors.linked_accounts(teacher)}, {parent.pk, student.pk})
+        # raqam bir xil bo'lishi o'zi bog'lamaydi (2026-11-13), lekin raqam bo'yicha qidiruv uslublardan qat'i nazar topadi
+        self.assertEqual({u.pk for u in selectors.users_with_phone('90 123 45 67')}, {teacher.pk, parent.pk, student.pk})
+        self.assertEqual(list(selectors.linked_accounts(teacher)), [])
 
-    def test_linking_works_even_for_rows_stored_in_the_old_style(self):
+    def test_phone_lookup_works_even_for_rows_stored_in_the_old_style(self):
         teacher = make('t1', User.Role.TEACHER, '+998901234567')
         parent = make('p1', User.Role.PARENT, '+998901234567')
         # eski (migratsiyagacha) ma'lumot: save() chetlab to'g'ridan-to'g'ri yoziladi
         User.objects.filter(pk=parent.pk).update(phone='901234567')
-        self.assertEqual([u.pk for u in selectors.linked_accounts(teacher)], [parent.pk])
+        self.assertEqual({u.pk for u in selectors.users_with_phone('+998901234567')}, {teacher.pk, parent.pk})
 
     def test_me_lists_all_three_accounts_and_switch_works(self):
         teacher = make('t1', User.Role.TEACHER, '901234567')
-        make('p1', User.Role.PARENT, '+998 90 123 45 67')
-        make('s1', User.Role.STUDENT, '+998901234567')
+        parent = make('p1', User.Role.PARENT, '+998 90 123 45 67')
+        student = make('s1', User.Role.STUDENT, '+998901234567')
+        services._link_accounts(teacher, parent)
+        services._link_accounts(teacher, student)
         client = APIClient()
         client.force_authenticate(teacher)
         me = client.get('/api/v1/auth/me/').json()

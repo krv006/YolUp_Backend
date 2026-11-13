@@ -34,6 +34,7 @@ urlpatterns = [
     path('password/change/', views.PasswordChangeView.as_view(), name='password-change'),
     path('switch/<uuid:pk>/', views.SwitchAccountView.as_view(), name='switch-account'),
     path('switch-role/', views.SwitchRoleView.as_view(), name='switch-role'),
+    path('account-links/', views.AccountLinkView.as_view(), name='account-links'),
     path('me/certificates/', views.CertificateListCreateView.as_view(), name='certificate-list-create'),
     path('me/certificates/<uuid:pk>/', views.CertificateDeleteView.as_view(), name='certificate-delete'),
     path('me/ratings/', views.MyRatingsListView.as_view(), name='my-ratings-list'),

@@ -24,6 +24,15 @@ def register(client, username, role, **extra):
     return resp
 
 
+def link_users(*usernames):
+    """Testlar uchun: akkauntlarni to'g'ridan-to'g'ri bog'laydi (parol bilan bog'lash alohida testlanadi)."""
+    from . import services
+
+    users = [User.objects.get(username=name) for name in usernames]
+    for other in users[1:]:
+        services._link_accounts(users[0], other)
+
+
 def login(client, username):
     resp = client.post('/api/v1/auth/login/', {'username': username, 'password': PASSWORD})
     return resp.json()['access']
@@ -573,9 +582,10 @@ class LinkedAccountsTests(APITestCase):
         r2 = register(self.client, 'multi_parent', 'parent', phone=self.PHONE)
         self.assertEqual(r2.status_code, 201)
 
-    def test_me_lists_linked_accounts_by_phone(self):
+    def test_me_lists_linked_accounts(self):
         register(self.client, 'lt_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'lt_parent', 'parent', phone=self.PHONE)
+        link_users('lt_teacher', 'lt_parent')
         access = login(self.client, 'lt_teacher')
 
         resp = self.client.get('/api/v1/auth/me/', HTTP_AUTHORIZATION=f'Bearer {access}')
@@ -623,6 +633,7 @@ class SwitchAccountTests(APITestCase):
 
         register(self.client, 'sw_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sw_parent', 'parent', phone=self.PHONE)
+        link_users('sw_teacher', 'sw_parent')
         access = login(self.client, 'sw_teacher')
         parent = User.objects.get(username='sw_parent')
 
@@ -639,6 +650,7 @@ class SwitchAccountTests(APITestCase):
     def test_switch_new_access_token_authenticates_as_target(self):
         register(self.client, 'sw2_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sw2_parent', 'parent', phone=self.PHONE)
+        link_users('sw2_teacher', 'sw2_parent')
         access = login(self.client, 'sw2_teacher')
         parent = User.objects.get(username='sw2_parent')
 
@@ -682,6 +694,7 @@ class SwitchAccountTests(APITestCase):
     def test_switch_is_recorded_in_target_login_history(self):
         register(self.client, 'sw_hist_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sw_hist_parent', 'parent', phone=self.PHONE)
+        link_users('sw_hist_teacher', 'sw_hist_parent')
         access = login(self.client, 'sw_hist_teacher')
         parent = User.objects.get(username='sw_hist_parent')
 
@@ -732,6 +745,7 @@ class SwitchRoleTests(APITestCase):
         register(self.client, 'sre_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sre_parent', 'parent', phone=self.PHONE)
         existing_parent_id = User.objects.get(username='sre_parent').pk
+        link_users('sre_teacher', 'sre_parent')
         self.auth(login(self.client, 'sre_teacher'))
 
         resp = self.switch_role('parent')
@@ -762,6 +776,7 @@ class SwitchRoleTests(APITestCase):
     def test_student_switches_to_an_existing_role_instead_of_creating_a_second_one(self):
         register(self.client, 'sre2_teacher', 'teacher', phone=self.PHONE)
         register(self.client, 'sre2_student', 'student', phone=self.PHONE)
+        link_users('sre2_student', 'sre2_teacher')
         self.auth(login(self.client, 'sre2_student'))
 
         resp = self.switch_role('teacher')
@@ -846,6 +861,149 @@ class SwitchRoleTests(APITestCase):
         me = self.client.get('/api/v1/auth/me/')
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()['role'], 'student')
+
+
+class AccountLinkSecurityTests(APITestCase):
+    """2026-11-13: telefon raqami bir xil bo'lishi akkauntlarni BOG'LAMAYDI (raqam tasdiqlanmaydi).
+    Bog'lanish `switch-role` bilan ochilganda yoki boshqa akkaunt parolini kiritib (`POST /auth/account-links/`) paydo bo'ladi."""
+
+    PHONE = '+998901112233'
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+
+    def auth(self, token):
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def link(self, username, password=PASSWORD):
+        return self.client.post('/api/v1/auth/account-links/', {'username': username, 'password': password}, format='json')
+
+    def test_same_phone_alone_does_not_link_or_allow_switch(self):
+        register(self.client, 'sec_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec_parent', 'parent', phone=self.PHONE)
+        teacher = User.objects.get(username='sec_teacher')
+        self.auth(login(self.client, 'sec_parent'))
+
+        self.assertEqual(self.client.get('/api/v1/auth/me/').data['linked_accounts'], [])
+        self.assertEqual(self.client.post(f'/api/v1/auth/switch/{teacher.pk}/').status_code, 403)
+
+    def test_switch_role_does_not_take_over_an_unlinked_account_with_the_same_phone(self):
+        register(self.client, 'sec2_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec2_parent', 'parent', phone=self.PHONE)
+        self.auth(login(self.client, 'sec2_parent'))
+
+        resp = self.client.post('/api/v1/auth/switch-role/', {'role': 'teacher'}, format='json')
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data['error']['code'], 'account_exists')
+        account = resp.data['error']['details']['account']
+        self.assertEqual((account['username'], account['role']), ('sec2_teacher', 'teacher'))
+        self.assertNotIn('access', resp.data)
+
+    def test_changing_the_profile_phone_does_not_link(self):
+        register(self.client, 'sec3_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec3_parent', 'parent', phone='+998907777777')
+        self.auth(login(self.client, 'sec3_parent'))
+        self.client.patch('/api/v1/auth/me/', {'phone': self.PHONE}, format='json')
+
+        self.assertEqual(self.client.get('/api/v1/auth/me/').data['linked_accounts'], [])
+
+    def test_accounts_opened_by_switch_role_switch_back_and_forth_without_a_password(self):
+        register(self.client, 'sec4_teacher', 'teacher', phone=self.PHONE)
+        self.auth(login(self.client, 'sec4_teacher'))
+        opened = self.client.post('/api/v1/auth/switch-role/', {'role': 'parent'}, format='json')
+        self.assertEqual(opened.status_code, 200, opened.content)
+        self.auth(opened.data['access'])
+        back = self.client.post('/api/v1/auth/switch-role/', {'role': 'teacher'}, format='json')
+        self.assertEqual((back.status_code, back.data['user']['username']), (200, 'sec4_teacher'))
+        teacher_id = back.data['user']['id']
+        self.auth(opened.data['access'])
+        self.assertEqual(self.client.post(f'/api/v1/auth/switch/{teacher_id}/').status_code, 200)
+
+    def test_link_with_the_right_password_then_switch_works(self):
+        register(self.client, 'sec5_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec5_parent', 'parent', phone=self.PHONE)
+        teacher = User.objects.get(username='sec5_teacher')
+        self.auth(login(self.client, 'sec5_parent'))
+
+        resp = self.link('sec5_teacher')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['account']['username'], 'sec5_teacher')
+        self.assertEqual([a['username'] for a in resp.data['linked_accounts']], ['sec5_teacher'])
+        self.assertEqual(self.client.post(f'/api/v1/auth/switch/{teacher.pk}/').status_code, 200)
+        # ikkala tomondan ham ko'rinadi
+        self.auth(login(self.client, 'sec5_teacher'))
+        self.assertEqual([a['username'] for a in self.client.get('/api/v1/auth/me/').data['linked_accounts']], ['sec5_parent'])
+
+    def test_after_account_exists_the_user_links_with_password_and_switch_role_works(self):
+        register(self.client, 'sec6_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec6_parent', 'parent', phone=self.PHONE)
+        self.auth(login(self.client, 'sec6_parent'))
+        self.assertEqual(self.client.post('/api/v1/auth/switch-role/', {'role': 'teacher'}, format='json').status_code, 409)
+        self.assertEqual(self.link('sec6_teacher').status_code, 201)
+        resp = self.client.post('/api/v1/auth/switch-role/', {'role': 'teacher'}, format='json')
+        self.assertEqual((resp.status_code, resp.data['user']['username']), (200, 'sec6_teacher'))
+
+    def test_wrong_password_and_unknown_username_give_the_same_400(self):
+        register(self.client, 'sec7_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec7_parent', 'parent', phone=self.PHONE)
+        self.auth(login(self.client, 'sec7_parent'))
+
+        wrong = self.link('sec7_teacher', 'NotThePassword1!')
+        unknown = self.link('no_such_user_xyz')
+        self.assertEqual((wrong.status_code, unknown.status_code), (400, 400))
+        self.assertEqual(wrong.data['error']['details'], unknown.data['error']['details'])
+        self.assertEqual(self.client.get('/api/v1/auth/me/').data['linked_accounts'], [])
+
+    def test_repeated_wrong_passwords_get_blocked(self):
+        register(self.client, 'sec8_teacher', 'teacher', phone=self.PHONE)
+        register(self.client, 'sec8_parent', 'parent', phone=self.PHONE)
+        self.auth(login(self.client, 'sec8_parent'))
+
+        for _ in range(5):
+            self.assertEqual(self.link('sec8_teacher', 'bad-pass-1').status_code, 400)
+        self.assertEqual(self.link('sec8_teacher', PASSWORD).status_code, 429)
+
+    def test_cannot_link_own_account_same_role_admin_or_two_factor_account(self):
+        register(self.client, 'sec9_parent', 'parent', phone=self.PHONE)
+        register(self.client, 'sec9_parent2', 'parent', phone=self.PHONE)
+        register(self.client, 'sec9_teacher', 'teacher', phone=self.PHONE)
+        User.objects.filter(username='sec9_teacher').update(two_factor_enabled=True)
+        admin = User(username='sec9_admin', role='admin')
+        admin.set_password(PASSWORD)
+        admin.save()
+        self.auth(login(self.client, 'sec9_parent'))
+
+        self.assertEqual(self.link('sec9_parent').status_code, 400)
+        self.assertEqual(self.link('sec9_parent2').status_code, 400)  # shu rolda allaqachon o'zi bor
+        self.assertEqual(self.link('sec9_admin').status_code, 400)
+        two_factor = self.link('sec9_teacher')
+        self.assertEqual((two_factor.status_code, two_factor.data['error']['code']), (400, 'two_factor_enabled'))
+        self.assertEqual(self.client.get('/api/v1/auth/me/').data['linked_accounts'], [])
+
+    def test_linking_requires_login(self):
+        self.assertEqual(self.link('anyone').status_code, 401)
+
+    def test_data_migration_links_accounts_opened_by_switch_role(self):
+        import importlib
+
+        from django.apps import apps as django_apps
+
+        from apps.core import audit
+
+        a = User.objects.create(username='mig_a', role='teacher', phone=self.PHONE)
+        b = User.objects.create(username='mig_b', role='parent', phone=self.PHONE)
+        c = User.objects.create(username='mig_c', role='student', phone=self.PHONE)
+        stranger = User.objects.create(username='mig_x', role='student', phone=self.PHONE)
+        audit.record(action='auth.role_auto_provisioned', actor=a, target=b)
+        audit.record(action='auth.role_auto_provisioned', actor=b, target=c)
+        importlib.import_module('apps.accounts.migrations.0026_user_link_group').backfill_from_audit(django_apps, None)
+
+        for user in (a, b, c, stranger):
+            user.refresh_from_db()
+        self.assertTrue(a.link_group and a.link_group == b.link_group == c.link_group)
+        self.assertIsNone(stranger.link_group)
 
 
 class TeacherVideoStatsTests(APITestCase):
