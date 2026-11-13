@@ -301,10 +301,12 @@ def _delivery_stats(spoken: dict) -> dict:
 
 def transcribe_submission(submission) -> tuple:
     """(matn, statistika). Jim/tushunarsiz yozuv yoki o'qib bo'lmaydigan fayl -> `GraderError` (o'qituvchi eshitadi)."""
-    name = submission.original_name or submission.file.name
+    name = Path(submission.original_name or submission.file.name).name
+    stem, ext = Path(name).stem, Path(name).suffix.lower()
+    name = (stem or 'audio') + rules.STT_EXTENSION_ALIASES.get(ext, ext)
     try:
         spoken = llm.transcribe(
-            _read(submission.file), Path(name).name,
+            _read(submission.file), name,
             language=_SPEECH_LANGUAGES.get(submission.assignment.course.subject, ''),
         )
     except llm.LLMError as exc:

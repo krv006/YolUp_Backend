@@ -5,9 +5,12 @@
 
 ALLOWED_EXTENSIONS = {
     '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.docx',
-    '.mp3', '.wav', '.m4a', '.ogg',
+    '.mp3', '.wav', '.m4a', '.ogg', '.webm', '.mp4', '.flac', '.oga', '.opus',
 }
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.ogg'}
+# Speaking (ovozli) vazifa formatlari. Brauzerda yozilgan ovoz: Chrome/Firefox — `.webm` (yoki `.ogg`), Safari/iPhone — `.mp4`/`.m4a`.
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.ogg', '.webm', '.mp4', '.flac', '.oga', '.opus'}
+# OpenAI shu kengaytmalarni tanimaydi (konteyner o'sha — ogg): fayl nomi almashtirilib yuboriladi
+STT_EXTENSION_ALIASES = {'.oga': '.ogg', '.opus': '.ogg'}
 MAX_FILE_SIZE_MB = 25
 
 # Til fanlari uchun ko'nikmalar (Assignment.skill_key)

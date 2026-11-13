@@ -72,6 +72,21 @@ class SpeakingAiTests(HomeworkBase):
         self.assertEqual(resp.status_code, 201, resp.content)
         return Submission.objects.get(pk=resp.data['id'])
 
+    def test_browser_recordings_are_accepted_for_speaking(self):
+        for name in ('voice.webm', 'voice.mp4', 'voice.opus', 'voice.oga', 'voice.flac'):
+            self.speaking(name)
+
+    def test_opus_and_oga_go_to_openai_as_ogg(self):
+        self.speaking('voice.opus')
+        services.sync_ai_results()
+        sent = [kwargs['files']['file'][0] for url, kwargs in self.fake.calls if url.endswith('/audio/transcriptions')]
+        self.assertEqual(sent, ['voice.ogg'])
+
+    def test_audio_is_still_refused_for_non_speaking_assignments(self):
+        upload = SimpleUploadedFile('voice.webm', b'\x1a\x45\xdf\xa3' + b'0' * 400, content_type='audio/webm')
+        resp = self.submit(self.assignment(skill_key='writing', title='Essay'), upload)
+        self.assertEqual(resp.status_code, 400)
+
     def test_audio_is_transcribed_then_graded_and_handed_to_the_teacher(self):
         submission = self.speaking()
         self.assertEqual(self.fake.calls, [])  # topshirish so'rovi ichida AI chaqirilmaydi
