@@ -84,10 +84,14 @@ class AttentionScheduleTests(TestCase):
 
     def test_joining_before_teacher_starts_creates_nothing_then_schedule_follows_real_start(self):
         lesson = self.make_lesson(minutes=120, status=Lesson.Status.SCHEDULED)
-        self.join(self.s1, lesson)
+        # o'quvchi o'qituvchi boshlamaguncha kira olmaydi (2026-11-15) — hech narsa yaratilmaydi
+        client = APIClient()
+        client.force_authenticate(self.s1)
+        self.assertEqual(client.post('/api/v1/live/token/', {'lesson_id': str(lesson.id)}).status_code, 400)
         self.assertEqual(AttentionCheck.objects.filter(lesson=lesson).count(), 0)
-        # o'qituvchi keyin boshlaydi
+        # o'qituvchi boshlaydi, o'quvchi shundan keyin kiradi
         self.join(self.teacher, lesson)
+        self.join(self.s1, lesson)
         lesson.refresh_from_db()
         self.assertEqual(lesson.status, Lesson.Status.LIVE)
         # o'quvchining polling'i jadvalni HAQIQIY boshlanishdan yaratadi

@@ -71,8 +71,10 @@ class CourseLessonFlowTests(APITestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(len(self.client.get('/api/v1/lessons/').json()['results']), 0)
 
-        # o'qituvchi tasdiqladi — endi kiradi
+        # o'qituvchi tasdiqladi va darsni boshladi — endi kiradi
         self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})  # o'qituvchi darsni boshlaydi
         self.auth(self.child_token)
         resp = self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
         self.assertEqual(resp.status_code, 200)
@@ -88,6 +90,11 @@ class CourseLessonFlowTests(APITestCase):
         self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
         self.approve_all_requests()
 
+        # teacher joins first -> lesson goes live (student cannot enter before that)
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
+        self.assertTrue(resp.json()['is_teacher'])
+
         # student joins -> attendance stamped
         self.auth(self.child_token)
         resp = self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
@@ -97,12 +104,8 @@ class CourseLessonFlowTests(APITestCase):
         attendance = Attendance.objects.get(lesson_id=self.lesson_id, student_id=self.child_id)
         self.assertIsNotNone(attendance.joined_at)
 
-        # teacher joins -> lesson goes live
-        self.auth(self.teacher_token)
-        resp = self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
-        self.assertTrue(resp.json()['is_teacher'])
-
         # teacher finishes -> open attendance closed
+        self.auth(self.teacher_token)
         resp = self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')
         self.assertEqual(resp.json()['status'], 'finished')
         attendance.refresh_from_db()
@@ -157,6 +160,8 @@ class CourseLessonFlowTests(APITestCase):
         self.auth(self.parent_token)
         self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
         self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})  # o'qituvchi darsni boshlaydi
         self.auth(self.child_token)
         self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
 
@@ -314,6 +319,8 @@ class CourseLessonFlowTests(APITestCase):
         self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
         self.approve_all_requests()
 
+        self.auth(self.teacher_token)
+        self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})  # o'qituvchi darsni boshlaydi
         self.auth(self.child_token)
         self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
 

@@ -85,3 +85,13 @@ class LateStartTests(APITestCase):
         for check in checks:
             self.assertGreater(check.due_at, self.now)
             self.assertLess(check.due_at, self.now + timedelta(minutes=61))
+
+    def test_student_waits_for_the_teacher_whatever_the_scheduled_time(self):
+        """2026-11-15: o'quvchi faqat dars boshlangach kiradi — bugun, kelajak yoki o'tgan kun rejasi bo'lishidan qat'i nazar."""
+        for delta in (timedelta(minutes=-30), timedelta(minutes=30), timedelta(days=1), timedelta(days=-2)):
+            lesson = self.lesson(starts_at=self.now + delta)
+            response = self.token(self.student, lesson)
+            self.assertEqual(response.status_code, 400, delta)
+            self.assertFalse(Attendance.objects.filter(lesson=lesson).exists(), delta)
+            self.assertEqual(self.token(self.teacher, lesson).status_code, 200)  # o'qituvchi boshlaydi (ertaroq/kechroq)
+            self.assertEqual(self.token(self.student, lesson).status_code, 200, delta)

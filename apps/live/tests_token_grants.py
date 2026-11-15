@@ -21,6 +21,10 @@ class TokenGrantTests(TestCase):
         )
 
     def claims(self, user):
+        if user.role == User.Role.STUDENT:
+            # o'quvchi faqat o'qituvchi darsni boshlagandan keyin kira oladi
+            self.lesson.status = Lesson.Status.LIVE
+            self.lesson.save(update_fields=['status'])
         client = APIClient()
         client.force_authenticate(user)
         response = client.post('/api/v1/live/token/', {'lesson_id': str(self.lesson.id)})

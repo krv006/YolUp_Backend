@@ -99,19 +99,13 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
         raise PermissionDenied(_("Siz bu darsdan chetlashtirilgansiz."))
     if lesson.status in (Lesson.Status.FINISHED, Lesson.Status.CANCELLED):
         raise ValidationError(_('Dars tugagan yoki bekor qilingan.'))
-    # Bugun/kelajakka rejalashtirilgan darsga istalgan vaqt kirish mumkin
-    # (aniq soatini kutish shart emas — o'qituvchi ertaroq boshlay oladi).
-    # KUNI o'tib ketgan, hech qachon boshlanmagan (hamon SCHEDULED) darsni
-    # faqat O'QITUVCHI kechikib boshlay oladi (2026-11-07). O'quvchi esa
-    # o'qituvchi boshlamaguncha (dars LIVE bo'lmaguncha) kira olmaydi: aks
-    # holda hech kim o'tkazmayotgan eski dars uchun "kirdi" davomati yozilib
-    # qolardi. Frontend o'quvchi tugmasini ham shu qoidaga ko'ra o'chiradi —
-    # lekin HAQIQIY himoya shu yerda (to'g'ridan-to'g'ri havolada ham ishlaydi).
-    if lesson.status == Lesson.Status.SCHEDULED and not is_teacher:
-        local_now = timezone.localtime(timezone.now())
-        local_starts_at = timezone.localtime(lesson.starts_at)
-        if local_starts_at.date() < local_now.date():
-            raise ValidationError(_("Bu darsning vaqti allaqachon o'tib ketgan."))
+    # O'quvchi darsga FAQAT o'qituvchi boshlagandan keyin (dars LIVE bo'lgandan keyin) kira oladi — rejalashtirilgan
+    # soatdan ertaroq yoki kechroq boshlangan bo'lishidan qat'i nazar (2026-11-15). O'qituvchi esa istalgan paytda
+    # (hatto kuni o'tib ketgan darsni ham) kirib boshlay oladi. Boshlanmagan darsga o'quvchini kiritmaymiz: aks holda
+    # hech kim o'tkazmayotgan dars uchun "kirdi" davomati yozilib qolardi. HAQIQIY himoya shu yerda (to'g'ridan-to'g'ri
+    # havolada ham ishlaydi); frontend o'quvchi tugmasini ham `status == 'live'` ga qarab yoqadi.
+    if not is_teacher and lesson.status != Lesson.Status.LIVE:
+        raise ValidationError(_("Dars hali boshlanmagan. O'qituvchi boshlagandan keyin kira olasiz."))
 
     # KRITIK XATO (2026-09-05 topilgan, ikki ishtirokchi bilan haqiqiy sinovda):
     # `can_publish_sources=[]` (bo'sh ro'yxat) LiveKit'da "cheklov YO'Q, hamma
