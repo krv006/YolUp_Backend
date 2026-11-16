@@ -1092,6 +1092,7 @@ def invite_to_lesson(*, teacher: User, lesson_id, student_id=None, request=None)
         send_notification(
             sender=teacher, description=description,
             target_type=Notification.Target.USER, user_id=student.id, request=request,
+            kind='lesson_invite', link_type='lesson', link_id=str(lesson.id),
         )
     audit.record(
         action='lesson.invite', actor=teacher, target=lesson,

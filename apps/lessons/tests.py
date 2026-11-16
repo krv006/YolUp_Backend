@@ -1623,6 +1623,12 @@ class InviteBanTests(APITestCase):
         self.assertEqual(
             len(self.api(self.other_student).get('/api/v1/notifications/').json()['results']), 0,
         )
+        # bosilganda dars sahifasi ochilishi uchun havola va sarlavha bor (Trello 60)
+        note = inbox[0]['notification']
+        self.assertEqual(note['kind'], 'lesson_invite')
+        self.assertEqual(note['link_type'], 'lesson')
+        self.assertEqual(note['link_id'], str(self.lesson.id))
+        self.assertEqual(note['title'], 'Darsga taklif')
 
     def test_invite_without_student_id_notifies_everyone_enrolled(self):
         resp = self.api(self.teacher).post('/api/v1/live/invite/', {'lesson_id': str(self.lesson.id)})
