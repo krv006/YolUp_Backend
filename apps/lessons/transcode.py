@@ -115,13 +115,41 @@ def _has_video(path) -> bool:
     return result.returncode == 0 and 'video' in result.stdout
 
 
-def _command(src, dst, *, video: bool) -> list:
+MAX_WIDTH = 1280
+DEFAULT_CANVAS = (1280, 720)
+
+
+def _canvas(src) -> tuple[int, int]:
+    """Chiqish videosining QAT'IY o'lchami: faylning birinchi kadr o'lchami, eni 1280 dan oshmasin (nisbat saqlanadi).
+    O'lcham videoning o'rtasida o'zgarsa (oyna almashtirildi, Chrome "Share this tab instead") ham chiqish o'zgarmaydi:
+    boshqa o'lchamli kadrlar shu kadrga sig'diriladi, bo'sh joyi qora bo'ladi (2026-11-16)."""
+    try:
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+             '-of', 'csv=p=0:s=x', str(src)],
+            capture_output=True, text=True, timeout=120,
+        )
+        width, height = (int(part) for part in probe.stdout.strip().split('x')[:2])
+    except Exception:  # noqa: BLE001 — o'qib bo'lmasa standart o'lcham
+        return DEFAULT_CANVAS
+    if width <= 0 or height <= 0:
+        return DEFAULT_CANVAS
+    if width > MAX_WIDTH:
+        height = round(height * MAX_WIDTH / width)
+        width = MAX_WIDTH
+    return max(2, width - width % 2), max(2, height - height % 2)
+
+
+def _command(src, dst, *, video: bool, canvas=None) -> list:
     base = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-i', str(src)]
     if video:
         # Ekran yozuvi: 1280 px gacha, ~15 kadr/s — sifat yetarli, CPU va hajm kam.
         # `-g 30` = har 2 soniyada kalit kadr: standart (250 kadr) har ~17 soniyada edi, o'tkazib yuborganda pleer shuncha
         # videoni dekod qilib qotardi. `-sc_threshold 0` — sahna o'zgarishida qo'shimcha kalit kadr qo'ymaydi (hajm barqaror).
-        codec = ['-vf', "scale='min(1280,iw)':-2,fps=15", '-c:v', 'libx264', '-preset', 'veryfast',
+        width, height = canvas or DEFAULT_CANVAS
+        scale = (f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
+                 f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15')
+        codec = ['-vf', scale, '-c:v', 'libx264', '-preset', 'veryfast',
                  '-crf', '28', '-g', '30', '-keyint_min', '30', '-sc_threshold', '0', '-pix_fmt', 'yuv420p']
     else:
         codec = ['-vn']
@@ -146,7 +174,8 @@ def convert(recording_pk) -> str:
         extension = '.mp4' if video else '.m4a'
         final_name = f'{src.stem}{extension}'
         tmp = settings.RECORDINGS_DIR / f'{src.stem}.part{extension}'
-        result = subprocess.run(_command(src, tmp, video=video), capture_output=True, text=True,
+        canvas = _canvas(src) if video else None
+        result = subprocess.run(_command(src, tmp, video=video, canvas=canvas), capture_output=True, text=True,
                                 timeout=TIMEOUT_SECONDS)
         if result.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             raise RuntimeError(result.stderr[-400:] or 'ffmpeg xato bilan tugadi')

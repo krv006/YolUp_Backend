@@ -1567,6 +1567,74 @@ def _segment_offsets(path, sessions) -> tuple[list[int], bool]:
     return offsets, False
 
 
+def _file_size(path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _even(value) -> int:
+    value = int(value)
+    return max(2, value - value % 2)
+
+
+def _video_canvas(infos, weights=None) -> tuple[str, int, int] | None:
+    """Sessiyalarning umumiy kadri: (kodek, eni, bo'yi) — eng KATTA (fayl hajmi bo'yicha, ya'ni eng uzoq) sessiyaniki.
+    Shunda asosiy sessiya qayta kodlanmaydi; faqat boshqa o'lchamli (odatda qisqa) sessiyalar shu kadrga sig'diriladi.
+    O'lcham juft son (yuv420p shuni talab qiladi)."""
+    candidates = [(weights[i] if weights else 0, -i, info) for i, info in enumerate(infos)
+                  if info and info.get('width') and info.get('height')]
+    if not candidates:
+        return None
+    info = max(candidates, key=lambda item: item[:2])[2]
+    return info.get('codec_name'), _even(info['width']), _even(info['height'])
+
+
+def _conform_video(src, output, codec_name: str, width: int, height: int) -> bool:
+    """`src` videoni `width`x`height` kadrga (nisbat saqlanadi, bo'sh joy qora) va `codec_name` kodekka keltiradi.
+    Oyna almashtirilganda sessiyalar har xil o'lchamda bo'ladi, `mkvmerge --append` esa o'lchami farq qiladigan
+    treklarni ulay olmaydi (2026-11-16). Faqat mos kelmagan sessiya qayta kodlanadi."""
+    import subprocess
+    from pathlib import Path
+
+    codec = {'vp8': ['-c:v', 'libvpx', '-b:v', '2M', '-crf', '12'],
+             'vp9': ['-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-row-mt', '1']}.get(codec_name)
+    if not codec:
+        return False
+    vf = (f'scale={width}:{height}:force_original_aspect_ratio=decrease,'
+          f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1')
+    cmd = ['ffmpeg', '-y', '-loglevel', 'error', '-i', str(src), '-an', '-vf', vf, *codec, '-g', '30',
+           '-deadline', 'good', '-cpu-used', '5', '-pix_fmt', 'yuv420p', '-f', 'webm', str(output)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    return result.returncode == 0 and Path(output).exists() and Path(output).stat().st_size > 0
+
+
+def _conform_video_segments(segment_paths, tmp_dir) -> list:
+    """Bir xil kodek va o'lchamga keltirilgan sessiyalar ro'yxati (tartib saqlanadi). Allaqachon mos bo'lsa — o'zgarmaydi;
+    qayta kodlash bajarilmasa sessiya o'z holicha qoladi."""
+    import logging
+
+    infos = [_stream_info(path, 'video') for path in segment_paths]
+    canvas = _video_canvas(infos, [_file_size(path) for path in segment_paths])
+    if canvas is None:
+        return list(segment_paths)
+    codec, width, height = canvas
+    result = []
+    for i, (path, info) in enumerate(zip(segment_paths, infos)):
+        same = info and info.get('codec_name') == codec and info.get('width') == width and info.get('height') == height
+        if same or not info:
+            result.append(path)
+            continue
+        conformed = tmp_dir / f'conformed-{i}.webm'
+        if _conform_video(path, conformed, codec, width, height):
+            result.append(conformed)
+        else:
+            logging.getLogger('apps').warning("%s: sessiyani %dx%d ga keltirib bo'lmadi", path.name, width, height)
+            result.append(path)
+    return result
+
+
 def _session_start(sessions, index: int):
     from datetime import timezone as dt_timezone
 
@@ -1604,6 +1672,7 @@ def _normalize_webm(path, sessions=None, kind=None):
     va `kind` ('video'|'audio') berilsa, har tanaffus o'sha uzunlikdagi to'ldiruvchi bilan (`_make_filler`) to'ldiriladi
     va vaqt chizig'i haqiqiy dars bilan mos qoladi."""
     import logging
+    import shutil
     import tempfile
     from pathlib import Path
 
@@ -1617,7 +1686,6 @@ def _normalize_webm(path, sessions=None, kind=None):
     bounds = offsets + [size]
     normalized_path = path.with_name(f'{path.stem}-normalized{path.suffix}')
     starts = [_session_start(sessions, i) for i in range(len(offsets))] if from_sessions else []
-    fill = bool(kind and from_sessions and all(starts))
     with tempfile.TemporaryDirectory(dir=settings.RECORDINGS_DIR) as tmp_dir:
         tmp_dir_path = Path(tmp_dir)
         segment_paths = []
@@ -1626,16 +1694,37 @@ def _normalize_webm(path, sessions=None, kind=None):
             _copy_range(path, segment_path, bounds[i], bounds[i + 1])
             segment_paths.append(segment_path)
 
-        parts = [segment_paths[0]]
+        # Juda qisqa/bo'sh sessiya (ulab, darhol to'xtatilgan: treksiz yoki kadrsiz fayl) `mkvmerge` ni buzmasin:
+        # o'qib bo'lmaydigan bo'lak tashlanadi, uning vaqti keyingi tanaffusga qo'shilib to'ldiriladi.
+        keep = [i for i, segment in enumerate(segment_paths) if _stream_info(segment, kind or 'video') is not None]
+        if not keep:
+            logging.getLogger('apps').error('%s: birorta ham o\'qiladigan sessiya yo\'q', path.name)
+            return path
+        if len(keep) < len(segment_paths):
+            logging.getLogger('apps').warning('%s: %d ta bo\'sh sessiya tashlandi', path.name, len(segment_paths) - len(keep))
+        used = [segment_paths[i] for i in keep]
+        if kind == 'video':
+            used = _conform_video_segments(used, tmp_dir_path)  # har xil oyna o'lchami / kodek
+        if len(used) == 1:
+            shutil.copyfile(used[0], normalized_path)
+            return normalized_path
+
+        anchor = starts[keep[0]] if starts else None
+        fill = bool(kind and from_sessions and anchor)
+        parts = [used[0]]
         if fill:
-            elapsed = _media_duration(segment_paths[0])
-            for i in range(1, len(segment_paths)):
+            elapsed = _media_duration(used[0])
+            for pos in range(1, len(used)):
+                i = keep[pos]
                 if elapsed is None:
+                    parts += used[pos:]
                     break
-                gap = (starts[i] - starts[0]).total_seconds() - elapsed
+                # Sessiya boshlanish vaqti noma'lum bo'lsa (birinchi bo'lagi yo'qolgan) — tanaffus yo'q deb olinadi;
+                # uning farqi keyingi ma'lum boshlanishda to'ldiriladi, shuning uchun umumiy vaqt chizig'i mos qoladi.
+                gap = (starts[i] - anchor).total_seconds() - elapsed if starts[i] else 0.0
                 if GAP_MIN_SECONDS <= gap <= GAP_MAX_SECONDS:
                     filler = tmp_dir_path / f'gap-{i}.webm'
-                    if _make_filler(kind, gap, segment_paths[i - 1], filler):
+                    if _make_filler(kind, gap, used[pos - 1], filler):
                         parts.append(filler)
                         elapsed += gap
                         logging.getLogger('apps').info('%s: %.1f s tanaffus to\'ldirildi (%s, sessiya %d)',
@@ -1643,18 +1732,18 @@ def _normalize_webm(path, sessions=None, kind=None):
                     else:
                         logging.getLogger('apps').warning('%s: tanaffusni to\'ldirib bo\'lmadi (%s, sessiya %d)',
                                                           path.name, kind, i)
-                duration = _media_duration(segment_paths[i])
+                duration = _media_duration(used[pos])
                 elapsed = None if duration is None else elapsed + duration
-                parts.append(segment_paths[i])
+                parts.append(used[pos])
         else:
-            parts += segment_paths[1:]
+            parts += used[1:]
         ok = _mkv_append(parts, normalized_path)
-        if not ok and len(parts) > len(segment_paths):
+        if not ok and len(parts) > len(used):
             # To'ldiruvchi bilan ulanmadi (kodek parametrlari mos kelmadi): avvalgidek tanaffussiz, lekin ulaymiz —
             # yozuv butunlay yo'qolmasin
             logging.getLogger('apps').warning("%s: to'ldiruvchi bilan ulanmadi, tanaffussiz ulanmoqda", path.name)
             normalized_path.unlink(missing_ok=True)
-            ok = _mkv_append(segment_paths, normalized_path)
+            ok = _mkv_append(used, normalized_path)
 
     if not ok:
         logging.getLogger('apps').error('webm normalize failed for %s (%d segments)', path.name, len(offsets))
