@@ -204,6 +204,10 @@ class SessionTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Login: odatiy token juftligi + yangi seans (`sid`)."""
 
     def validate(self, attrs):
+        from . import services
+
+        # `username` ga login yoki tasdiqlangan email yozish mumkin
+        attrs = {**attrs, 'username': services.resolve_login(attrs.get('username'), attrs.get('password'))}
         data = super().validate(attrs)
         if self.user.two_factor_enabled:
             from . import services

@@ -3,6 +3,7 @@
 Biznes-logika services.py da, ko'rish huquqi selectors.py da, ruxsatlar
 apps.core.permissions registry'sida.
 """
+from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -52,7 +53,9 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = services.register_user(request=request, **serializer.validated_data)
+        user = services.register_user(
+            request=request, require_email=settings.REGISTER_REQUIRES_EMAIL, **serializer.validated_data,
+        )
         refresh = sessions.issue_refresh(user, request)
         services.record_login(user=user, request=request)
         return Response({
@@ -124,6 +127,65 @@ class RegisterPhoneVerifyView(APIView):
 
     def post(self, request):
         return Response(services.register_phone_verify(phone=request.data.get('phone'), code=request.data.get('code')))
+
+
+class RegisterOptionsView(APIView):
+    """`GET /auth/register/options/` — ro'yxatdan o'tish oynasi nimalarni ko'rsatishi kerak: `email_required` (tasdiqlangan email
+    majburiy), `email_available` / `phone_available` (kod yuboradigan xizmat ulanganmi)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from apps.core import mailer, sms
+
+        return Response({
+            'email_required': settings.REGISTER_REQUIRES_EMAIL,
+            'email_available': mailer.configured(),
+            'phone_available': sms.configured(),
+        })
+
+
+class RegisterEmailRequestView(APIView):
+    """`{email}` -> emailga kod (ro'yxatdan o'tishdan oldin): `{sent, expires_in, retry_after}`."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.register_email_request(email=request.data.get('email')))
+
+
+class RegisterEmailVerifyView(APIView):
+    """`{email, code}` -> `{email_token, expires_in}`; tokenni va emailni `/auth/register/` ga yuboring."""
+
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.register_email_verify(email=request.data.get('email'), code=request.data.get('code')))
+
+
+class MeEmailRequestView(APIView):
+    """`{email}` -> YANGI manzilga kod (email qo'shish yoki o'zgartirish)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        return Response(services.email_change_request(user=request.user, email=request.data.get('email')))
+
+
+class MeEmailConfirmView(APIView):
+    """`{email, code}` -> email almashtiriladi va tasdiqlangan bo'ladi; yangilangan profil qaytadi."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        user = services.email_change_confirm(
+            user=request.user, email=request.data.get('email'), code=request.data.get('code'), request=request,
+        )
+        return Response(MeSerializer(user, context={'request': request}).data)
 
 
 class MePhoneRequestView(APIView):
@@ -386,8 +448,9 @@ class PasswordChangeView(APIView):
 
 
 class PasswordResetRequestView(APIView):
-    """Parolni tiklash, 1-qadam: `{phone}` -> SMS kod. Javob `{sent, expires_in, retry_after}`; raqam topilmasa 404;
-    juda tez qayta so'ralsa 429 (`retry_after`); SMS provayder ulanmagan bo'lsa 503."""
+    """Parolni tiklash, 1-qadam: `{phone}` -> SMS kod YOKI `{email}` -> tasdiqlangan emailga kod. Javob `{sent, expires_in, retry_after}`.
+    Telefon: raqam topilmasa 404. Email: topilmasa ham xuddi shunday javob (manzil oshkor bo'lmasin). Juda tez qayta so'ralsa 429
+    (`retry_after`); SMS/email xizmati ulanmagan bo'lsa 503."""
 
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
@@ -395,11 +458,11 @@ class PasswordResetRequestView(APIView):
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response(services.password_reset_request(phone=serializer.validated_data['phone'], request=request))
+        return Response(services.password_reset_request(request=request, **serializer.validated_data))
 
 
 class PasswordResetVerifyView(APIView):
-    """2-qadam: `{phone, code}` -> `{reset_token, expires_in}` (bir martalik token)."""
+    """2-qadam: `{phone, code}` yoki `{email, code}` -> `{reset_token, expires_in}` (bir martalik token)."""
 
     permission_classes = [AllowAny]
     throttle_scope = 'auth'

@@ -314,6 +314,12 @@ EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', '0') == '1'
 EMAIL_TIMEOUT = 10
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'YolUp <no-reply@yolup.uz>')
+# Ochiq ro'yxatdan o'tishda tasdiqlangan email (`email_token`) majburiy. Standart O'CHIQ: avval SMTP ulanadi va frontend email
+# qadamini qo'shadi, keyin serverda REGISTER_REQUIRES_EMAIL=1 qilinadi.
+REGISTER_REQUIRES_EMAIL = os.getenv('REGISTER_REQUIRES_EMAIL', '0') == '1'
+# Mavjud (emailsiz/tasdiqlanmagan) foydalanuvchilar uchun muhlat (YYYY-MM-DD): `/auth/me/` da `email_setup_deadline` bo'lib chiqadi;
+# shu sanadan keyin frontend email qo'shishni majburiy qiladi. Bo'sh = muhlat belgilanmagan.
+EMAIL_SETUP_DEADLINE = os.getenv('EMAIL_SETUP_DEADLINE', '')
 if EMAIL_HOST:
     EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 

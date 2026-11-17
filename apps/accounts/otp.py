@@ -62,12 +62,13 @@ def _email_key(email: str) -> str:
     return (email or '').strip().lower()
 
 
-def issue_email(*, scope: str, email: str, payload: dict | None = None) -> dict:
-    """`issue` bilan bir xil qoidalar, faqat kod emailga yuboriladi."""
+def issue_email(*, scope: str, email: str, payload: dict | None = None, silent: bool = False) -> dict:
+    """`issue` bilan bir xil qoidalar, faqat kod emailga yuboriladi. `silent=True` — xat YUBORILMAYDI, lekin sovitish/kunlik cheklov
+    va javob xuddi haqiqiydek (akkaunt bor-yo'qligini bildirmaslik uchun: parolni tiklashda noma'lum email)."""
     address = _email_key(email)
     return _issue(
         scope=scope, norm=address, payload=payload,
-        deliver=lambda code: mailer.send_email(address, *mailer.code_text(code)),
+        deliver=(lambda code: None) if silent else (lambda code: mailer.send_email(address, *mailer.code_text(code))),
     )
 
 

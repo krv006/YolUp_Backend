@@ -94,6 +94,8 @@ class User(AbstractUser):
     two_factor_enabled = BooleanField(default=False)
     # Email/telefon tasdiqlangan (kod orqali). Manzil/raqam o'zgarsa yana `false` bo'ladi.
     email_verified = BooleanField(default=False)
+    # Email talab qilinmaydi: ota-ona/o'qituvchi yaratgan bola hisobi (bolada pochta yo'q) — `create_child` qo'yadi
+    email_exempt = BooleanField(default=False)
     phone_verified = BooleanField(default=False)
     phone_verified_at = DateTimeField(null=True, blank=True)
     # Mock imtihon maqsadi (IELTS band, SAT ball va h.k.) — o'quvchi o'zi belgilaydi

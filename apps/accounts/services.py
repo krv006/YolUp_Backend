@@ -60,13 +60,22 @@ def _notify_teacher_approved(teacher: User, request=None) -> None:
 
 
 @transaction.atomic
-def register_user(*, username: str, password: str, role: str, request=None, phone_token: str = '', **extra) -> User:
+def register_user(
+    *, username: str, password: str, role: str, request=None, phone_token: str = '', email_token: str = '',
+    require_email: bool = False, **extra,
+) -> User:
     if role not in (User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT):
         raise ValidationError({'role': _("Faqat o'qituvchi, ota-ona yoki o'quvchi ro'yxatdan o'ta oladi.")})
+    if require_email and not email_token:
+        raise ValidationError({'email_token': _("Email tasdiqlanishi shart: avval emailga kelgan kodni tasdiqlang.")})
+    if email_token:
+        extra['email'] = _clean_email_input(extra.get('email'))
     user = User(username=username, role=role, **extra)
     if phone_token:
         user.phone_verified = consume_phone_token(phone_token, user.phone)
         user.phone_verified_at = timezone.now()
+    if email_token:
+        user.email_verified = consume_email_token(email_token, user.email)
     if role == User.Role.TEACHER:
         # `is_approved` standart True: yangi o'qituvchi darhol ishlay oladi
         # (loyiha egasi qarori, 2026-10-05). Bayroq saqlanib qolgan — admin
@@ -181,7 +190,9 @@ def create_child(*, creator: User, username: str, password: str, request=None, c
         if course.teacher_id != creator.id:
             raise PermissionDenied(_("Faqat o'z kursingizga o'quvchi biriktira olasiz."))
     # Ota-ona yaratgan hisob: bola birinchi kirishda parolni o'zi almashtirishi shart (frontend `must_change_password` ni tekshiradi)
-    child = User(username=username, role=User.Role.STUDENT, must_change_password=creator.role == User.Role.PARENT, **extra)
+    child = User(
+        username=username, role=User.Role.STUDENT, must_change_password=creator.role == User.Role.PARENT, email_exempt=True, **extra,
+    )
     child.set_password(password)
     child.save()
     if course is not None:
@@ -233,10 +244,41 @@ def _accounts_by_phone(raw_phone: str):
     return [u for u in users if sms.normalize_phone(u.phone) == digits]
 
 
-def password_reset_request(*, phone: str, request=None) -> dict:
-    """1-qadam: shu telefonli akkaunt bor bo'lsa SMS kod yuboradi. Yo'q — 404 (frontend talabi)."""
+def _accounts_by_email(email: str):
+    """Faqat TASDIQLANGAN email bo'yicha (tasdiqlanmagan manzilga kod yuborib, birovning akkauntini tiklab bo'lmasin)."""
+    return list(User.objects.filter(email__iexact=(email or '').strip(), email_verified=True, is_active=True))
+
+
+def _clean_email_input(email) -> str:
+    from django.core.exceptions import ValidationError as DjangoValidationError
+    from django.core.validators import validate_email
+
+    value = (email or '').strip().lower()
+    try:
+        if not value:
+            raise DjangoValidationError('empty')
+        validate_email(value)
+    except DjangoValidationError:
+        raise ValidationError({'email': _("To'g'ri email manzil kiriting.")}) from None
+    return value[:254]
+
+
+def password_reset_request(*, phone: str = '', email: str = '', request=None) -> dict:
+    """1-qadam. `phone` -> SMS kod (raqam yo'q bo'lsa 404). `email` -> shu TASDIQLANGAN emailga kod; email topilmasa ham javob
+    xuddi shunday (`sent: true`) — manzil bazada bor-yo'qligi oshkor bo'lmasin."""
+    from apps.core import mailer
+
     from . import otp
 
+    if email:
+        email = _clean_email_input(email)
+        if not mailer.configured():
+            raise mailer.EmailNotConfigured()  # akkaunt bor-yo'qligidan qat'i nazar bir xil javob
+        known = bool(_accounts_by_email(email))
+        result = otp.issue_email(scope='pwreset-email', email=email, silent=not known)
+        if known:
+            audit.record(action='auth.password_reset_request', actor=None, meta={'email': email[:3] + '***'}, request=request)
+        return result
     if not _accounts_by_phone(phone):
         raise NotFound(_('Bunday raqam topilmadi'))
     result = otp.issue(scope='pwreset', phone=phone)
@@ -244,7 +286,7 @@ def password_reset_request(*, phone: str, request=None) -> dict:
     return result
 
 
-def password_reset_verify(*, phone: str, code: str) -> dict:
+def password_reset_verify(*, code: str, phone: str = '', email: str = '') -> dict:
     """2-qadam: kod to'g'ri bo'lsa bir martalik `reset_token` (10 daqiqa)."""
     import hashlib
     import secrets
@@ -253,16 +295,20 @@ def password_reset_verify(*, phone: str, code: str) -> dict:
 
     from . import otp
 
-    otp.check(scope='pwreset', phone=phone, code=code)
+    if email:
+        email = _clean_email_input(email)
+        otp.check_email(scope='pwreset-email', email=email, code=code)
+        subject = {'email': email}
+    else:
+        otp.check(scope='pwreset', phone=phone, code=code)
+        subject = {'phone': otp.sms.normalize_phone(phone)}
     token = secrets.token_urlsafe(32)
-    cache.set(
-        f'pwreset:token:{hashlib.sha256(token.encode()).hexdigest()}', otp.sms.normalize_phone(phone), RESET_TOKEN_TTL,
-    )
+    cache.set(f'pwreset:token:{hashlib.sha256(token.encode()).hexdigest()}', subject, RESET_TOKEN_TTL)
     return {'reset_token': token, 'expires_in': RESET_TOKEN_TTL}
 
 
 def password_reset_confirm(*, reset_token: str, password: str, request=None) -> dict:
-    """3-qadam: yangi parol. Shu telefondagi hamma faol akkaunt (bitta odamning rol-akkauntlari) parolini yangilaydi,
+    """3-qadam: yangi parol. Shu telefon/tasdiqlangan emaildagi hamma faol akkaunt (bitta odamning rol-akkauntlari) parolini yangilaydi,
     hamma seans va tokenlar bekor qilinadi."""
     import hashlib
 
@@ -274,10 +320,13 @@ def password_reset_confirm(*, reset_token: str, password: str, request=None) -> 
     from . import sessions
 
     key = f'pwreset:token:{hashlib.sha256((reset_token or "").encode()).hexdigest()}'
-    phone = cache.get(key)
-    if not phone:
+    subject = cache.get(key)
+    if not subject:
         raise ValidationError({'detail': _('Tiklash havolasi yaroqsiz yoki muddati o\'tgan. Qaytadan boshlang.')})
-    users = _accounts_by_phone(phone)
+    if isinstance(subject, dict) and subject.get('email'):
+        users = _accounts_by_email(subject['email'])
+    else:  # eski token (faqat raqam matni) yoki {'phone': ...}
+        users = _accounts_by_phone(subject.get('phone') if isinstance(subject, dict) else subject)
     if not users:
         raise NotFound(_('Akkaunt topilmadi.'))
     try:
@@ -494,6 +543,80 @@ def phone_change_confirm(*, user: User, phone: str, code: str, request=None) -> 
     user.save(update_fields=['phone', 'phone_verified', 'phone_verified_at'])
     audit.record(action='auth.phone_changed', actor=user, target=user, request=request)
     return user
+
+
+EMAIL_TOKEN_TTL = 30 * 60
+
+
+def register_email_request(*, email: str) -> dict:
+    """Ro'yxatdan o'tishdan OLDIN emailga kod yuboradi (5 xonali, 120 s; qayta yuborish — `retry_after`)."""
+    from . import otp
+
+    email = _clean_email_input(email)
+    return otp.issue_email(scope='register-email', email=email, payload={'email': email})
+
+
+def register_email_verify(*, email: str, code: str) -> dict:
+    """Kod to'g'ri bo'lsa `email_token` qaytadi: uni `/auth/register/` ga `email_token` sifatida yuboring (30 daqiqa, bir marta)."""
+    from django.core.cache import cache
+
+    from . import otp
+
+    email = _clean_email_input(email)
+    payload = otp.check_email(scope='register-email', email=email, code=code)
+    if payload.get('email') != email:
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    token = secrets.token_urlsafe(24)
+    cache.set(f'email-token:{token}', email, EMAIL_TOKEN_TTL)
+    return {'email_token': token, 'expires_in': EMAIL_TOKEN_TTL}
+
+
+def consume_email_token(token: str, email) -> bool:
+    """Tokenni tekshirib BIR MARTA ishlatadi; ro'yxatdan o'tayotgan emailga mos bo'lishi shart."""
+    from django.core.cache import cache
+
+    stored = cache.get(f'email-token:{token}')
+    if not stored or stored != (email or '').strip().lower():
+        raise ValidationError({'email_token': _("Email tasdiqlash tokeni noto'g'ri yoki muddati o'tgan.")})
+    cache.delete(f'email-token:{token}')
+    return True
+
+
+def email_change_request(*, user: User, email: str) -> dict:
+    """Profildagi emailni qo'shish/o'zgartirish: YANGI manzilga kod yuboriladi (tasdiqlanguncha eskisi o'zgarmaydi)."""
+    from . import otp
+
+    email = _clean_email_input(email)
+    return otp.issue_email(scope='email-change', email=email, payload={'user': str(user.id), 'email': email})
+
+
+def email_change_confirm(*, user: User, email: str, code: str, request=None) -> User:
+    from . import otp
+
+    email = _clean_email_input(email)
+    payload = otp.check_email(scope='email-change', email=email, code=code)
+    if payload.get('user') != str(user.id) or payload.get('email') != email:
+        raise ValidationError({'detail': _("Kod noto'g'ri yoki muddati o'tgan")})
+    user.email = email
+    user.email_verified = True
+    user.save(update_fields=['email', 'email_verified'])
+    audit.record(action='auth.email_changed', actor=user, target=user, request=request)
+    return user
+
+
+def resolve_login(identifier, password) -> str:
+    """Kirishda `username` maydoniga login YOKI tasdiqlangan email yozish mumkin. Avval login bo'yicha qidiriladi (ichida `@` bor
+    loginlar bor). Email bo'yicha: parol aynan bitta akkauntga mos kelsa — o'sha login; hech biriga mos kelmasa — o'zgarishsiz
+    (odatiy "login yoki parol noto'g'ri"); bir nechtasiga mos kelsa (bitta odamning rol-akkauntlari) — login so'raladi."""
+    identifier = (identifier or '').strip()
+    if '@' not in identifier or User.objects.filter(username=identifier).exists():
+        return identifier
+    matches = [u for u in _accounts_by_email(identifier) if u.check_password(password or '')]
+    if len(matches) == 1:
+        return matches[0].username
+    if len(matches) > 1:
+        raise ValidationError({'detail': _("Bu email bir nechta akkauntga bog'langan. Kirish uchun login (username) ni yozing.")})
+    return identifier
 
 
 def me_stats(user: User) -> dict:

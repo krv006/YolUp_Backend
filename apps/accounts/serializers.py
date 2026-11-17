@@ -3,6 +3,7 @@ from datetime import date
 
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.core.validators import RegexValidator
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
@@ -27,6 +28,8 @@ def username_validators():
     standart xabari inglizcha ("A user with that username already exists.")."""
     return [
         UnicodeUsernameValidator(),
+        # Login email bilan adashmasligi uchun (kirishda `@` li yozuv email deb qaraladi). Eski loginlar o'zgarmaydi.
+        RegexValidator(r'^[^@]*$', message=_("Loginda '@' belgisi bo'lmasin (email alohida maydonda yoziladi).")),
         UniqueValidator(queryset=User.objects.all(), message=_('Bu login band.')),
     ]
 
@@ -147,6 +150,10 @@ class MeSerializer(UserSerializer):
     role_switch_blocked = serializers.SerializerMethodField()
     # Profil maydonlari faqat o'zining profilida (boshqalarga — chat, kurs ro'yxati — chiqmaydi: email/bio oshkor bo'lmasin)
     email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
+    # Mavjud foydalanuvchini emailni qo'shib tasdiqlashga undash: `email_setup_required` — tasdiqlangan email yo'q (va talab yoqilgan);
+    # `email_setup_deadline` — shu sanadan keyin majburiy (null = muhlat yo'q, faqat eslatma)
+    email_setup_required = serializers.SerializerMethodField()
+    email_setup_deadline = serializers.SerializerMethodField()
     bio = serializers.CharField(required=False, allow_blank=True, max_length=1000)
     experience_years = serializers.IntegerField(required=False, allow_null=True, min_value=0, max_value=80)
 
@@ -156,12 +163,22 @@ class MeSerializer(UserSerializer):
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'notify_messages', 'notify_email',
             'email_verified', 'phone_verified', 'phone_verified_at', 'target_band', 'theme', 'text_size',
             'grade', 'must_change_password', 'notify_child_absent', 'notify_child_new_device', 'notify_homework_due',
-            'muted_kinds', 'can_create_tests',
+            'muted_kinds', 'can_create_tests', 'email_setup_required', 'email_setup_deadline',
         ]
         read_only_fields = UserSerializer.Meta.read_only_fields + [
             'parent_phone', 'password_changed_at', 'two_factor_enabled', 'email_verified', 'phone_verified',
             'phone_verified_at', 'must_change_password', 'can_create_tests',
         ]
+
+    def get_email_setup_required(self, obj) -> bool:
+        from django.conf import settings
+
+        return bool(settings.REGISTER_REQUIRES_EMAIL and not obj.email_verified and not obj.email_exempt)
+
+    def get_email_setup_deadline(self, obj):
+        from django.conf import settings
+
+        return (settings.EMAIL_SETUP_DEADLINE or None) if self.get_email_setup_required(obj) else None
 
     def validate_muted_kinds(self, value):
         if not isinstance(value, list) or len(value) > 50 or any(not isinstance(k, str) or not 0 < len(k) <= 32 for k in value):
@@ -244,12 +261,19 @@ class RegisterSerializer(serializers.ModelSerializer):
     role = serializers.ChoiceField(choices=[User.Role.TEACHER, User.Role.PARENT, User.Role.STUDENT])
     # SMS bilan tasdiqlangan raqam uchun bir martalik token (`/auth/register/phone/verify/`); berilmasa telefon tasdiqlanmagan qoladi
     phone_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    # Emailga kelgan kod bilan tasdiqlangan manzil uchun bir martalik token (`/auth/register/email/verify/`). `REGISTER_REQUIRES_EMAIL`
+    # yoqilganda majburiy; shunda `email` ham yuboriladi va tokendagi manzilga mos bo'lishi shart.
+    email_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'role', 'phone', 'phone_token', 'is_approved']
+        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'role', 'phone', 'phone_token', 'email', 'email_token', 'is_approved']
         read_only_fields = ['is_approved']
         extra_kwargs = {'username': {'validators': username_validators()}}
+
+    def validate_email(self, value):
+        return (value or '').strip().lower()
 
 
 class ChildCreateSerializer(serializers.ModelSerializer):
@@ -268,13 +292,28 @@ class ChildCreateSerializer(serializers.ModelSerializer):
         return clean_phone(value)
 
 
-class PasswordResetRequestSerializer(serializers.Serializer):
-    phone = serializers.CharField(max_length=32)
+class _PhoneOrEmailSerializer(serializers.Serializer):
+    """Parolni tiklash: `phone` (SMS) YOKI `email` (tasdiqlangan manzilga kod) — ikkalasidan bittasi shart."""
+
+    phone = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    email = serializers.CharField(max_length=254, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        phone, email = (attrs.get('phone') or '').strip(), (attrs.get('email') or '').strip()
+        if not phone and not email:
+            raise serializers.ValidationError({'email': _('Telefon raqam yoki email kiriting.')})
+        return {'email': email} if email else {'phone': phone}
 
 
-class PasswordResetVerifySerializer(serializers.Serializer):
-    phone = serializers.CharField(max_length=32)
+class PasswordResetRequestSerializer(_PhoneOrEmailSerializer):
+    pass
+
+
+class PasswordResetVerifySerializer(_PhoneOrEmailSerializer):
     code = serializers.CharField(max_length=10)
+
+    def validate(self, attrs):
+        return {**super().validate(attrs), 'code': attrs['code']}
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
