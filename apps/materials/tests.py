@@ -141,6 +141,50 @@ class MaterialLessonFolderTests(MaterialTests):
         self.assertEqual(len(self.api(self.parent).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()['lessons']), 2)
         self.assertEqual(self.api(self.outsider).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').status_code, 403)
 
+    def test_course_folder_counts_recordings_and_boards_like_the_lesson_list(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.board.models import BoardSheet
+        from apps.lessons.models import LessonRecording
+
+        stroke = [{'id': 's', 'points': [[1, 1]], 'color': '#000', 'width': 2}]
+        now = timezone.now()
+        # 1-dars: tayyor yozuv + 2 ta doska varag'i (dars 1 deb sanaladi); 2-dars: yozuv hali birlashmoqda, doska bo'sh varaq
+        LessonRecording.objects.create(lesson=self.lesson1, status='completed')
+        BoardSheet.objects.create(lesson=self.lesson1, index=0, strokes=stroke)
+        BoardSheet.objects.create(lesson=self.lesson1, index=1, strokes=stroke)
+        LessonRecording.objects.create(lesson=self.lesson2, status='merging')
+        BoardSheet.objects.create(lesson=self.lesson2, index=0, strokes=[])
+        # bekor qilingan va o'chirilgan darslar sanalmaydi
+        cancelled = Lesson.objects.create(course=self.course, title='x', starts_at=now, status='cancelled')
+        deleted = Lesson.objects.create(course=self.course, title='y', starts_at=now - timedelta(days=3), status='finished', is_deleted=True)
+        for lesson in (cancelled, deleted):
+            LessonRecording.objects.create(lesson=lesson, status='completed')
+            BoardSheet.objects.create(lesson=lesson, index=0, strokes=stroke)
+        # boshqa guruh sonlarga aralashmaydi
+        other = Course.objects.create(teacher=self.teacher, title='Boshqa')
+        LessonRecording.objects.create(lesson=Lesson.objects.create(course=other, title='z', starts_at=now, status='finished'), status='completed')
+
+        def counts(user):
+            rows = {c['title']: c for c in self.api(user).get('/api/v1/materials/courses/').json()}
+            return rows['Algebra']['recording_count'], rows['Algebra']['board_count'], rows['Algebra']['file_count']
+
+        self.assertEqual(counts(self.teacher), (2, 1, 0))   # o'qituvchi: yozuvi bor har dars (birlashayotgani ham)
+        self.assertEqual(counts(self.student), (1, 1, 0))   # o'quvchi: faqat tayyor yozuv
+        self.assertEqual(counts(self.parent), (1, 1, 0))
+        recording_done = LessonRecording.objects.get(lesson=self.lesson2)
+        recording_done.status = 'completed'
+        recording_done.save()
+        self.assertEqual(counts(self.student)[0], 2)
+        # fayl yuklash `file_count` ni oshiradi, video/doska sonlariga ta'sir qilmaydi
+        self.post(lesson=str(self.lesson1.id))
+        self.assertEqual(counts(self.student), (2, 1, 1))
+        # guruh ichidagi dars ro'yxati bilan mos
+        rows = self.api(self.student).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()['lessons']
+        self.assertEqual((sum(r['has_recording'] for r in rows), sum(r['has_board'] for r in rows)), (2, 1))
+
     def test_unfinished_recording_is_hidden_from_students_but_visible_to_teacher(self):
         from apps.lessons.models import LessonRecording
 

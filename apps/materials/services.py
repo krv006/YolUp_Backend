@@ -115,11 +115,29 @@ def file_for(*, user: User, material_id):
 # ── Papka tuzilmasi: Guruh -> darslar -> fayllar (2026-11-10) ──────────────────────────────────────
 
 def course_folders(user: User) -> list:
-    """Guruhlar va ulardagi fayllar soni (Workspace -> Materiallar boshlanish ekrani)."""
-    courses = visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('title')
+    """Guruhlar va ulardagi sonlar (Workspace -> Materiallar boshlanish ekrani):
+    `file_count` (yuklangan fayllar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
+    Video/doska sonlari `lesson_folders` bilan bir xil qoidada: bekor qilingan/o'chirilgan darslar sanalmaydi,
+    o'quvchi/ota-ona faqat tayyor yozuvni sanaydi."""
+    courses = list(visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('title').distinct())
+    ids = [c.id for c in courses]
+    sees_all = user.role in (User.Role.TEACHER, User.Role.ADMIN, User.Role.SUPER_ADMIN)
+    lessons = (
+        Lesson.objects.filter(course_id__in=ids, is_deleted=False).exclude(status=Lesson.Status.CANCELLED)
+        .annotate(has_recording=_recording_exists(OuterRef('pk'), sees_all), has_board=_board_exists(OuterRef('pk')))
+    )
+
+    def per_course(flag: str) -> dict:
+        rows = lessons.filter(**{flag: True}).values('course_id').annotate(n=Count('id')).values_list('course_id', 'n')
+        return dict(rows)
+
+    recordings, boards = per_course('has_recording'), per_course('has_board')
     return [
-        {'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject, 'file_count': c.file_count}
-        for c in courses.distinct()
+        {
+            'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject, 'file_count': c.file_count,
+            'recording_count': recordings.get(c.id, 0), 'board_count': boards.get(c.id, 0),
+        }
+        for c in courses
     ]
 
 
