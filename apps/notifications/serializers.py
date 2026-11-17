@@ -37,7 +37,7 @@ KIND_TITLES = {
     'teacher_approved': 'Hisob tasdiqlandi', 'teacher_pending_approval': 'Tasdiq kutilmoqda',
     'chat_message': 'Yangi xabar',
     'certificate_verified': 'Sertifikat tasdiqlandi', 'certificate_rejected': 'Sertifikat rad etildi',
-    'certificate_pending': 'Sertifikat tekshiruvi', 'recording_ready': 'Dars yozuvi tayyor', 'disk_alert': 'Disk to\'lmoqda',
+    'certificate_pending': 'Sertifikat tekshiruvi', 'recording_ready': 'Dars yozuvi tayyor', 'disk_alert': 'Disk to\'lmoqda', 'cpu_steal_alert': 'CPU sekinlashishi',
     'recording_failed': 'Yozuv birlashtirilmadi',
     'security.new_device': 'Yangi qurilmadan kirish', 'attendance.joined': 'Darsga kirdi', 'attendance.late': 'Darsga kechikdi',
     'attendance.missed': 'Darsga kelmadi', 'link.revoked': "Bog'lanish uzildi", 'consent.changed': "Rozilik o'zgardi",

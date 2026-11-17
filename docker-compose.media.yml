@@ -72,7 +72,7 @@ services:
   rec-cron:
     <<: *backend
     cpu_shares: 256
-    command: python manage.py run_scheduler --startup-delay 30 --only ${REC_JOBS:-recover_recordings,prune_orphan_recordings,prune_recordings,check_disk,watchdog}
+    command: python manage.py run_scheduler --startup-delay 30 --only ${REC_JOBS:-recover_recordings,prune_orphan_recordings,prune_recordings,check_disk,check_cpu_steal,watchdog}
 
   # Yozuvni MP4 (iOS uchun) ga o'tkazadi — og'ir ish: yadro soni va ustuvorligi cheklangan, bitta-bitta ishlaydi.
   transcoder:

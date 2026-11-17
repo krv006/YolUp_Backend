@@ -323,7 +323,7 @@ sudo rsync -a /tmp/recordings/ /var/lib/docker/volumes/edu_platform_recordings/_
 4. **Dars yozuvi:** o'qituvchi darsni yozib tugatadi → yozuv "tayyor" bo'ladi (bo'laklar MEDIA'dagi `rec` ga boradi) → MP4 ga o'tadi: `docker compose -f docker-compose.media.yml logs --tail=30 transcoder` (MEDIA serverda). Yozuvni ko'rish ham ishlashi kerak.
 5. `docker stats --no-stream` — ikkala serverda CPU/RAM me'yorida.
 6. **Zaxira nusxa** (12-bo'lim) ishlaydi va tiklash sinab ko'rilgan.
-7. **Disk ogohlantirishi:** admin panelda server holati; `check_disk` 80% dan oshsa adminlarga bildirishnoma yuboradi.
+7. **Disk ogohlantirishi:** admin panelda server holati; `check_disk` 80% dan oshsa adminlarga bildirishnoma yuboradi. `check_cpu_steal` har daqiqada hypervisor yadrolarni sekinlashtirmayotganini (steal) kuzatadi: yuk ostida doimiy 3% dan oshsa adminlarga bildirishnoma, har soatda log'ga xulosa (`docker compose logs cron | grep cpu_steal`, MEDIA'da `rec-cron`).
 
 ---
 

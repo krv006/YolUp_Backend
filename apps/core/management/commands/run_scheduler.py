@@ -33,6 +33,7 @@ JOBS = [
     ('send_lesson_reminders', 'send_lesson_reminders', (), 60),
     ('sync_homework_ai', 'sync_homework_ai', (), 60),
     ('check_disk', 'check_disk', (), 1800),
+    ('check_cpu_steal', 'check_cpu_steal', (), 60),  # hypervisor yadrolarni sekinlashtirmayotganini kuzatadi (steal >= 3% doimiy bo'lsa adminlarga)
     ('check_failed_recordings', 'check_failed_recordings', (), 1800),
     ('send_payment_reminders', 'send_payment_reminders', (), 3600),  # to'lov muddatidan 3/5/7 kun oldin o'quvchi va ota-onaga
     ('send_absence_alerts', 'send_absence_alerts', (), 60),  # kirmagan o'quvchilar haqida ota-onaga (dars boshlanib 10 daqiqadan keyin)
