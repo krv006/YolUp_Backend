@@ -13,6 +13,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -25,7 +26,7 @@ from apps.lessons.models import Course, Enrollment, Lesson
 
 from apps.quizzes import llm
 
-from . import ai_client, ai_grader, questions as hw_questions, rules
+from . import ai_client, ai_grader, images as hw_images, questions as hw_questions, rules
 from .models import Assignment, AssignmentFocusEvent, Submission, SubmissionFile
 
 logger = logging.getLogger('apps')
@@ -1080,6 +1081,22 @@ def get_assignment(*, user: User, assignment_id) -> dict:
 MAX_SUBMISSION_FILES = 5
 
 
+def _heic_to_jpeg(item):
+    """iPhone rasmi (.heic/.heif) JPEG'ga o'tkaziladi: o'qituvchi brauzerda ocha oladi va AI o'qiy oladi. Boshqa fayl o'zgarmaydi."""
+    name = item.name or ''
+    if Path(name).suffix.lower() not in hw_images.HEIC_EXTENSIONS:
+        return item
+    if item.size > rules.MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise ValidationError({'file': _('Fayl %(size).1f MB; chegara %(max_mb)s MB.') % {
+            'size': item.size / 1024 / 1024, 'max_mb': rules.MAX_FILE_SIZE_MB,
+        }})
+    try:
+        data = hw_images.heic_to_jpeg(item.read())
+    except hw_images.ImageError:
+        raise ValidationError({'file': _("iPhone rasmini (HEIC) o'qib bo'lmadi. JPG yoki PNG yuklang.")})
+    return SimpleUploadedFile(f'{Path(name).stem or "rasm"}.jpg', data, content_type='image/jpeg')
+
+
 def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: str = '', answers=None) -> dict:
     a = _get_assignment(assignment_id)
     if not _is_enrolled(student, a.course):
@@ -1099,6 +1116,9 @@ def submit(*, student: User, assignment_id, upload, extra_uploads=(), comment: s
     extra_uploads = list(extra_uploads or [])
     if upload is None and extra_uploads:
         upload, extra_uploads = extra_uploads[0], extra_uploads[1:]
+    if upload is not None:
+        upload = _heic_to_jpeg(upload)
+    extra_uploads = [_heic_to_jpeg(item) for item in extra_uploads]
     if (1 if upload is not None else 0) + len(extra_uploads) > MAX_SUBMISSION_FILES:
         raise ValidationError({'files': _("Bir topshiriqda ko'pi bilan %(n)s ta fayl.") % {'n': MAX_SUBMISSION_FILES}})
 

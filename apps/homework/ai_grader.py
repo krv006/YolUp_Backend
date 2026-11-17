@@ -11,10 +11,10 @@ ravonlik statistikasi baholanadi. TALAFFUZ va ohang baholanmaydi (matndan ko'rin
 Natija formati tashqi AI-home-checker bilan bir xil (frontend o'zgarmaydi): `overall_score` (0-100), `questions[]`,
 `summary{strengths, weaknesses, topics_to_review, recommendations}`.
 """
-import io
 import logging
 import math
 import re
+from dataclasses import dataclass, field
 from html import unescape
 from pathlib import Path
 
@@ -22,15 +22,16 @@ from django.conf import settings
 
 from apps.quizzes import ielts_writing, llm, material_text
 
-from . import rules
+from . import images as hw_images, rules
 
 logger = logging.getLogger('apps')
 
 ENGINE_ID = 'engine'          # `Submission.ai_external_id` qiymati: bu topshiriqni biz o'zimiz tekshiramiz
 STUDENT_CHARS = 30000         # o'quvchi ishidan AI'ga beriladigan matn
 TASK_CHARS = 8000             # vazifa shartidan beriladigan matn
-MAX_IMAGES = 6                # bitta topshiriqdagi rasmlar soni (skanerlangan PDF sahifalari)
-IMAGE_SIDE = 2000             # rasm uzun tomoni (px): kattasi kichraytiriladi
+MAX_IMAGES = 10               # bitta topshiriqdan AI ga beriladigan o'quvchi rasmlari (doska sahifalari, surat, PDF/Word ichidagilar)
+TASK_IMAGES = 2               # o'qituvchining vazifa shartidagi rasmlari (AI ga o'quvchi ishidan alohida beriladi)
+IMAGE_SIDE = hw_images.IMAGE_SIDE   # rasm uzun tomoni (px): kattasi kichraytiriladi (rasm ko'p bo'lsa — kichikroq)
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 _LANGUAGES = {'uz': 'Uzbek (Latin script)', 'ru': 'Russian', 'en': 'English'}
 IELTS_SUBJECTS = ('english',)  # "writing" ko'nikmali vazifa shu fanlarda IELTS mezonlari bilan baholanadi
@@ -108,65 +109,118 @@ def _task_text(assignment) -> str:
     return '\n'.join(parts)[:TASK_CHARS]
 
 
-def _jpeg(image) -> tuple:
-    from PIL import Image
-
-    if image.mode not in ('RGB', 'L'):
-        image = image.convert('RGB')
-    image.thumbnail((IMAGE_SIDE, IMAGE_SIDE), Image.LANCZOS)
-    buffer = io.BytesIO()
-    image.convert('RGB').save(buffer, 'JPEG', quality=85)
-    return 'image/jpeg', buffer.getvalue()
-
-
 def _image_from_bytes(data: bytes) -> tuple:
-    from PIL import Image, UnidentifiedImageError
-
     try:
-        return _jpeg(Image.open(io.BytesIO(data)))
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        return hw_images.to_jpeg(hw_images.open_image(data))
+    except hw_images.ImageError as exc:
         raise GraderError("Rasm faylini o'qib bo'lmadi. Aniqroq rasm yuklang.") from exc
 
 
-def _pdf_images(data: bytes) -> list:
-    """Skanerlangan PDF: har sahifadagi katta rasmni ajratib oladi (eng ko'pi MAX_IMAGES ta)."""
-    from pypdf import PdfReader
+@dataclass
+class StudentMaterial:
+    """AI ga beriladigan o'quvchi ishi: matn, rasmlar (fayllar tartibida) va sig'may qolgan rasmlar soni."""
 
-    images = []
+    text: str = ''
+    images: list = field(default_factory=list)
+    skipped_images: int = 0
+
+
+def _submission_files(submission) -> list:
+    """[(nom, FieldFile)] — asosiy fayl va qo'shimcha fayllar (yuklangan tartibda)."""
+    files = []
+    if submission.file:
+        files.append((submission.original_name or submission.file.name, submission.file))
+    for extra in submission.extra_files.all():
+        files.append((extra.original_name or extra.file.name, extra.file))
+    return files
+
+
+def _file_material(name: str, data: bytes) -> tuple:
+    """(matn, rasmlar) bitta fayldan. Matnli PDF/Word'da ham ichidagi katta rasmlar olinadi (qo'lyozma surati, chizma)."""
+    ext = Path(name).suffix.lower()
+    if ext in IMAGE_EXTENSIONS:
+        return '', [_image_from_bytes(data)]
+    text, images = '', []
     try:
-        for page in PdfReader(io.BytesIO(data)).pages[:MAX_IMAGES]:
-            for item in list(page.images)[:1]:
-                images.append(_jpeg(item.image))
-    except Exception as exc:  # noqa: BLE001 — g'alati PDF: topilganini beramiz
-        logger.info("PDF sahifa rasmlarini ajratib bo'lmadi: %s", exc)
-    return images
+        text = material_text.extract_text(data, name, max_chars=STUDENT_CHARS)
+    except material_text.MaterialError:
+        pass  # matn yo'q (skanerlangan/rasmli fayl) — pastda rasmlar olinadi
+    if ext == '.pdf':
+        images = hw_images.pdf_images(data)
+    elif ext == '.docx':
+        images = hw_images.docx_images(data)
+    return text, images
 
 
-def student_work(submission) -> tuple:
-    """(matn, rasmlar) — AI'ga beriladigan o'quvchi ishi. O'qib bo'lmasa `GraderError`."""
-    if not submission.file:  # savolli vazifa: faqat ochiq javoblar matni (testlar avtomatik baholangan)
+def student_material(submission) -> StudentMaterial:
+    """O'quvchi ishi: hamma fayllar (asosiy + qo'shimcha) matni va rasmlari. O'qib bo'lmasa `GraderError`."""
+    files = _submission_files(submission)
+    if not files:  # savolli vazifa: faqat ochiq javoblar matni (testlar avtomatik baholangan)
         from . import questions as hw_questions
 
         text = hw_questions.open_answers_text(submission)
         if not text:
             raise GraderError("Baholash uchun ochiq javob yo'q.")
-        return text, []
-    name = submission.original_name or submission.file.name
-    ext = Path(name).suffix.lower()
-    if ext in rules.AUDIO_EXTENSIONS:
-        raise GraderError("Audio fayl AI bilan tekshirilmaydi — o'qituvchi eshitib baholaydi.")
-    data = _read(submission.file)
-    if ext in IMAGE_EXTENSIONS:
-        return '', [_image_from_bytes(data)]
-    try:
-        return material_text.extract_text(data, name, max_chars=STUDENT_CHARS), []
-    except material_text.MaterialError as exc:
-        images = _pdf_images(data) if ext == '.pdf' else []
-        if images:
-            return '', images
+        return StudentMaterial(text=text)
+    named_texts, images = [], []
+    for name, field_file in files:
+        if Path(name).suffix.lower() in rules.AUDIO_EXTENSIONS:
+            raise GraderError("Audio fayl AI bilan tekshirilmaydi — o'qituvchi eshitib baholaydi.")
+        text, found = _file_material(name, _read(field_file))
+        if text:
+            named_texts.append((name, text))
+        images.extend(found)
+    text = material_text.combine_texts(named_texts, STUDENT_CHARS)
+    if not text and not images:
         raise GraderError(
-            "Fayldan matn o'qib bo'lmadi (skanerlangan yoki bo'sh). Aniq rasm yoki matnli fayl yuklash tavsiya etiladi."
-        ) from exc
+            "Fayldan matn o'qib bo'lmadi (skanerlangan yoki bo'sh). Aniq rasm yoki matnli fayl yuklash tavsiya etiladi.")
+    skipped = max(0, len(images) - MAX_IMAGES)
+    images = images[:MAX_IMAGES]
+    if len(images) > hw_images.MANY_IMAGES:  # rasm ko'p: har biri kichikroq — narx oshib ketmasin
+        images = hw_images.shrink(images)
+    return StudentMaterial(text=text, images=images, skipped_images=skipped)
+
+
+def student_work(submission) -> tuple:
+    """(matn, rasmlar) — AI'ga beriladigan o'quvchi ishi. O'qib bo'lmasa `GraderError`."""
+    material = student_material(submission)
+    return material.text, material.images
+
+
+def task_images(assignment) -> list:
+    """O'qituvchining vazifa sharti RASM bo'lsa (yoki matnsiz skanerlangan PDF) — AI savolni ko'rishi uchun (eng ko'pi TASK_IMAGES ta)."""
+    if not assignment.attachment:
+        return []
+    name = assignment.attachment_name or assignment.attachment.name
+    ext = Path(name).suffix.lower()
+    try:
+        data = _read(assignment.attachment)
+        if ext in IMAGE_EXTENSIONS:
+            return [_image_from_bytes(data)]
+        if ext == '.pdf':
+            try:
+                material_text.extract_text(data, name, max_chars=200)
+                return []  # matnli PDF: matn allaqachon `_task_text` da
+            except material_text.MaterialError:
+                return hw_images.pdf_images(data, limit=TASK_IMAGES)[:TASK_IMAGES]
+    except Exception:  # noqa: BLE001 — shart fayli o'qilmasa ham baholayveramiz
+        logger.info("Vazifa sharti rasmini o'qib bo'lmadi: %s", assignment.pk)
+    return []
+
+
+_SKIPPED_NOTE = {
+    'uz': "O'quvchi ishining {n} ta rasmi/sahifasi AI ga sig'madi va baholanmadi — o'qituvchi qolganlarini o'zi ko'rib chiqsin.",
+    'ru': 'Ещё {n} изображений/страниц работы не поместились и ИИ их не оценивал — преподавателю нужно посмотреть остальное.',
+    'en': "{n} more image(s)/page(s) of the student's work did not fit and were NOT assessed by the AI — the teacher should review the rest.",
+}
+
+
+def _note_skipped(result: dict, skipped: int, language: str) -> dict:
+    if skipped and isinstance(result.get('summary'), dict):
+        text = _SKIPPED_NOTE.get(language, _SKIPPED_NOTE['uz']).format(n=skipped)
+        result['summary'].setdefault('recommendations', []).insert(0, text)
+        result['skipped_images'] = skipped
+    return result
 
 
 # ─── Chiqish: AI javobini tozalash ───────────────────────────────────────────
@@ -238,20 +292,30 @@ def grade(submission) -> dict:
     assignment = submission.assignment
     if Path(submission.original_name or submission.file.name).suffix.lower() in rules.AUDIO_EXTENSIONS:
         return _grade_speaking(assignment, submission)
-    text, images = student_work(submission)
+    material = student_material(submission)
+    language_key = submission.feedback_language if submission.feedback_language in _LANGUAGES else 'uz'
     if assignment.skill_key == 'writing' and assignment.course.subject in IELTS_SUBJECTS:
-        return _grade_ielts_writing(assignment, submission, text, images)
+        result = _grade_ielts_writing(assignment, submission, material.text, material.images)
+        return _note_skipped(result, material.skipped_images, language_key)
     subject = assignment.course.get_subject_display()
+    shown_task = task_images(assignment)
     lines = [
         f'SUBJECT: {subject}' + (f' (skill: {assignment.skill_key})' if assignment.skill_key else ''),
         'ASSIGNMENT:\n' + _task_text(assignment),
     ]
+    if shown_task:
+        lines.append(
+            f"ASSIGNMENT IMAGES: the first {len(shown_task)} attached image(s) show the teacher's task. "
+            'They are NOT the student work; do not grade them.')
     if (assignment.extra_instructions or '').strip():
         lines.append('TEACHER INSTRUCTIONS:\n' + assignment.extra_instructions.strip()[:1500])
-    lines.append('STUDENT WORK (text):\n' + (text or '[no text: see the attached image(s) of the work]'))
-    language = _LANGUAGES.get(submission.feedback_language, _LANGUAGES['uz'])
-    data = llm.chat_json(_SYSTEM.replace('{language}', language), '\n\n'.join(lines), images=tuple(images))
-    return clean_result(data)
+    lines.append('STUDENT WORK (text):\n' + (material.text or '[no text: see the attached image(s) of the work]'))
+    if material.images:
+        lines.append(f'The last {len(material.images)} attached image(s) are the student work, in the order of the uploaded files.')
+    language = _LANGUAGES[language_key]
+    data = llm.chat_json(
+        _SYSTEM.replace('{language}', language), '\n\n'.join(lines), images=tuple([*shown_task, *material.images]))
+    return _note_skipped(clean_result(data), material.skipped_images, language_key)
 
 
 # ─── Speaking (audio): transkripsiya + matn baholash ────────────────────────
