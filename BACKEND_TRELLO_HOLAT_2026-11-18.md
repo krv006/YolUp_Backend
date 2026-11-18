@@ -19,7 +19,7 @@ Belgilar: **DEPLOY** = serverda ishlayapti; **KODDA** = yozildi va testlandi, se
 
 | Karta | Nima qilindi | Qanday tekshirildi |
 |---|---|---|
-| **homeworkda image ... AI ga jo'natish** + **Homework check da AI ni ko'rib berish** | 6 ta xato to'g'rilandi: EXIF aylantirish, hamma fayllar, 10 sahifagacha doska/PDF, Word/PDF ichidagi rasmlar, vazifa sharti rasmi, iPhone HEIC. Commit `d467691`. [FRONTEND_JAVOB_AI_RASM_2026-11-18.md](FRONTEND_JAVOB_AI_RASM_2026-11-18.md) | 24 ta yangi test; serverdagi konteynerda HEIC→JPEG haqiqiy ishladi. **Tekshirilmagan:** haqiqiy OpenAI chaqiruvi bilan (testlarda soxta javob) |
+| **homeworkda image ... AI ga jo'natish** + **Homework check da AI ni ko'rib berish** | 6 ta xato to'g'rilandi: EXIF aylantirish, hamma fayllar, 10 sahifagacha doska/PDF, Word/PDF ichidagi rasmlar, vazifa sharti rasmi, iPhone HEIC. Commit `d467691`. [FRONTEND_JAVOB_AI_RASM_2026-11-18.md](FRONTEND_JAVOB_AI_RASM_2026-11-18.md) | 24 ta yangi test; serverdagi konteynerda HEIC→JPEG haqiqiy ishladi. **Haqiqiy OpenAI bilan tekshirib BO'LMADI: productiondagi kalit muddati tugagan** (9-bo'lim) |
 | **change password** (email ga kod) | Ro'yxatdan o'tishda tasdiqlangan email, email bilan kirish, parolni emailga kod bilan tiklash, profilda email qo'shish. Commit `199de62`, `94bd14a`. [FRONTEND_EMAIL_KIRISH_VA_TIKLASH_2026-11-18.md](FRONTEND_EMAIL_KIRISH_VA_TIKLASH_2026-11-18.md) | 47 ta yangi test; **haqiqiy Gmail orqali** serverdan kod ketdi (`sent: true`); netcup "Mail block" o'chirildi, 25/465 porti himoyalandi |
 | **Zaxira: tiklashni sinash** (chat vastanavit kartasining 2-qismi) | Oxirgi kunlik nusxa vaqtinchalik bazaga **tiklandi**: qator sonlari jonli bazaga mos (21 foydalanuvchi, 140→142 xabar yangi yozuvlar sababli) | Serverda haqiqiy `pg_restore`, vaqtinchalik baza o'chirildi |
 
@@ -47,7 +47,7 @@ Belgilar: **DEPLOY** = serverda ishlayapti; **KODDA** = yozildi va testlandi, se
 | **spam berish adminga** | Oqim to'liq. Productionda **1 ta shikoyat "open" holatida**, admin ko'rishi kerak |
 | **homework** (natijani ko'rish), **homeworkcheck** (fayl ixtiyoriy), **Darsga o'qituvchi kirdi** | Backend tayyor (`fccbdb7`, `9278bb5`, `3cafa7c`). Frontend QA kerak |
 
-Bu kartalarning backend qismi uchun butun test to'plami natijasi: **butun backend test to'plami: 2041 ta test, hammasi o'tdi** (shu kechagi hamma o'zgarishlar bilan birga, 533 soniyada)
+Bu kartalarning backend qismi uchun butun test to'plami natijasi: **butun backend test to'plami: 2050 ta test, hammasi o'tdi** (tarjimalar va vaqt-xavfsizlik tuzatishlarigacha bo'lgan hamma o'zgarishlar bilan, 585 soniyada)
 
 ## 4. KUTYAPMAN: sizdan nima kerak
 
@@ -98,3 +98,33 @@ Oldingi hisobotni qayta tekshirdim. Topilgan va to'g'rilangan:
 - **Bola akkauntlari:** `email_exempt` faqat YANGI yaratilganlarda qo'yiladi. Eskilarini avtomatik aniqlab bo'lmadi: productionda bola yaratilganini ko'rsatadigan audit yozuvi yo'q (0 ta), mavjud 5 ta "ro'yxatdan o'tmagan" o'quvchi hisobi test/seed ko'rinishida. `REGISTER_REQUIRES_EMAIL` yoqilishidan oldin admin kerakli hisoblarni panelda belgilashi kerak.
 - **Real foydalanuvchilar emailsiz ro'yxatdan o'tmoqda:** bugun 13:40 (o'qituvchi) va 13:53 (ota-ona) da yangi hisoblar ochilgan, ikkalasida email yo'q. Frontend email qadamini qo'shmaguncha shunday davom etadi.
 - **Frontend QA** (meeting, homework, dars kirishi va h.k.) men tomondan qilinmagan va qila olmayman.
+
+## 9. Ikkinchi qayta tekshiruv: eng muhim topilma va tuzatishlar
+
+### 9.1. Productiondagi OpenAI kaliti MUDDATI TUGAGAN: hamma AI ishlamayapti
+
+Productionda haqiqiy AI baholashni sinab ko'rmoqchi bo'lib, OpenAI'ga so'rov yubordim: **HTTP 401, `expired_secret_key`: "Your API key has expired. Create a new API key to continue."** Kalit mavjud (`sk-proj...`), lekin amal qilmaydi. Bu `/models` ro'yxati, model va chat so'rovi uchun ham bir xil.
+
+- **Nima ishlamaydi:** uy vazifasini AI bilan baholash, AI test yaratish, imtihon Writing AI, Speaking ovozni matnga o'girish, matnni ovozga aylantirish (hammasi shu kalitdan).
+- **Qachondan:** oxirgi muvaffaqiyatli AI natijalari: uy vazifasi 2026-10-17, AI test yaratish 2026-10-21. Keyin xatolar: 10, 13 va 17-noyabr. Aniq sana noma'lum (shu oraliqda).
+- **Foydalanuvchiga ta'siri:** tizim yiqilmaydi. Topshirish qabul qilinadi va "AI baholay olmadi — o'zingiz baholang" belgisi bilan o'qituvchiga tushadi. Ya'ni o'qituvchi hamma narsani qo'lda baholayapti.
+- **Men avval xato qilgan joyim:** 5 ta "AI baholay olmadi" xatosini "QA sinov vazifalari" deb izohlagan edim. Bu **noto'g'ri** edi, sabab kalit.
+- **Natijada:** men yozgan AI rasm tuzatishlari (EXIF, HEIC, ko'p sahifa, Word/PDF ichidagi rasmlar) **haqiqiy OpenAI bilan hech qachon tekshirilmagan**, faqat soxta javob bilan (testlar o'tdi). Yangi kalit kelganda sinab ko'raman.
+- **Sizdan kerak:** platform.openai.com → API keys → yangi kalit yarating (iloji bo'lsa muddatsiz) va oylik byudjet cheklovi qo'ying. Kalitni chatga yozishingiz mumkin, men serverdagi `.env` ga (`OPENAI_API_KEY`) yozaman va darhol haqiqiy sinovni o'tkazaman: yonbosh telefon surati va HEIC bilan.
+
+### 9.2. Zaxira nusxa bilan birga `.env` nusxasi MEDIA serverga ko'chib ketgan edi: o'chirildi
+
+SMTP sozlamasini yozganimda serverdagi `.env` ning zaxira nusxasini `/var/backups/edu/` ga qo'ygan edim. Tungi `rsync` (va bugun 14:01 da men qo'lda ishga tushirgan zaxira) uni MEDIA serverning `/var/backups/edu-app/` ga ham ko'chirgan. Ikkala nusxani ham o'chirdim (ikkala serverda `env` fayli 0 ta). U yerda **faqat bir necha daqiqa** turdi va ikkala server ham sizniki; yangi sir (Gmail paroli) o'sha nusxada yo'q edi (u eski `.env` edi). Baribir tuzatildi.
+
+### 9.3. Zaxira skripti haqiqiy ishga tushirildi
+
+`backup.sh` ni serverda to'liq ishga tushirdim (MEDIA nusxasi bilan): kunlik nusxa yaratildi va MEDIA'ga ko'chirildi, haftalik nusxa (`db_weekly_2026-11-15.dump`) ikkala serverda bor. Oylik nusxa 1-dekabrda avtomatik yaratiladi (bu hali kuzatilmagan).
+
+### 9.4. Email bor-yo'qligi javob vaqtidan bilinib qolishi mumkin edi: tuzatildi (deploy kutadi)
+
+Men "email bazada bor-yo'qligi oshkor bo'lmaydi" degan edim, lekin faqat javob **matni** bo'yicha to'g'ri edi. Vaqt bo'yicha farq bor edi: (1) parolni tiklashda mavjud email uchun SMTP kutilardi (~1 soniya), noma'lum uchun yo'q; (2) email bilan kirishda mavjud email uchun 2 ta parol hisoblash, noma'lum uchun 1 ta. Ikkalasi tenglashtirildi: xat fonda yuboriladi, noma'lum emailda soxta parol hisoblash bajariladi. 4 ta yangi test (parol hisoblash soni barcha holatda 2). **Serverda hali yo'q.**
+
+### 9.5. Boshqa aniqlangan faktlar
+- Productionda **hech bir kursda `payment_day` belgilanmagan** (0 ta) va to'lov eslatmalari hech qachon yuborilmagan (0 ta yozuv). Ya'ni to'lov eslatmasi funksiyasi hozir ishlatilmayapti, mening tuzatishim productionda sinab bo'lmaydi, faqat testda.
+- Bugun ikki yangi foydalanuvchi emailsiz ro'yxatdan o'tgan (13:40 o'qituvchi, 13:53 ota-ona).
+- Eski hujjatlardagi (`FRONTEND_EMAIL_...`, `FRONTEND_ULANMAGAN_...`, `BACKEND_TRELLO_VAZIFALAR_...`) "email ulanmagan" degan gaplar eskirgan edi, tuzatildi.

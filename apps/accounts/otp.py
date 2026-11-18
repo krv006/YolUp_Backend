@@ -13,7 +13,7 @@ from django.core.cache import cache
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import Throttled, ValidationError
 
-from apps.core import mailer, sms
+from apps.core import background, mailer, sms
 
 CODE_TTL = 120
 RETRY_AFTER = 45
@@ -62,14 +62,22 @@ def _email_key(email: str) -> str:
     return (email or '').strip().lower()
 
 
-def issue_email(*, scope: str, email: str, payload: dict | None = None, silent: bool = False) -> dict:
+def issue_email(*, scope: str, email: str, payload: dict | None = None, silent: bool = False, in_background: bool = False) -> dict:
     """`issue` bilan bir xil qoidalar, faqat kod emailga yuboriladi. `silent=True` — xat YUBORILMAYDI, lekin sovitish/kunlik cheklov
-    va javob xuddi haqiqiydek (akkaunt bor-yo'qligini bildirmaslik uchun: parolni tiklashda noma'lum email)."""
+    va javob xuddi haqiqiydek (akkaunt bor-yo'qligini bildirmaslik uchun: parolni tiklashda noma'lum email). `in_background=True` — xat
+    fonda yuboriladi: haqiqiy email (SMTP ~1 soniya) va noma'lum email (xat yo'q) javob vaqti bilan farqlanmasin; yuborilmasa xato
+    mijozga chiqmaydi, faqat log'ga yoziladi."""
     address = _email_key(email)
-    return _issue(
-        scope=scope, norm=address, payload=payload,
-        deliver=(lambda code: None) if silent else (lambda code: mailer.send_email(address, *mailer.code_text(code))),
-    )
+    if silent:
+        deliver = lambda code: None  # noqa: E731
+    elif in_background:
+
+        def deliver(code):
+            background.run(mailer.send_email, address, *mailer.code_text(code))
+    else:
+        def deliver(code):
+            mailer.send_email(address, *mailer.code_text(code))
+    return _issue(scope=scope, norm=address, payload=payload, deliver=deliver)
 
 
 def _check(*, scope: str, norm: str, code: str) -> dict:

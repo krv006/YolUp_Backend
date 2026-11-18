@@ -1,5 +1,7 @@
 # Trello "Yolup" doskasi: ochiq vazifalar, kod va serverga solishtirilgan (2026-11-18)
 
+> **Yangilanish (kechqurun):** bu hujjat ertalabki holatni ko'rsatadi. Keyin email ulandi va ishlayapti, parolni emailga kod bilan tiklash qilindi, AI rasm xatolari tuzatildi. Hozirgi holat uchun [BACKEND_TRELLO_HOLAT_2026-11-18.md](BACKEND_TRELLO_HOLAT_2026-11-18.md) ga qarang. Shu hujjatdagi "AI xatolari QA sinovdan" degan izoh **noto'g'ri** edi: sabab productiondagi OpenAI kalitining muddati tugaganligi (HOLAT hujjatida).
+
 Doska: https://trello.com/b/AzQSD2X3/yolup. O'qildi: **19 ta ochiq karta** (thinking 4, Todo 7, Processing 4, Testing 3, integration 1). **Done** ustunidagi 45 karta
 nazorat uchun ko'rildi, ularga tegilmadi. Kartalarda izoh (comment) yo'q, faqat sarlavha, tavsif va 4 ta skrinshot bor.
 
@@ -63,7 +65,7 @@ Kod: [apps/homework/ai_grader.py](apps/homework/ai_grader.py:145) (`student_work
 
 **Savol:** doskada 20 sahifa bo'lsa hammasini AI ga berishni xohlaysizmi (qimmat) yoki cheklov (masalan 10) qolsinmi?
 
-**Boshqa kuzatuv (production):** 15 ta topshirishdan 5 tasida `AI baholay olmadi` xatosi bor. Ulardan 4 tasi "QA Test Vazifa" (savolli sinov vazifasi), 1 tasi `kontrakt_kamron.pdf` (2 urinishdan keyin). Oxirgisining aniq sababini log'dan topa olmadim (taxmin: PDF matni vazifaga aloqasiz bo'lgani).
+**Boshqa kuzatuv (production):** 15 ta topshirishdan 5 tasida `AI baholay olmadi` xatosi bor. Men ularni avval "QA sinov vazifasi" deb izohlagandim, bu NOTO'G'RI: asl sabab OpenAI kalitining muddati tugaganligi (qarang HOLAT hujjati). 4 tasi "QA Test Vazifa" nomli, 1 tasi `kontrakt_kamron.pdf` (2 urinishdan keyin). Oxirgisining aniq sababini log'dan topa olmadim (taxmin: PDF matni vazifaga aloqasiz bo'lgani).
 
 ---
 

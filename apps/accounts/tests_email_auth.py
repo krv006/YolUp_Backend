@@ -400,3 +400,45 @@ class TranslationTests(EmailCase):
     def test_uzbek_stays_the_default(self):
         resp = self.post('register/email/request', {'email': 'nope'})
         self.assertIn("To'g'ri email manzil kiriting", resp.json()['error']['message'])
+
+
+class SideChannelTests(EmailCase):
+    """Email bor-yo'qligi javob vaqtidan ham bilinmasin: parol hisoblash soni va xat yuborish usuli bir xil."""
+
+    def hash_operations(self, identifier, password):
+        from unittest import mock
+
+        with mock.patch.object(User, 'set_password', autospec=True, side_effect=User.set_password) as dummy, \
+                mock.patch.object(User, 'check_password', autospec=True, side_effect=User.check_password) as check:
+            self.post('login', {'username': identifier, 'password': password})
+        return dummy.call_count + check.call_count
+
+    def test_login_does_the_same_number_of_hash_operations_for_known_and_unknown_emails(self):
+        make('ali01', email=EMAIL, email_verified=True)
+        known_wrong = self.hash_operations(EMAIL, 'WrongPass999!')
+        known_right = self.hash_operations(EMAIL, PASSWORD)
+        unknown = self.hash_operations('nobody@example.com', PASSWORD)
+        unverified = self.hash_operations(EMAIL.replace('ali', 'x'), PASSWORD)
+        self.assertEqual({known_wrong, known_right, unknown, unverified}, {2})
+
+    def test_a_plain_unknown_login_is_unchanged(self):
+        self.assertEqual(self.hash_operations('nobody', PASSWORD), 1)
+
+    def test_the_reset_mail_goes_through_the_background_only_for_known_emails(self):
+        from unittest import mock
+
+        make('ali01', email=EMAIL, email_verified=True)
+        with mock.patch('apps.accounts.otp.background.run') as run:
+            self.post('password/reset/request', {'email': EMAIL})
+            self.assertEqual(run.call_count, 1)
+            cache.clear()
+            self.post('password/reset/request', {'email': 'nobody@example.com'})
+            self.assertEqual(run.call_count, 1)  # noma'lum email: xat ham, fon vazifasi ham yo'q
+
+    def test_a_failing_mail_does_not_change_the_answer(self):
+        from unittest import mock
+
+        make('ali01', email=EMAIL, email_verified=True)
+        with mock.patch('apps.core.mailer.send_email', side_effect=RuntimeError('smtp down')):
+            resp = self.post('password/reset/request', {'email': EMAIL})
+        self.assertEqual((resp.status_code, resp.json()['sent']), (200, True))

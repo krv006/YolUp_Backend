@@ -275,7 +275,7 @@ def password_reset_request(*, phone: str = '', email: str = '', request=None) ->
         if not mailer.configured():
             raise mailer.EmailNotConfigured()  # akkaunt bor-yo'qligidan qat'i nazar bir xil javob
         known = bool(_accounts_by_email(email))
-        result = otp.issue_email(scope='pwreset-email', email=email, silent=not known)
+        result = otp.issue_email(scope='pwreset-email', email=email, silent=not known, in_background=True)
         if known:
             audit.record(action='auth.password_reset_request', actor=None, meta={'email': email[:3] + '***'}, request=request)
         return result
@@ -611,7 +611,10 @@ def resolve_login(identifier, password) -> str:
     identifier = (identifier or '').strip()
     if '@' not in identifier or User.objects.filter(username=identifier).exists():
         return identifier
-    matches = [u for u in _accounts_by_email(identifier) if u.check_password(password or '')]
+    candidates = _accounts_by_email(identifier)
+    if not candidates:
+        User().set_password(password or '')  # noma'lum email ham xuddi shuncha vaqt ketsin (bor-yo'qligi javob vaqtidan bilinmasin)
+    matches = [u for u in candidates if u.check_password(password or '')]
     if len(matches) == 1:
         return matches[0].username
     if len(matches) > 1:

@@ -1,8 +1,8 @@
 # Email: ro'yxatdan o'tish, email bilan kirish, parolni emailga kod bilan tiklash (2026-11-18)
 
 Trello: "change password qism togirlash kerak" (email ga code yuboradigan qilib). Login va parol QOLADI; email qo'shiladi.
-Hamma yo'llar `/api/v1/auth/...`. **Production holati:** email xizmati (SMTP) hali ulanmagan, shuning uchun email yuboradigan endpointlar hozir `503` beradi.
-Ulangach men yozaman. Majburiylik bayrog'i (`email_required`) ham hozir **o'chiq**; avval frontend tayyor bo'ladi, keyin yoqamiz.
+Hamma yo'llar `/api/v1/auth/...`. **Production holati (2026-11-18, tekshirilgan):** email xizmati **ulangan va ishlayapti** (Gmail SMTP). Ro'yxatdan o'tish, email bilan kirish va parolni tiklash productionda haqiqiy xat bilan boshidan oxirigacha sinab ko'rildi. SMS xizmati hali ulanmagan: telefon orqali kod yuboradigan endpointlar `503` beradi.
+Majburiylik bayrog'i (`email_required`) ham hozir **o'chiq**; avval frontend tayyor bo'ladi, keyin yoqamiz.
 
 Kod hamma joyda bir xil: 5 xonali, **120 soniya** amal qiladi, qayta yuborish **45 soniyadan** keyin, kuniga 10 marta, 5 ta xato urinishdan keyin kod bekor bo'ladi.
 Yuborish javobi: `200 {"sent": true, "expires_in": 120, "retry_after": 45}`. Xatolar: `429` (tez-tez), `400` ("Kod noto'g'ri yoki muddati o'tgan"), `503` (email ulanmagan), `502` (yuborib bo'lmadi).
@@ -41,6 +41,7 @@ Oqim o'sha 3 qadam, endi `phone` o'rniga `email` ham mumkin (ikkalasidan bittasi
 3. `POST /auth/password/reset/confirm/` `{ "reset_token": "...", "password": "..." }` → `{ "ok": true }`.
 
 Farqlar:
+- **Xat fonda yuboriladi:** parolni tiklash so'rovi SMTP javobini kutmaydi (shuning uchun mavjud va mavjud bo'lmagan email bir xil tez javob oladi). Xat yuborilmasa ham javob `200`, xato faqat serverda log'ga yoziladi. Kod kelmasa foydalanuvchiga "spam papkasini tekshiring, 2 daqiqadan keyin qayta so'rang" deb ayting.
 - **Email topilmasa ham 1-qadam `200 {"sent": true, ...}` qaytaradi** (xavfsizlik: manzil bazada bor-yo'qligi oshkor bo'lmasin). Shuning uchun matn: "Agar bu email ro'yxatdan o'tgan bo'lsa, kod yuborildi."
   Telefon bilan tiklashda esa oldingidek raqam topilmasa `404`.
 - Faqat **tasdiqlangan** email bo'yicha tiklanadi.
