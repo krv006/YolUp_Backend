@@ -161,3 +161,13 @@ Deploydan oldin: jonli dars 0 ta, "converting" holatidagi yozuv yo'q; migratsiya
 Sinov foydalanuvchisi bekor qilinadigan tranzaksiyada bo'ldi: bazada qolmadi.
 
 **Hali ham tasdiqlanmagan (kalit yoki real hodisa kerak):** haqiqiy OpenAI bilan AI baholash (kalit muddati tugagan); MEDIA'dan haqiqiy yozuv tayyor bo'lganda push sarlavhasi (kod yangi, real hodisa kutilmoqda); oylik zaxira (1-dekabr); serverni qayta ishga tushirganda 25/465 himoyasi.
+
+## 11. Parol o'zgartirish (frontend xabari bo'yicha), APP `08c2296`
+
+Frontend `BACKEND_PAROL_OZGARTIRISH.md` yubordi; ikkala kamchilik ham haqiqiy ekani tasdiqlandi va tuzatildi (batafsil: [FRONTEND_JAVOB_PAROL_OZGARTIRISH_2026-11-18.md](FRONTEND_JAVOB_PAROL_OZGARTIRISH_2026-11-18.md)).
+
+- Avtomatik ochilgan rol akkauntiga endi manba akkaunt paroli beriladi (oldin tasodifiy, hech kim bilmasdi). Productionda shunday 4 akkaunt bor edi (teacher1_student, krv006_student, teacher1_parent, mukhammaddiyor_parent): `sync_provisioned_passwords` avval sinov rejimida ko'rsatildi (4 ta, 0 o'tkazilgan), keyin `--apply` bilan yozildi; qayta ishga tushirish hech narsani o'zgartirmadi; 4 tasi ham manba xeshiga ega, audit'da 4 yozuv.
+- `uz` da parol tekshiruvi xabarlari inglizcha edi: o'zbekcha tarjima qo'shildi (`locale/uz`).
+- Productionda haqiqiy 8 ta tekshiruv (bekor qilinadigan tranzaksiyada) o'tdi: yangi rol akkaunti ochilishi, xesh tengligi, manba paroli bilan kirish, parolni o'zgartirish, noto'g'ri joriy parol rad etilishi, uz va ru xabarlari.
+- Butun backend test to'plami: 2075 ta, hammasi o'tdi. MEDIA'ga tegilmadi (bu o'zgarish MEDIA'da ishlatilmaydi, u `17124e3` da qoldi).
+- Parol qoidalari (raqam/katta harf) backendda ataylab qattiqlashtirilmadi (mobil ilova va mavjud foydalanuvchilar).
