@@ -143,3 +143,21 @@ Xato kirishlar (10 ta, keyin 429) `(IP, kiritilgan matn)` bo'yicha sanalardi. Em
 ### 9.8. MEDIA serverda eski kod ishlayapti: bildirishnoma tuzatishi to'liq emas
 
 MEDIA server hali `c76a991` da (APP'da `a3fd185` va undan keyingilar). "Dars yozuvi tayyor" bildirishnomasi **MEDIA'dagi `rec`/transcoder** jarayonidan yuboriladi, shuning uchun u hali eski kod bilan ketadi: push sarlavhasi "Fokus", matnda HTML, push so'rov ichida sinxron. Bildirishnoma tuzatishi MEDIA ham yangilangandan keyingina to'liq bo'ladi. (Yangilash: faqat `rec`, `rec-cron`, `transcoder` qayta quriladi; LiveKit va Caddy tegilmaydi. Jonli dars va "converting" yozuv bo'lmaganda.)
+
+## 10. Deploy holati (2026-11-18, kechqurun): ikkala server `17124e3` da
+
+| Server | Versiya | Nima qayta qurildi | Tekshirildi |
+|---|---|---|---|
+| APP (152.53.33.65) | `17124e3` | web, ws, cron | web `healthy`; migratsiya yo'q (0 ta yangi); haqiqiy productionda 11 ta tekshiruv, hammasi o'tdi (pastda) |
+| MEDIA (152.53.0.228) | `17124e3` | `rec`, `rec-cron`, `transcoder` (LiveKit va Caddy tegilmadi, 7 kun ishlayapti) | 3 konteyner ham ishlayapti, qayta ishga tushish 0, OOM yo'q; `rec` yangi kodni ishlatyapti (`recording_ready` sarlavhasi "Dars yozuvi tayyor"); APP watchdog'i MEDIA'ni `OK` ko'ryapti; loglarda xato 0 ta |
+
+Deploydan oldin: jonli dars 0 ta, "converting" holatidagi yozuv yo'q; migratsiya farqi yo'q, `manage.py check` toza, tarjima fayllari to'g'ri, 2060 ta test o'tgan.
+
+**APP'da haqiqiy productionda o'tgan 11 ta tekshiruv:**
+1. rasm token byudjeti 80 000; 2. `BACKGROUND_ASYNC` yoqilgan; 3. email ulangan; 4. token formulasi OpenAI misoli bilan mos (1536x1536 = 25 501);
+5–7. xato xabarlari ru/en/uz tilida to'g'ri chiqadi (haqiqiy so'rov orqali); 8. push sarlavhalarida "Fokus" yo'q;
+9–10. parolni tiklash: mavjud va mavjud bo'lmagan email bir xil javob oladi; javob vaqti 62 ms va 11 ms (oldin mavjud email uchun ~1 soniya, endi xat kutilmaydi; ~50 ms farq qoldi: audit yozuvi va fon vazifasini yuborish);
+11. login va email bilan xato urinishlar bitta hisoblagichda (11-urinish `429`).
+Sinov foydalanuvchisi bekor qilinadigan tranzaksiyada bo'ldi: bazada qolmadi.
+
+**Hali ham tasdiqlanmagan (kalit yoki real hodisa kerak):** haqiqiy OpenAI bilan AI baholash (kalit muddati tugagan); MEDIA'dan haqiqiy yozuv tayyor bo'lganda push sarlavhasi (kod yangi, real hodisa kutilmoqda); oylik zaxira (1-dekabr); serverni qayta ishga tushirganda 25/465 himoyasi.
