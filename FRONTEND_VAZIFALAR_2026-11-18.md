@@ -1,5 +1,7 @@
 # Frontend uchun vazifalar: backend tayyor, frontend qiladigan ishlar (2026-11-18)
 
+> **ALMASHTIRILDI:** bu ertalabki holat edi (P1 email, P2 focus, P5 kanal/admin panel siz tomondan bugun bajarilgan). Hozirgi aniq ro'yxat: [FRONTEND_YANGILANISHLAR_2026-11-18_YAKUNIY.md](FRONTEND_YANGILANISHLAR_2026-11-18_YAKUNIY.md).
+
 Bugun backendda qilingan hamma ishning frontendga ta'siri bir joyda. Har bandda batafsil yo'riqnoma havolasi bor. Tartib: eng muhimidan.
 Backend `main` da `a3fd185`, APP serverga chiqarilgan. Frontend `main` (`ed7bf08`) bilan solishtirildi.
 
