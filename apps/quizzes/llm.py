@@ -10,6 +10,8 @@ import json
 import logging
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import requests
 from django.conf import settings
@@ -43,6 +45,32 @@ def _error_message(response: requests.Response) -> tuple:
     return str(body.get('code') or body.get('type') or ''), str(body.get('message') or '')[:300]
 
 
+_usage_box: ContextVar = ContextVar('llm_usage_box', default=None)
+
+
+@contextmanager
+def track_usage():
+    """`with llm.track_usage() as usage:` — ichidagi hamma `chat_json` chaqiruvlarining token sarfini yig'adi
+    (`calls`, `prompt_tokens`, `completion_tokens`, `total_tokens`); qayta urinishlar ham hisobga olinadi (ular ham pullik)."""
+    box = {'calls': 0, 'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+    token = _usage_box.set(box)
+    try:
+        yield box
+    finally:
+        _usage_box.reset(token)
+
+
+def _record_usage(body: dict) -> None:
+    box = _usage_box.get()
+    if box is None:
+        return
+    usage = body.get('usage') or {}
+    box['calls'] += 1
+    for key in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
+        value = usage.get(key)
+        box[key] += value if isinstance(value, int) else 0
+
+
 def _post(messages: list, max_tokens: int, model: str = '') -> dict:
     url = settings.OPENAI_BASE_URL.rstrip('/') + '/chat/completions'
     payload = {
@@ -58,7 +86,9 @@ def _post(messages: list, max_tokens: int, model: str = '') -> dict:
         raise LLMError(f"AI xizmatiga ulanib bo'lmadi: {exc}") from exc
     status = response.status_code
     if status == 200:
-        return response.json()
+        body = response.json()
+        _record_usage(body)
+        return body
     code, message = _error_message(response)
     if status in (401, 403):
         raise LLMError("AI kaliti noto'g'ri yoki ruxsat yo'q (OPENAI_API_KEY).", permanent=True)

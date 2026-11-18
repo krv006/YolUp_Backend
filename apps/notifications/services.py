@@ -11,7 +11,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
-from apps.core import audit
+from apps.core import audit, background
 
 from . import realtime
 from .models import Notification, NotificationRecipient, PushDevice, PushSubscription
@@ -72,6 +72,17 @@ def announce_title(notification: Notification) -> str:
     return f'{teacher} · {group}' if teacher and group else teacher
 
 
+PUSH_DEFAULT_TITLE = 'YolUp'
+
+
+def push_title(notification: Notification) -> str:
+    """Push sarlavhasi: o'qituvchi xabarida "Ism · Guruh", tizim xabarida tur sarlavhasi (ro'yxatdagi bilan bir xil, masalan "Dars yozuvi tayyor"),
+    boshqasida "YolUp". Oldin hamma tizim xabari "Fokus" (eski nom) bilan chiqardi."""
+    from .serializers import title_of
+
+    return announce_title(notification) or title_of(notification.kind, notification.link_type) or PUSH_DEFAULT_TITLE
+
+
 @transaction.atomic
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
@@ -119,8 +130,9 @@ def send_notification(
     ])
 
     transaction.on_commit(lambda: realtime.broadcast_notification(notification, recipients))
-    transaction.on_commit(lambda: send_web_push(notification, recipients))
-    transaction.on_commit(lambda: send_mobile_push(notification, recipients))
+    # Push tashqi xizmatlarga (brauzer/FCM) har qurilmaga alohida so'rov yuboradi: so'rov ichida emas, fonda (sekin qurilma xabar yuborishni to'xtatmasin)
+    transaction.on_commit(lambda: background.run(send_web_push, notification, recipients))
+    transaction.on_commit(lambda: background.run(send_mobile_push, notification, recipients))
     transaction.on_commit(lambda: send_email_notification(notification, recipients))
     audit.record(
         action='notification.send', actor=sender, target=notification,
@@ -271,7 +283,7 @@ def remove_push_subscription(*, user: User, endpoint: str) -> bool:
     return bool(deleted)
 
 
-def send_web_push(notification: Notification, recipients: list[User], title: str = 'Fokus') -> None:
+def send_web_push(notification: Notification, recipients: list[User], title: str = '') -> None:
     """Har qabul qiluvchining barcha obuna qilingan qurilmalariga push
     yuboradi — ilova/tab yopiq bo'lsa ham operatsion tizim darajasida
     bildirishnoma chiqishi uchun. Best-effort: bitta obuna muvaffaqiyatsiz
@@ -279,14 +291,14 @@ def send_web_push(notification: Notification, recipients: list[User], title: str
     ta'sir qilmaydi; eskirgan obuna avtomatik o'chiriladi."""
     from pywebpush import WebPushException, webpush
 
-    title = announce_title(notification) or title
+    title = title or push_title(notification)
     user_ids = [u.id for u in recipients]
     subs = PushSubscription.objects.filter(user_id__in=user_ids)
     if not subs:
         return
     payload = json.dumps({
         'title': title,
-        'body': notification.description[:200],
+        'body': strip_html(notification.description)[:200],  # OS bannerida HTML teglar ko'rinmasin (mobil push bilan bir xil)
         'kind': notification.kind,
         'link_type': notification.link_type,
         'link_id': notification.link_id,
@@ -371,10 +383,10 @@ def _firebase_messaging():
         return None
 
 
-def send_mobile_push(notification: Notification, recipients: list[User], title: str = 'Fokus') -> None:
+def send_mobile_push(notification: Notification, recipients: list[User], title: str = '') -> None:
     """`send_web_push` bilan bir xil naqsh (best-effort, eskirgan qurilma
     o'chiriladi), faqat FCM orqali mobil qurilmalarga."""
-    title = announce_title(notification) or title
+    title = title or push_title(notification)
     user_ids = [u.id for u in recipients]
     devices = list(PushDevice.objects.filter(user_id__in=user_ids))
     if not devices:

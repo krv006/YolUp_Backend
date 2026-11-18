@@ -1326,8 +1326,8 @@ def _apply_ai_result(s: Submission, payload: dict) -> None:
         value = None
     grade = rules.grade_label(value) if value is not None else str(result.get('grade') or '')[:40]
     s.ai_result, s.ai_overall_score, s.ai_grade = result, value, grade
-    # Yakuniy maydonlar dastlab AI'nikidan nusxa — o'qituvchi tasdiqlaganda ustidan yozadi
-    s.result, s.overall_score, s.grade = result, value, grade
+    # Yakuniy maydonlar dastlab AI'nikidan nusxa — o'qituvchi tasdiqlaganda ustidan yozadi (AI sarfi `usage` — ichki ma'lumot, natijaga kirmaydi)
+    s.result, s.overall_score, s.grade = {k: v for k, v in result.items() if k != 'usage'}, value, grade
     s.error = ''
 
 

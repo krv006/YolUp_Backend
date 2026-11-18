@@ -287,8 +287,16 @@ def clean_result(data: dict) -> dict:
 
 
 def grade(submission) -> dict:
-    """Topshiriqni baholaydi va tayyor `result` (frontend formatida) qaytaradi.
-    Xatolar: `GraderError` (fayl AI uchun yaroqsiz) yoki `llm.LLMError` (AI xizmati)."""
+    """Topshiriqni baholaydi va tayyor `result` (frontend formatida) qaytaradi; `result['usage']` — AI sarfi (tokenlar), narxni
+    o'lchash uchun (`manage.py homework_ai_usage`). Xatolar: `GraderError` (fayl AI uchun yaroqsiz) yoki `llm.LLMError` (AI xizmati)."""
+    with llm.track_usage() as usage:
+        result = _grade(submission)
+    if usage['calls']:
+        result['usage'] = {**usage, 'model': settings.OPENAI_MODEL}
+    return result
+
+
+def _grade(submission) -> dict:
     assignment = submission.assignment
     if Path(submission.original_name or submission.file.name).suffix.lower() in rules.AUDIO_EXTENSIONS:
         return _grade_speaking(assignment, submission)

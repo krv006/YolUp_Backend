@@ -91,7 +91,9 @@ class PaymentReminderTests(APITestCase):
     def test_management_command_runs(self):
         from django.core.management import call_command
 
-        with mock.patch('apps.lessons.payments.local_today', return_value=date(2026, 11, 3)):
+        # kunduzgi soat (eslatma tunda yuborilmaydi) — testning real soatga bog'liq bo'lib qolmasligi uchun vaqt qotiriladi
+        with mock.patch('apps.lessons.payments.local_today', return_value=date(2026, 11, 3)), \
+                mock.patch('django.utils.timezone.now', return_value=at(date(2026, 11, 3))):
             call_command('send_payment_reminders', verbosity=0)
         self.assertEqual(self.recipients(), ['pr_p', 'pr_s0'])
 
@@ -135,3 +137,54 @@ class UnpaidCountTests(PaymentReminderTests):
             self.assertEqual(status, 'unpaid')
             if period < current:
                 self.assertTrue(overdue, period)
+
+
+class PaymentReminderTimingTests(PaymentReminderTests):
+    # PaymentReminderTests'ning sozlamasi (kurs, o'quvchilar, ota-ona) kerak; meros qolgan testlar ham ishlayveradi
+    """Eslatma faqat kunduzi (09:00–20:00, Asia/Tashkent) ketadi; xabar ketmasa belgi qolmaydi va keyingi soatda qayta uriniladi."""
+
+    def test_nothing_is_sent_at_night_and_nothing_is_lost(self):
+        night = datetime(2026, 11, 2, 20, 0, tzinfo=dt_timezone.utc)  # Toshkentda 3-noyabr 01:00
+        self.assertEqual(payments.send_reminders(now=night), {'students': 0, 'parents': 0})
+        self.assertFalse(PaymentReminderLog.objects.exists())
+        self.assertEqual(NotificationRecipient.objects.filter(notification__kind='payment_reminder').count(), 0)
+        # ertasi kuni kunduzi o'sha eslatma yuboriladi
+        self.assertEqual(payments.send_reminders(now=at(date(2026, 11, 3))), {'students': 1, 'parents': 1})
+
+    def test_the_window_edges(self):
+        before = datetime(2026, 11, 3, 3, 59, tzinfo=dt_timezone.utc)   # 08:59 Toshkent
+        start = datetime(2026, 11, 3, 4, 0, tzinfo=dt_timezone.utc)     # 09:00
+        last = datetime(2026, 11, 3, 14, 59, tzinfo=dt_timezone.utc)    # 19:59
+        end = datetime(2026, 11, 3, 15, 0, tzinfo=dt_timezone.utc)      # 20:00
+        self.assertEqual(payments.send_reminders(now=before)['students'], 0)
+        self.assertEqual(payments.send_reminders(now=end)['students'], 0)
+        self.assertEqual(payments.send_reminders(now=last)['students'], 1)
+        PaymentReminderLog.objects.all().delete()
+        self.assertEqual(payments.send_reminders(now=start)['students'], 1)
+
+    def test_a_failed_student_notification_is_retried_on_the_next_run(self):
+        with mock.patch('apps.notifications.services.send_notification', side_effect=RuntimeError('boom')):
+            out = payments.send_reminders(now=at(date(2026, 11, 3)))
+        self.assertEqual(out, {'students': 0, 'parents': 0})
+        self.assertFalse(PaymentReminderLog.objects.exists())  # "yuborildi" deb belgilanmadi
+        self.assertEqual(payments.send_reminders(now=at(date(2026, 11, 3))), {'students': 1, 'parents': 1})
+        self.assertEqual(PaymentReminderLog.objects.count(), 1)
+
+    def test_a_failed_parent_notification_does_not_resend_the_student(self):
+        from apps.notifications import services as notification_services
+
+        real = notification_services.send_notification
+        calls = []
+
+        def flaky(**kwargs):
+            calls.append(kwargs['target_type'])
+            if kwargs['target_type'] == Notification.Target.USERS:
+                raise RuntimeError('parent boom')
+            return real(**kwargs)
+
+        with mock.patch('apps.notifications.services.send_notification', side_effect=flaky):
+            out = payments.send_reminders(now=at(date(2026, 11, 3)))
+        self.assertEqual(out['students'], 1)
+        # o'quvchiga xabar ketgan: log qoladi, qayta yuborilmaydi
+        self.assertEqual(payments.send_reminders(now=at(date(2026, 11, 3))), {'students': 0, 'parents': 0})
+        self.assertEqual(NotificationRecipient.objects.filter(notification__kind='payment_reminder', user=self.s_unpaid).count(), 1)

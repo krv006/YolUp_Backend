@@ -10,6 +10,7 @@ To'lov sozlanmagan guruhlar (`monthly_fee` ham, `payment_day` ham yo'q) "to'lama
 import logging
 from datetime import date
 
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, OuterRef, Q
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -21,6 +22,8 @@ from .models import Course, CoursePayment, Enrollment, PaymentReminderLog
 logger = logging.getLogger('apps')
 
 REMINDER_CHOICES = (3, 5, 7)
+# Eslatma faqat kunduzi (mahalliy vaqt) yuboriladi: vazifa har soat ishlaydi, shuning uchun cheklovsiz kun boshlanishi bilan (~00:00) ketardi
+REMINDER_FROM_HOUR, REMINDER_TO_HOUR = 9, 20
 
 
 def _first_of_month(day: date) -> date:
@@ -70,6 +73,8 @@ def send_reminders(now=None) -> dict:
 
     today = local_today(now)
     sent = {'students': 0, 'parents': 0}
+    if not REMINDER_FROM_HOUR <= timezone.localtime(now or timezone.now()).hour < REMINDER_TO_HOUR:
+        return sent  # tun: kunduzgi birinchi ishga tushishda yuboriladi (log yozilmagani uchun eslatma yo'qolmaydi)
     courses = Course.objects.filter(is_active=True, payment_day__isnull=False).exclude(payment_reminder_days=[]).select_related('teacher')
     for course in courses:
         reminder_days = {int(d) for d in (course.payment_reminder_days or []) if int(d) in REMINDER_CHOICES}
@@ -88,8 +93,9 @@ def send_reminders(now=None) -> dict:
             for enrollment in enrollments:
                 student = enrollment.student
                 try:
-                    PaymentReminderLog.objects.create(course=course, student=student, period=month, days_before=days_left)
-                except Exception:  # noqa: BLE001 — parallel ishga tushgan boshqa nusxa allaqachon yuborgan
+                    with transaction.atomic():
+                        log = PaymentReminderLog.objects.create(course=course, student=student, period=month, days_before=days_left)
+                except IntegrityError:  # parallel ishga tushgan boshqa nusxa allaqachon yuborgan
                     continue
                 data = {'course_id': str(course.id), 'period': f'{month:%Y-%m}', 'due': due.isoformat(), 'days_left': days_left}
                 base = {'course': course.title, 'due': f'{due:%d.%m.%Y}', 'days': days_left, 'fee': fee}
@@ -99,7 +105,12 @@ def send_reminders(now=None) -> dict:
                         description=_("«%(course)s» guruhi to'lovi muddati %(due)s (%(days)s kun qoldi). %(fee)s") % base,
                         target_type=Notification.Target.USER, user_id=student.id,
                     )
-                    sent['students'] += 1
+                except Exception:  # noqa: BLE001
+                    log.delete()  # xabar ketmadi: belgi olib tashlanadi, keyingi soatda qayta uriniladi (oldin "yuborildi" deb qolib ketardi)
+                    logger.exception('payment reminder failed for %s/%s', course.id, student.id)
+                    continue
+                sent['students'] += 1
+                try:
                     parent_ids = list(ParentChildLink.objects.filter(
                         student=student, status=ParentChildLink.Status.APPROVED,
                     ).values_list('parent_id', flat=True))

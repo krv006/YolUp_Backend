@@ -330,7 +330,9 @@ sudo rsync -a /tmp/recordings/ /var/lib/docker/volumes/edu_platform_recordings/_
 ## 12. Zaxira nusxa (APP serverda)
 
 `deploy/new/backup.sh` har kecha bazaning nusxasini oladi va **MEDIA serverga** ko'chiradi (boshqa mashina). Sozlash yo'riqnomasi faylning boshida. Qisqasi: kalit yaratish, MEDIA'ga qo'shish, `crontab -e` ga bitta qator.
-**Tiklashni albatta bir marta sinab ko'ring** — aks holda zaxira bor-yo'qligi noma'lum.
+Saqlash muddati: kunlik nusxalar **14 kun**, haftalik (yakshanba) **~6 oy**, oylik (1-sana) **~13 oy** (`db_weekly_*`, `db_monthly_*`). Bitta nusxa ~2 MB, shuning uchun uzoq saqlash deyarli bepul.
+Eski chatni/ma'lumotni qaytarish kerak bo'lsa: kerakli sanadagi nusxani **alohida bazaga** tiklab (`createdb restore_x; pg_restore -d restore_x --no-owner <fayl>`) kerakli qatorlarni ko'chiring; asosiy bazani `--clean` bilan bosmang.
+**Tiklash 2026-11-18 da sinab ko'rilgan:** oxirgi nusxa vaqtinchalik bazaga xatosiz tiklandi, qator sonlari jonli bazaga mos keldi (nusxadan keyingi yangi yozuvlardan tashqari).
 
 ---
 
