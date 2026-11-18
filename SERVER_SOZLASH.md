@@ -334,6 +334,25 @@ sudo rsync -a /tmp/recordings/ /var/lib/docker/volumes/edu_platform_recordings/_
 
 ---
 
+## 12a. Email (SMTP) va chiquvchi SMTP himoyasi (APP serverda)
+
+Parolni tiklash, ro'yxatdan o'tishda email tasdiqlash va email bilan kirish xatni **APP server** yuboradi (`.env`: `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`,
+`EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL`; Gmail uchun 16 xonali **ilova paroli**). Majburiylik: `REGISTER_REQUIRES_EMAIL=1`, muhlat: `EMAIL_SETUP_DEADLINE=YYYY-MM-DD`.
+
+- **Netcup "Mail block":** yangi serverlarda standart firewall siyosati SMTP (25/465/587) ni ichkariga ham, tashqariga ham jimgina tashlaydi (SYN javobsiz qoladi,
+  `portquiz.net:587` ham ochilmaydi). Xat yuborish uchun SCP → server → Firewall → "netcup Mail block" → Delete → Save. APP serverda 2026-11-18 da o'chirilgan; MEDIA'da qoldi (u xat yubormaydi).
+- **Spamdan himoya:** blok o'chgach server 25/465 portlariga erkin chiqa oladi. `deploy/new/block-smtp-egress.sh` host va Docker konteynerlari uchun chiquvchi 25 va 465 ni yopadi (587 ochiq):
+  ```bash
+  install -m 755 deploy/new/block-smtp-egress.sh /usr/local/sbin/
+  install -m 644 deploy/new/block-smtp-egress.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now block-smtp-egress
+  /usr/local/sbin/block-smtp-egress.sh status      # qoidalar ko'rinadi
+  ```
+  Qaytarish: `systemctl disable --now block-smtp-egress`.
+- **Tekshirish:** serverdan `timeout 6 bash -c 'exec 3<>/dev/tcp/smtp.gmail.com/587' && echo OPEN`; konteynerdan 25 ga ulanish darhol rad etiladi (`Connection refused`).
+
+---
+
 ## 13. Ko'chib o'tish kuni (cutover) — kechqurun, dars bo'lmagan paytda
 
 1. Bir kun oldin DNS'da `edu.thesofmebel.uz` TTL ni 300 s ga tushiring.

@@ -1,0 +1,13 @@
+[Unit]
+Description=Chiquvchi SMTP 25/465 ni yopish (spamdan himoya; 587 ochiq)
+After=docker.service network-online.target ufw.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/block-smtp-egress.sh add
+ExecStop=/usr/local/sbin/block-smtp-egress.sh del
+
+[Install]
+WantedBy=multi-user.target
