@@ -233,7 +233,7 @@ LOGIN_FAIL_WINDOW = 600  # soniya
 
 def _login_fail_key(request) -> str:
     data = request.data if hasattr(request.data, 'get') else {}
-    username = str(data.get('username', '')).strip().lower()[:150]
+    username = services.canonical_login(str(data.get('username', '')).strip()[:150])
     return f'login_fail:{BaseThrottle().get_ident(request)}:{username}'
 
 

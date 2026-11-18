@@ -604,6 +604,17 @@ def email_change_confirm(*, user: User, email: str, code: str, request=None) -> 
     return user
 
 
+def canonical_login(identifier) -> str:
+    """Kirishdagi urinishlar hisoblagichi uchun: tasdiqlangan email bitta akkauntga tegishli bo'lsa — uning logini (kichik harfda), aks holda
+    kiritilganning o'zi. Shunda bir akkauntga login va email bilan urinishlar BITTA hisoblagichga yig'iladi (urinish soni ikki baravar bo'lib qolmasin)."""
+    identifier = (identifier or '').strip()
+    if '@' in identifier and not User.objects.filter(username=identifier).exists():
+        matches = _accounts_by_email(identifier)
+        if len(matches) == 1:
+            return matches[0].username.lower()
+    return identifier.lower()
+
+
 def resolve_login(identifier, password) -> str:
     """Kirishda `username` maydoniga login YOKI tasdiqlangan email yozish mumkin. Avval login bo'yicha qidiriladi (ichida `@` bor
     loginlar bor). Email bo'yicha: parol aynan bitta akkauntga mos kelsa — o'sha login; hech biriga mos kelmasa — o'zgarishsiz

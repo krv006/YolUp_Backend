@@ -152,8 +152,9 @@ def _file_material(name: str, data: bytes) -> tuple:
     return text, images
 
 
-def student_material(submission) -> StudentMaterial:
-    """O'quvchi ishi: hamma fayllar (asosiy + qo'shimcha) matni va rasmlari. O'qib bo'lmasa `GraderError`."""
+def student_material(submission, budget: int | None = None) -> StudentMaterial:
+    """O'quvchi ishi: hamma fayllar (asosiy + qo'shimcha) matni va rasmlari. O'qib bo'lmasa `GraderError`.
+    `budget` — rasmlar uchun token byudjeti (standart `HOMEWORK_AI_IMAGE_TOKEN_BUDGET`): sig'maganlari AI ga berilmaydi."""
     files = _submission_files(submission)
     if not files:  # savolli vazifa: faqat ochiq javoblar matni (testlar avtomatik baholangan)
         from . import questions as hw_questions
@@ -178,7 +179,8 @@ def student_material(submission) -> StudentMaterial:
     images = images[:MAX_IMAGES]
     if len(images) > hw_images.MANY_IMAGES:  # rasm ko'p: har biri kichikroq — narx oshib ketmasin
         images = hw_images.shrink(images)
-    return StudentMaterial(text=text, images=images, skipped_images=skipped)
+    images, dropped = hw_images.fit_budget(images, settings.HOMEWORK_AI_IMAGE_TOKEN_BUDGET if budget is None else budget)
+    return StudentMaterial(text=text, images=images, skipped_images=skipped + dropped)
 
 
 def student_work(submission) -> tuple:
@@ -300,13 +302,15 @@ def _grade(submission) -> dict:
     assignment = submission.assignment
     if Path(submission.original_name or submission.file.name).suffix.lower() in rules.AUDIO_EXTENSIONS:
         return _grade_speaking(assignment, submission)
-    material = student_material(submission)
     language_key = submission.feedback_language if submission.feedback_language in _LANGUAGES else 'uz'
     if assignment.skill_key == 'writing' and assignment.course.subject in IELTS_SUBJECTS:
+        material = student_material(submission)
         result = _grade_ielts_writing(assignment, submission, material.text, material.images)
         return _note_skipped(result, material.skipped_images, language_key)
-    subject = assignment.course.get_subject_display()
     shown_task = task_images(assignment)
+    # vazifa sharti rasmlari ham kontekstda joy oladi: o'quvchi rasmlariga qolgan byudjet beriladi
+    material = student_material(submission, budget=max(settings.HOMEWORK_AI_IMAGE_TOKEN_BUDGET - hw_images.image_tokens(shown_task), 0))
+    subject = assignment.course.get_subject_display()
     lines = [
         f'SUBJECT: {subject}' + (f' (skill: {assignment.skill_key})' if assignment.skill_key else ''),
         'ASSIGNMENT:\n' + _task_text(assignment),

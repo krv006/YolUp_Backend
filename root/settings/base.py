@@ -280,6 +280,9 @@ HOMEWORK_AI_INTERNAL_KEY = os.getenv('HOMEWORK_AI_INTERNAL_KEY', '')
 # Ichki baholash (OpenAI): OPENAI_API_KEY bo'lsa va tashqi xizmat (HOMEWORK_AI_URL) sozlanmagan bo'lsa ishlaydi;
 # o'chirish uchun HOMEWORK_AI_ENGINE=off. Yakuniy ballni doim o'qituvchi tasdiqlaydi.
 HOMEWORK_AI_ENGINE = os.getenv('HOMEWORK_AI_ENGINE', 'on').lower() not in ('off', '0', 'false', 'no')
+# AI ga beriladigan rasmlar uchun token byudjeti. gpt-4o-mini: har rasm 2833 + 5667 x (512 px bo'lak) token (OpenAI hujjati); 768x1024 sahifa ~25 500 token,
+# kontekst oynasi 128 000. Byudjetdan oshgan rasmlar AI ga berilmaydi va natijada "sig'madi" deb belgilanadi (aks holda so'rov butunlay rad etilardi).
+HOMEWORK_AI_IMAGE_TOKEN_BUDGET = int(os.getenv('HOMEWORK_AI_IMAGE_TOKEN_BUDGET', '80000'))
 HOMEWORK_AI_TIMEOUT = 30                                          # soniya (bitta HTTP so'rov)
 HOMEWORK_AI_GIVE_UP_MINUTES = 15                                  # shundan keyin qo'lda baholashga o'tadi
 

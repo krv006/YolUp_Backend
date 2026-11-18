@@ -19,7 +19,7 @@ Belgilar: **DEPLOY** = serverda ishlayapti; **KODDA** = yozildi va testlandi, se
 
 | Karta | Nima qilindi | Qanday tekshirildi |
 |---|---|---|
-| **homeworkda image ... AI ga jo'natish** + **Homework check da AI ni ko'rib berish** | 6 ta xato to'g'rilandi: EXIF aylantirish, hamma fayllar, 10 sahifagacha doska/PDF, Word/PDF ichidagi rasmlar, vazifa sharti rasmi, iPhone HEIC. Commit `d467691`. [FRONTEND_JAVOB_AI_RASM_2026-11-18.md](FRONTEND_JAVOB_AI_RASM_2026-11-18.md) | 24 ta yangi test; serverdagi konteynerda HEIC→JPEG haqiqiy ishladi. **Haqiqiy OpenAI bilan tekshirib BO'LMADI: productiondagi kalit muddati tugagan** (9-bo'lim) |
+| **homeworkda image ... AI ga jo'natish** + **Homework check da AI ni ko'rib berish** | 6 ta xato to'g'rilandi: EXIF aylantirish, hamma fayllar, token byudjetiga sig'adigan sahifalar (hozirgi modelda ~3 ta, 9.6-band), Word/PDF ichidagi rasmlar, vazifa sharti rasmi, iPhone HEIC. Commit `d467691`. [FRONTEND_JAVOB_AI_RASM_2026-11-18.md](FRONTEND_JAVOB_AI_RASM_2026-11-18.md) | 24 ta yangi test; serverdagi konteynerda HEIC→JPEG haqiqiy ishladi. **Haqiqiy OpenAI bilan tekshirib BO'LMADI: productiondagi kalit muddati tugagan** (9-bo'lim) |
 | **change password** (email ga kod) | Ro'yxatdan o'tishda tasdiqlangan email, email bilan kirish, parolni emailga kod bilan tiklash, profilda email qo'shish. Commit `199de62`, `94bd14a`. [FRONTEND_EMAIL_KIRISH_VA_TIKLASH_2026-11-18.md](FRONTEND_EMAIL_KIRISH_VA_TIKLASH_2026-11-18.md) | 47 ta yangi test; **haqiqiy Gmail orqali** serverdan kod ketdi (`sent: true`); netcup "Mail block" o'chirildi, 25/465 porti himoyalandi |
 | **Zaxira: tiklashni sinash** (chat vastanavit kartasining 2-qismi) | Oxirgi kunlik nusxa vaqtinchalik bazaga **tiklandi**: qator sonlari jonli bazaga mos (21 foydalanuvchi, 140→142 xabar yangi yozuvlar sababli) | Serverda haqiqiy `pg_restore`, vaqtinchalik baza o'chirildi |
 
@@ -47,7 +47,7 @@ Belgilar: **DEPLOY** = serverda ishlayapti; **KODDA** = yozildi va testlandi, se
 | **spam berish adminga** | Oqim to'liq. Productionda **1 ta shikoyat "open" holatida**, admin ko'rishi kerak |
 | **homework** (natijani ko'rish), **homeworkcheck** (fayl ixtiyoriy), **Darsga o'qituvchi kirdi** | Backend tayyor (`fccbdb7`, `9278bb5`, `3cafa7c`). Frontend QA kerak |
 
-Bu kartalarning backend qismi uchun butun test to'plami natijasi: **butun backend test to'plami: 2050 ta test, hammasi o'tdi** (tarjimalar va vaqt-xavfsizlik tuzatishlarigacha bo'lgan hamma o'zgarishlar bilan, 585 soniyada)
+Bu kartalarning backend qismi uchun butun test to'plami natijasi: **butun backend test to'plami: 2060 ta test, hammasi o'tdi** (9.6–9.8 tuzatishlarigacha bo'lgan hamma o'zgarishlar bilan, 736 soniyada)
 
 ## 4. KUTYAPMAN: sizdan nima kerak
 
@@ -128,3 +128,18 @@ Men "email bazada bor-yo'qligi oshkor bo'lmaydi" degan edim, lekin faqat javob *
 - Productionda **hech bir kursda `payment_day` belgilanmagan** (0 ta) va to'lov eslatmalari hech qachon yuborilmagan (0 ta yozuv). Ya'ni to'lov eslatmasi funksiyasi hozir ishlatilmayapti, mening tuzatishim productionda sinab bo'lmaydi, faqat testda.
 - Bugun ikki yangi foydalanuvchi emailsiz ro'yxatdan o'tgan (13:40 o'qituvchi, 13:53 ota-ona).
 - Eski hujjatlardagi (`FRONTEND_EMAIL_...`, `FRONTEND_ULANMAGAN_...`, `BACKEND_TRELLO_VAZIFALAR_...`) "email ulanmagan" degan gaplar eskirgan edi, tuzatildi.
+
+### 9.6. Rasm tuzatishimdagi XATO topildi va to'g'rilandi: "10 sahifagacha" haqiqatda ishlamasdi
+
+"10 sahifagacha AI ga boradi" degan gapim noto'g'ri edi. OpenAI hujjatiga ko'ra `gpt-4o-mini` uchun har bir rasm **2833 + 5667 x (512 px bo'laklar soni)** token oladi; bitta to'liq sahifa (768x1024 yoki 1536x1536) **25 501 token**. Modelning kontekst oynasi 128 000 token. Demak **4 tadan ko'p sahifa bitta so'rovga sig'maydi** (5 ta = 127 505 token, matnsiz). Eski kod (6 ta) ham, mening 10 talik chegaram ham shu sababli ko'p sahifali ishda so'rov rad etilishiga olib kelardi.
+- **Tuzatish:** rasmlar endi token byudjetiga qarab tanlanadi (`HOMEWORK_AI_IMAGE_TOKEN_BUDGET`, standart 80 000: bu ~3 ta to'liq sahifa). Sig'maganlari AI ga berilmaydi va natijada `skipped_images` + ogohlantirish bo'ladi. Vazifa sharti rasmi ham byudjetdan joy oladi. Formula OpenAI'ning o'z misoli bilan tekshirildi (1536x1536 → 25 501).
+- **Oqibat:** hozirgi modelda AI bitta ishdan taxminan **3 ta sahifa/surat** ko'radi. Ko'p sahifali doska yoki ko'p suratli ishlarda o'qituvchi qolganini o'zi ko'rishi shart.
+- **`gpt-4o-mini` OpenAI sahifasida "Deprecated" (eskirgan) deb belgilangan** (o'chirish sanasi o'sha sahifada ko'rsatilmagan). Rasm bilan ishlashda u eng qimmat model (har sahifa ~25 500 token). Yangi kalit kelgach boshqa, rasm uchun arzonroq va yangiroq modelni (masalan gpt-4.1-mini) solishtirib ko'rishni tavsiya qilaman: `OPENAI_MODEL` `.env` da sozlanadi. Hozir buni **sinab ko'rmadim** (kalit yo'q), shuning uchun faqat tavsiya.
+
+### 9.7. Kirishdagi urinishlar hisoblagichi: email "ikkinchi imkoniyat" edi: to'g'rilandi
+
+Xato kirishlar (10 ta, keyin 429) `(IP, kiritilgan matn)` bo'yicha sanalardi. Email bilan kirish qo'shilgach, bitta akkauntga login bilan 10 va email bilan 10 ta urinish mumkin bo'lib qolgan edi. Endi tasdiqlangan email bitta akkauntga tegishli bo'lsa, urinishlar o'sha akkauntning loginiga yig'iladi (katta-kichik harf variantlari ham). 4 ta test.
+
+### 9.8. MEDIA serverda eski kod ishlayapti: bildirishnoma tuzatishi to'liq emas
+
+MEDIA server hali `c76a991` da (APP'da `a3fd185` va undan keyingilar). "Dars yozuvi tayyor" bildirishnomasi **MEDIA'dagi `rec`/transcoder** jarayonidan yuboriladi, shuning uchun u hali eski kod bilan ketadi: push sarlavhasi "Fokus", matnda HTML, push so'rov ichida sinxron. Bildirishnoma tuzatishi MEDIA ham yangilangandan keyingina to'liq bo'ladi. (Yangilash: faqat `rec`, `rec-cron`, `transcoder` qayta quriladi; LiveKit va Caddy tegilmaydi. Jonli dars va "converting" yozuv bo'lmaganda.)

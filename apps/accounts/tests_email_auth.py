@@ -442,3 +442,41 @@ class SideChannelTests(EmailCase):
         with mock.patch('apps.core.mailer.send_email', side_effect=RuntimeError('smtp down')):
             resp = self.post('password/reset/request', {'email': EMAIL})
         self.assertEqual((resp.status_code, resp.json()['sent']), (200, True))
+
+
+class LoginGuardSharedTests(EmailCase):
+    """Login va email bilan urinishlar bitta hisoblagichga yig'iladi (10 ta xato — 429), shunda email "ikkinchi imkoniyat" bo'lib qolmaydi."""
+
+    def test_username_and_email_failures_share_one_counter(self):
+        make('ali01', email=EMAIL, email_verified=True)
+        for _ in range(5):
+            self.assertEqual(self.post('login', {'username': 'ali01', 'password': 'WrongPass999!'}).status_code, 401)
+        for _ in range(5):
+            self.assertEqual(self.post('login', {'username': EMAIL, 'password': 'WrongPass999!'}).status_code, 401)
+        self.assertEqual(self.post('login', {'username': 'ali01', 'password': PASSWORD}).status_code, 429)
+        self.assertEqual(self.post('login', {'username': EMAIL, 'password': PASSWORD}).status_code, 429)
+
+    def test_case_variants_of_the_email_share_the_counter_too(self):
+        make('ali01', email=EMAIL, email_verified=True)
+        for variant in ('ali@example.com', 'ALI@example.com', 'Ali@Example.com', 'ali@example.com', 'ALI@EXAMPLE.COM') * 2:
+            self.post('login', {'username': variant, 'password': 'WrongPass999!'})
+        self.assertEqual(self.post('login', {'username': 'ali01', 'password': PASSWORD}).status_code, 429)
+
+    def test_another_account_is_not_blocked(self):
+        make('ali01', email=EMAIL, email_verified=True)
+        make('vali01', email='vali@example.com', email_verified=True)
+        for _ in range(10):
+            self.post('login', {'username': EMAIL, 'password': 'WrongPass999!'})
+        self.assertEqual(self.post('login', {'username': 'vali01', 'password': PASSWORD}).status_code, 200)
+
+    def test_canonical_login_leaves_plain_and_ambiguous_identifiers_alone(self):
+        from apps.accounts import services
+
+        make('Ali01')
+        make('legacy@home')
+        make('a.student', email='shared@example.com', email_verified=True)
+        make('a.teacher', User.Role.TEACHER, email='shared@example.com', email_verified=True)
+        self.assertEqual(services.canonical_login('Ali01'), 'ali01')
+        self.assertEqual(services.canonical_login('legacy@home'), 'legacy@home')
+        self.assertEqual(services.canonical_login('shared@example.com'), 'shared@example.com')  # ikki akkaunt: aniq emas
+        self.assertEqual(services.canonical_login('nobody@example.com'), 'nobody@example.com')

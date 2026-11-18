@@ -21,6 +21,9 @@ PER_PAGE = 2               # PDF'ning bitta sahifasidan eng ko'pi bilan shuncha 
 MAX_COLLECTED = 40         # bitta topshiriqdan yig'iladigan rasmlarning mutlaq chegarasi (xotira)
 MAX_PDF_PAGES = 60
 HEIC_EXTENSIONS = {'.heic', '.heif'}
+# Rasmning token narxi (OpenAI "high detail", gpt-4o-mini — eng qimmat hisob, shuning uchun boshqa modellar uchun ham xavfsiz taxmin):
+# 2048 px kvadratga sig'diriladi, qisqa tomoni 768 dan oshsa 768 ga keltiriladi, so'ng 512 px bo'laklar soni x 5667 + 2833.
+IMAGE_BASE_TOKENS, IMAGE_TILE_TOKENS, TILE = 2833, 5667, 512
 _DOCX_MEDIA = re.compile(r'\.(png|jpe?g|webp|gif|bmp|tiff?)$', re.IGNORECASE)
 
 
@@ -139,3 +142,44 @@ def docx_images(data: bytes, *, limit: int = MAX_COLLECTED) -> list:
     except (zipfile.BadZipFile, KeyError, OSError) as exc:
         logger.info("DOCX ichidagi rasmlarni ajratib bo'lmadi: %s", exc)
     return found
+
+
+def estimate_tokens(size: tuple) -> int:
+    """Rasm (eni, bo'yi px) AI so'rovida qancha token olishi (OpenAI hujjatidagi formula; 1536x1536 -> 25 501)."""
+    import math
+
+    width, height = size
+    if max(width, height) > 2048:
+        scale = 2048 / max(width, height)
+        width, height = width * scale, height * scale
+    if min(width, height) > 768:
+        scale = 768 / min(width, height)
+        width, height = width * scale, height * scale
+    tiles = math.ceil(width / TILE) * math.ceil(height / TILE)
+    return IMAGE_BASE_TOKENS + IMAGE_TILE_TOKENS * max(tiles, 1)
+
+
+def image_tokens(images: list) -> int:
+    """[(mime, bayt)] ning jami token narxi."""
+    from PIL import Image
+
+    total = 0
+    for _mime, data in images:
+        try:
+            total += estimate_tokens(Image.open(io.BytesIO(data)).size)
+        except Exception:  # noqa: BLE001 — o'lchamni bilib bo'lmasa o'rtacha sahifa narxi
+            total += IMAGE_BASE_TOKENS + 4 * IMAGE_TILE_TOKENS
+    return total
+
+
+def fit_budget(images: list, budget: int) -> tuple:
+    """Rasmlarni tartib bilan token byudjetiga sig'adiganini qoldiradi: (qolganlari, tashlanganlari soni). Birinchi rasm har doim qoladi.
+    Birinchi sig'masdan keyingi hammasi tashlanadi (sahifalar tartibi buzilmasin)."""
+    kept, used = [], 0
+    for index, image in enumerate(images):
+        cost = image_tokens([image])
+        if kept and used + cost > budget:
+            return kept, len(images) - index
+        kept.append(image)
+        used += cost
+    return kept, 0

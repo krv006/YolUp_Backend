@@ -84,7 +84,7 @@ def prompt_text(fake):
     return content if isinstance(content, str) else content[0]['text']
 
 
-@override_settings(**LLM_ON)
+@override_settings(HOMEWORK_AI_IMAGE_TOKEN_BUDGET=10**9, **LLM_ON)  # sahifa soni/tartibi testlari: byudjet cheklamasin (byudjet alohida sinaladi)
 class AiImageBase(HomeworkBase):
     def setUp(self):
         super().setUp()
@@ -306,3 +306,60 @@ class HeicTests(AiImageBase):
                 {'file': SimpleUploadedFile('big.heic', self.heic(), content_type='image/heic')}, format='multipart')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('MB', str(resp.json()))
+
+
+class TokenEstimateTests(SimpleTestCase):
+    def test_the_formula_matches_the_documented_openai_example(self):
+        self.assertEqual(hw_images.estimate_tokens((1536, 1536)), 25501)   # OpenAI hujjati: gpt-4o-mini, 4 bo'lak
+        self.assertEqual(hw_images.estimate_tokens((900, 1200)), 25501)
+        self.assertEqual(hw_images.estimate_tokens((4000, 3000)), 25501)
+
+    def test_small_and_thin_images(self):
+        self.assertEqual(hw_images.estimate_tokens((512, 512)), 2833 + 5667)
+        self.assertEqual(hw_images.estimate_tokens((200, 100)), 2833 + 5667)
+        self.assertEqual(hw_images.estimate_tokens((768, 2048)), 2833 + 5667 * 2 * 4)
+
+    def test_fit_budget_keeps_order_and_always_keeps_the_first(self):
+        pages = [hw_images.to_jpeg(Image.new('RGB', (900, 1200), 'white')) for _ in range(5)]
+        kept, dropped = hw_images.fit_budget(pages, 80_000)
+        self.assertEqual((len(kept), dropped), (3, 2))
+        kept, dropped = hw_images.fit_budget(pages, 1)  # byudjet bitta rasmga ham yetmasa ham birinchisi qoladi
+        self.assertEqual((len(kept), dropped), (1, 4))
+        kept, dropped = hw_images.fit_budget(pages, 10**9)
+        self.assertEqual((len(kept), dropped), (5, 0))
+        self.assertEqual(hw_images.fit_budget([], 80_000), ([], 0))
+
+
+@override_settings(**LLM_ON)
+class TokenBudgetTests(AiImageBase):
+    """Standart byudjet (80 000): 128 000 tokenli kontekstga sig'maydigan so'rov butunlay rad etilmasin, ortiqcha sahifa "sig'madi" bo'lsin."""
+
+    def test_a_long_board_sends_only_what_fits_the_context_and_reports_the_rest(self):
+        with override_settings(HOMEWORK_AI_IMAGE_TOKEN_BUDGET=80_000):
+            assignment_id = self.assignment()
+            submission = self.post(assignment_id, SimpleUploadedFile('doska.pdf', image_pdf(8), content_type='application/pdf'))
+            self.grade()
+            sent = sent_images(self.fake)
+            self.assertEqual(len(sent), 3)
+            total = sum(hw_images.estimate_tokens(image.size) for image in sent)
+            self.assertLessEqual(total, 80_000)
+            submission.refresh_from_db()
+            self.assertEqual(submission.ai_result['skipped_images'], 5)
+            self.assertIn('5 ta', submission.ai_result['summary']['recommendations'][0])
+
+    def test_the_default_budget_leaves_room_in_a_128k_context(self):
+        import importlib
+
+        base = importlib.import_module('root.settings.base')  # sinfdagi override'siz haqiqiy standart qiymat
+        # rasmlar + matn (~41 000 belgi ~ 12 000 token) + chiqish tokenlari kontekstdan oshmasin
+        self.assertLessEqual(base.HOMEWORK_AI_IMAGE_TOKEN_BUDGET + 12_000 + base.OPENAI_MAX_OUTPUT_TOKENS, 128_000)
+
+    def test_a_task_photo_takes_part_of_the_budget(self):
+        with override_settings(HOMEWORK_AI_IMAGE_TOKEN_BUDGET=80_000):
+            assignment_id = TaskImageTests.with_attachment(self, 'shart.png', png_bytes((900, 1200)))
+            self.post(assignment_id, SimpleUploadedFile('doska.pdf', image_pdf(4), content_type='application/pdf'))
+            self.grade()
+            sent = sent_images(self.fake)
+            # 1 ta shart rasmi (25 501) + 2 ta sahifa (51 002) = 76 503; 3-sahifa sig'maydi
+            self.assertEqual(len(sent), 3)
+            self.assertIn('ASSIGNMENT IMAGES: the first 1 attached image', prompt_text(self.fake))
