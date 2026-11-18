@@ -368,3 +368,35 @@ class EmailSetupHintTests(EmailCase):
     def test_no_deadline_means_a_reminder_only(self):
         data = self.me(make('ali01'))
         self.assertEqual((data['email_setup_required'], data['email_setup_deadline']), (True, None))
+
+
+class TranslationTests(EmailCase):
+    """Yangi xabarlar ru/en tilida ham chiqadi (oldin faqat o'zbekcha edi)."""
+
+    def post_lang(self, lang, path, data):
+        return self.client.post(f'/api/v1/auth/{path}/', data, format='json', HTTP_ACCEPT_LANGUAGE=lang)
+
+    def test_the_email_token_error_is_translated(self):
+        for lang, expected in (('ru', 'Токен подтверждения email'), ('en', 'email verification token')):
+            resp = self.post_lang(lang, 'register', {
+                'username': f'tr_{lang}', 'password': PASSWORD, 'role': 'student', 'email': EMAIL, 'email_token': 'bad'})
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn(expected, resp.json()['error']['message'])
+
+    def test_the_invalid_email_message_is_translated(self):
+        ru = self.post_lang('ru', 'register/email/request', {'email': 'nope'})
+        en = self.post_lang('en', 'register/email/request', {'email': 'nope'})
+        self.assertIn('корректный адрес', ru.json()['error']['message'])
+        self.assertIn('valid email address', en.json()['error']['message'])
+
+    def test_the_at_sign_rule_is_translated(self):
+        ru = self.post_lang('ru', 'register', {'username': 'a@b', 'password': PASSWORD, 'role': 'student'})
+        self.assertIn('«@»', str(details(ru)['username']))
+
+    def test_the_wrong_code_message_is_translated(self):
+        resp = self.post_lang('ru', 'register/email/verify', {'email': EMAIL, 'code': '00000'})
+        self.assertIn('Код неверен', resp.json()['error']['message'])
+
+    def test_uzbek_stays_the_default(self):
+        resp = self.post('register/email/request', {'email': 'nope'})
+        self.assertIn("To'g'ri email manzil kiriting", resp.json()['error']['message'])

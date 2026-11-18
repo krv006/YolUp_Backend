@@ -81,3 +81,20 @@ Bu kartalarning backend qismi uchun butun test to'plami natijasi: **butun backen
 - Veb/mobil push haqiqiy qurilmada (testda soxta yuborish).
 - Frontend QA (meeting, homework, homeworkcheck, dars kirishi): faqat kod va testlar bo'yicha.
 - Trello'ning ertalabdan keyingi o'zgarishlari (seans tugagan).
+
+## 8. Qayta tekshiruv (so'rovingizdan keyin) va to'g'rilangan kamchiliklar
+
+Oldingi hisobotni qayta tekshirdim. Topilgan va to'g'rilangan:
+
+| Kamchilik | Holat |
+|---|---|
+| Email xabarlari (8 ta yangi matn) faqat o'zbekcha edi, ru/en foydalanuvchi o'zbekcha xato ko'rardi | **Tuzatildi:** ru va en tarjimalar qo'shildi, 5 ta test bilan tekshirildi. Deploydan keyin ishlaydi |
+| Email oqimi productionda faqat "kod yuborildi" darajasida tekshirilgan edi | **To'liq sinab ko'rildi:** productionda haqiqiy Gmail bilan ro'yxatdan o'tish → email bilan kirish → parolni emailga kod bilan tiklash → yangi parol bilan kirish, 10 qadamning hammasi o'tdi. Sinov akkaunti bekor qilinadigan tranzaksiyada edi: bazada qolmadi |
+| "Push fonda yuboriladi" degan gapim faqat testga tayangan edi | Productionda `BACKGROUND_ASYNC=True` ekani tekshirildi |
+| Chiquvchi 25/465 himoyasi qayta ishga tushganda saqlanishi | `block-smtp-egress` xizmati `enabled` va `active`. Server qayta ishga tushirib sinalmadi (production, xavfli) |
+| Admin panelda `email_exempt` ko'rinmasdi | Qo'shildi (foydalanuvchi sahifasida `email_verified` va `email_exempt`) |
+
+**Hali ochiq (aniq):**
+- **Bola akkauntlari:** `email_exempt` faqat YANGI yaratilganlarda qo'yiladi. Eskilarini avtomatik aniqlab bo'lmadi: productionda bola yaratilganini ko'rsatadigan audit yozuvi yo'q (0 ta), mavjud 5 ta "ro'yxatdan o'tmagan" o'quvchi hisobi test/seed ko'rinishida. `REGISTER_REQUIRES_EMAIL` yoqilishidan oldin admin kerakli hisoblarni panelda belgilashi kerak.
+- **Real foydalanuvchilar emailsiz ro'yxatdan o'tmoqda:** bugun 13:40 (o'qituvchi) va 13:53 (ota-ona) da yangi hisoblar ochilgan, ikkalasida email yo'q. Frontend email qadamini qo'shmaguncha shunday davom etadi.
+- **Frontend QA** (meeting, homework, dars kirishi va h.k.) men tomondan qilinmagan va qila olmayman.

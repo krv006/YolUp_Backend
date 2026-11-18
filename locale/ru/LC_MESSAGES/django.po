@@ -706,3 +706,35 @@ msgstr "Такой ученик не найден."
 #: apps/accounts
 msgid "O'quvchi logini yoki taklif kodini kiriting."
 msgstr "Введите логин ученика или код приглашения."
+
+#: apps/accounts/services.py
+msgid "Bu email bir nechta akkauntga bog'langan. Kirish uchun login (username) ni yozing."
+msgstr "Этот email привязан к нескольким аккаунтам. Для входа введите логин (username)."
+
+#: apps/accounts/services.py
+msgid "Email tasdiqlanishi shart: avval emailga kelgan kodni tasdiqlang."
+msgstr "Требуется подтверждение email: сначала подтвердите код, пришедший на почту."
+
+#: apps/accounts/services.py
+msgid "Email tasdiqlash tokeni noto'g'ri yoki muddati o'tgan."
+msgstr "Токен подтверждения email неверен или срок его действия истёк."
+
+#: apps/accounts/otp.py
+msgid "Kod noto'g'ri yoki muddati o'tgan"
+msgstr "Код неверен или срок его действия истёк"
+
+#: apps/accounts/serializers.py
+msgid "Loginda '@' belgisi bo'lmasin (email alohida maydonda yoziladi)."
+msgstr "В логине не должно быть символа «@» (email указывается в отдельном поле)."
+
+#: apps/accounts/services.py
+msgid "To'g'ri email manzil kiriting."
+msgstr "Введите корректный адрес email."
+
+#: apps/homework/services.py
+msgid "iPhone rasmini (HEIC) o'qib bo'lmadi. JPG yoki PNG yuklang."
+msgstr "Не удалось прочитать фото iPhone (HEIC). Загрузите JPG или PNG."
+
+#: apps/accounts/serializers.py
+msgid "Telefon raqam yoki email kiriting."
+msgstr "Введите номер телефона или email."

@@ -706,3 +706,35 @@ msgstr "No such student found."
 #: apps/accounts
 msgid "O'quvchi logini yoki taklif kodini kiriting."
 msgstr "Enter the student's username or invite code."
+
+#: apps/accounts/services.py
+msgid "Bu email bir nechta akkauntga bog'langan. Kirish uchun login (username) ni yozing."
+msgstr "This email is linked to several accounts. Enter your login (username) to sign in."
+
+#: apps/accounts/services.py
+msgid "Email tasdiqlanishi shart: avval emailga kelgan kodni tasdiqlang."
+msgstr "Email verification is required: first confirm the code sent to your email."
+
+#: apps/accounts/services.py
+msgid "Email tasdiqlash tokeni noto'g'ri yoki muddati o'tgan."
+msgstr "The email verification token is invalid or has expired."
+
+#: apps/accounts/otp.py
+msgid "Kod noto'g'ri yoki muddati o'tgan"
+msgstr "The code is incorrect or has expired"
+
+#: apps/accounts/serializers.py
+msgid "Loginda '@' belgisi bo'lmasin (email alohida maydonda yoziladi)."
+msgstr "The login must not contain '@' (the email goes in its own field)."
+
+#: apps/accounts/services.py
+msgid "To'g'ri email manzil kiriting."
+msgstr "Enter a valid email address."
+
+#: apps/homework/services.py
+msgid "iPhone rasmini (HEIC) o'qib bo'lmadi. JPG yoki PNG yuklang."
+msgstr "Could not read the iPhone photo (HEIC). Upload a JPG or PNG."
+
+#: apps/accounts/serializers.py
+msgid "Telefon raqam yoki email kiriting."
+msgstr "Enter a phone number or an email."

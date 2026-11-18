@@ -66,5 +66,6 @@ Firebase (mobil push), chat xabarini tiklash, rasm yuborish qoidasi, "tech pades
 
 ## Eslatma
 
-- Yangi backend xabarlari (email xatolari va h.k.) hozircha faqat o'zbekcha; ru/en tarjimasi yo'q.
+- Yangi backend xabarlari (email, HEIC, login `@` qoidasi) ru va en tilida ham chiqadi (`Accept-Language` bo'yicha).
+- `ai_result.usage` (token sarfi) o'qituvchi javobida ichki maydon sifatida keladi; ekranda ko'rsatish shart emas.
 - Barcha endpoint yo'llari `/api/v1/...` bilan boshlanadi.
