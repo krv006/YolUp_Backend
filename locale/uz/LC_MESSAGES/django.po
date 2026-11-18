@@ -1,0 +1,29 @@
+# O'zbekcha (uz) — FAQAT Django'ning o'z matnlari uchun (parol tekshiruvi xabarlari). Loyihaning o'z matnlari o'zbekcha yozilgan (manba til),
+# shuning uchun ular bu faylda yo'q. Django'ning `uz` katalogida bu satrlar bo'sh, shu sabab oldin inglizcha chiqardi (2026-11-18).
+msgid ""
+msgstr ""
+"Project-Id-Version: 1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"Language: uz\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#, python-format
+msgid "This password is too short. It must contain at least %d character."
+msgid_plural "This password is too short. It must contain at least %d characters."
+msgstr[0] "Parol juda qisqa: kamida %d ta belgi bo'lsin."
+
+msgid "This password is too common."
+msgstr "Bu parol juda oddiy, boshqasini tanlang."
+
+msgid "This password is entirely numeric."
+msgstr "Parol faqat raqamlardan iborat bo'lmasin."
+
+#, python-format
+msgid "The password is too similar to the %(verbose_name)s."
+msgstr "Parol quyidagi ma'lumotga juda o'xshash: %(verbose_name)s."
+
+msgid "username"
+msgstr "login"

@@ -1316,7 +1316,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
             first_name=current_user.first_name,
             last_name=current_user.last_name,
         )
-        target.set_password(secrets.token_urlsafe(32))
+        # Bitta odamning rol-akkaunti: parol manba akkauntnikidek (xesh nusxalanadi). Oldin tasodifiy parol qo'yilardi va uni hech kim
+        # bilmasdi: "Parolni o'zgartirish" doim "Joriy parol noto'g'ri" berardi, login-parol bilan kirib ham bo'lmasdi (2026-11-18).
+        target.password = current_user.password
         target.save()
         _link_accounts(current_user, target)
         auto_provisioned = True
