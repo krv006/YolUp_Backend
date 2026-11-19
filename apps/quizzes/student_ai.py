@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import Throttled, ValidationError
 
-from . import llm
+from . import llm, mathcheck
 
 logger = logging.getLogger('apps')
 
@@ -87,8 +87,14 @@ def practice(user, *, topic: str, count: int = 5, material: str = '', language: 
     system = (
         f'You write practice questions for a school student. Write in {_language(user, language)}. '
         f'Create exactly {count} multiple-choice questions (4 options each, exactly one correct) that reinforce the topic. '
+        'For every question FIRST work out the correct answer step by step in "solution", THEN make sure that exact '
+        'value is one of the options (and the other options are wrong) and only then set "correct_index"; recheck any '
+        'calculation. '
         'Return ONLY a JSON object: {"questions": [{"text": "...", "options": ["...", "...", "...", "..."], '
-        '"correct_index": 0, "explanation": "one sentence"}]}.'
+        '"solution": "short working that derives the correct answer", "equation": "", "correct_index": 0, '
+        '"explanation": "one sentence"}]}. '
+        'Fill "equation" ONLY for a question that asks to solve an equation for x: the equation exactly as written with an '
+        'explicit * for multiplication (e.g. "8-2*x=3*x+11"; the correct option must be the value of x); otherwise leave it "".'
     )
     prompt = f'Topic: {topic[:300]}\n' + (f'Material / mistakes to reinforce:\n{material[:MAX_TEXT]}' if material else '')
     data = _call(user, system, prompt)
@@ -101,11 +107,31 @@ def practice(user, *, topic: str, count: int = 5, material: str = '', language: 
             continue
         if len(options) < 2 or not 0 <= index < len(options) or not str(raw.get('text') or '').strip():
             continue
+        good = mathcheck.satisfying_options(mathcheck.equation_of(raw), options)
+        if good is not None and index not in good:
+            if len(good) != 1:
+                continue  # to'g'ri variant yo'q (yoki bir nechta): savol yaroqsiz
+            index = good[0]  # model kaliti xato, lekin to'g'ri qiymat variantlar orasida bor: kalitni tuzatamiz
         questions.append({
             'text': str(raw['text'])[:600], 'options': options, 'correct_index': index,
             'explanation': str(raw.get('explanation') or '')[:400],
         })
+    questions = _drop_unsound(questions, source=material or topic, language=_language(user, language))
     if not questions:
         _refund(user)
         raise ValidationError({'detail': _("AI savollar yarata olmadi. Qayta urinib ko'ring.")})
     return {'topic': topic, 'questions': questions[:count], **data['_usage']}
+
+
+def _drop_unsound(questions: list, *, source: str, language: str) -> list:
+    """Mashq savollarini test yaratishdagi AI tekshiruvchidan o'tkazadi: belgilangan javobi noto'g'ri/bahsli savol o'quvchiga
+    berilmaydi (haqiqiy holat: "5x-2=3x+6" savoliga to'g'ri javob sifatida 2 belgilangan, aslida 4). Tekshiruv ishlamasa
+    savollar o'z holicha qoladi."""
+    from . import ai_exam
+
+    candidates = [(None, {
+        'type': 'single', 'text': q['text'],
+        'options': [{'text': option, 'is_correct': index == q['correct_index']} for index, option in enumerate(q['options'])],
+    }, False) for q in questions]
+    bad = ai_exam._judge(candidates, source, language)
+    return [q for number, q in enumerate(questions) if number not in bad]

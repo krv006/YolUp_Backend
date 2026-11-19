@@ -81,8 +81,9 @@ def _csv(data: bytes) -> str:
 _PARSERS = {'.pdf': _pdf, '.docx': _docx, '.pptx': _pptx, '.xlsx': _xlsx, '.xlsm': _xlsx, '.csv': _csv}
 
 
-def extract_text(data: bytes, filename: str, *, max_chars: int = 0) -> str:
-    """`data` baytlaridan toza matn. `max_chars` > 0 bo'lsa shu uzunlikda kesiladi."""
+def extract_text(data: bytes, filename: str, *, max_chars: int = 0, min_chars: int = _MIN_TEXT_CHARS) -> str:
+    """`data` baytlaridan toza matn. `max_chars` > 0 bo'lsa shu uzunlikda kesiladi. `min_chars` dan qisqa matn "matn yo'q"
+    hisoblanadi (material uchun 80: skanerlangan fayl; o'quvchi ishida 1: qisqa javob ham javob)."""
     ext = Path(filename or '').suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise MaterialError(f"Fayl turi qo'llab-quvvatlanmaydi: {ext or filename}.")
@@ -96,7 +97,7 @@ def extract_text(data: bytes, filename: str, *, max_chars: int = 0) -> str:
     except Exception as exc:  # noqa: BLE001 — buzuq/parolli fayl
         raise MaterialError(f"«{filename}» faylini o'qib bo'lmadi: {exc}") from exc
     text = _clean(raw)
-    if len(text) < _MIN_TEXT_CHARS:
+    if len(text) < max(1, min_chars):
         raise MaterialError(
             f"«{filename}» faylida o'qiladigan matn deyarli yo'q (skanerlangan/rasmli fayl bo'lishi mumkin). "
             "Matnli PDF yoki Word fayl yuklang."

@@ -60,7 +60,7 @@ class ExamStudentExtrasTests(ExamTestBase):
             response = self.client.post(f"/api/v1/exams/{exam['id']}/mistakes-practice/", {'count': 3}, format='json')
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json()['questions'][0]['correct_index'], 1)
-        self.assertIn('Material / mistakes', call.call_args.args[1])
+        self.assertIn('Material / mistakes', call.call_args_list[0].args[1])  # 1-chaqiruv: savollarni yaratish; 2-si: AI tekshiruvchi
 
     def test_mistakes_practice_needs_results_to_be_visible(self):
         exam = self.make_exam()

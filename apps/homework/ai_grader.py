@@ -55,8 +55,8 @@ _SYSTEM = (
     '- Split the work into the separate tasks/questions it contains (an essay or a single task = one item). For each '
     'item give a "score" that is a PERCENTAGE from 0 to 100 of that item (100 = fully correct, never raw points). '
     'If the teacher or the assignment states point values (for example "50 points each"), treat them only as '
-    'weights. "overall_score" is a percentage from 0 to 100 and is the weighted average of the item scores (equal '
-    'weights unless point values are stated), so it can never be higher than the best item or lower than the worst.\n'
+    'weights: give every item a "weight" (the stated points; 1 for every item when none are stated). '
+    '"overall_score" is a percentage from 0 to 100: the weighted average of the item scores.\n'
     '- A wrong final answer must not get more than 60 unless the teacher\'s instructions explicitly allow more partial '
     'credit; a correct method with an arithmetic slip is still a wrong final answer.\n'
     '- Maths/science: check the reasoning and units, not only the final answer. Language writing: assess task '
@@ -65,7 +65,7 @@ _SYSTEM = (
     'Return ONLY valid JSON of this exact shape (no markdown):\n'
     '{"overall_score": 0, "questions": [{"question_number": 1, "question": "...", "student_answer": "...", '
     '"expected_solution": "...", "analysis": "...", "mistakes": ["..."], "error_categories": ["..."], '
-    '"correct_answer": "...", "suggestions": ["..."], "difficulty": "easy|medium|hard", "score": 0}], '
+    '"correct_answer": "...", "suggestions": ["..."], "difficulty": "easy|medium|hard", "weight": 1, "score": 0}], '
     '"summary": {"strengths": ["..."], "weaknesses": ["..."], "topics_to_review": ["..."], '
     '"recommendations": ["..."]}}'
 )
@@ -142,7 +142,7 @@ def _file_material(name: str, data: bytes) -> tuple:
         return '', [_image_from_bytes(data)]
     text, images = '', []
     try:
-        text = material_text.extract_text(data, name, max_chars=STUDENT_CHARS)
+        text = material_text.extract_text(data, name, max_chars=STUDENT_CHARS, min_chars=1)  # qisqa javob ham javob
     except material_text.MaterialError:
         pass  # matn yo'q (skanerlangan/rasmli fayl) — pastda rasmlar olinadi
     if ext == '.pdf':
@@ -251,9 +251,18 @@ def _score(value):
     return round(number, 1) if math.isfinite(number) and 0 <= number <= 100 else None
 
 
+def _weight(value) -> float:
+    """Savol og'irligi (vazifada ball yozilgan bo'lsa shu ballar): musbat son, aks holda 1."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return number if math.isfinite(number) and 0 < number <= 1000 else 1.0
+
+
 def clean_result(data: dict) -> dict:
     """Model javobini xavfsiz shaklga keltiradi (turlar, chegaralar, uzunliklar)."""
-    questions = []
+    questions, weights = [], []
     for index, raw in enumerate((data.get('questions') or [])[:40], start=1):
         if not isinstance(raw, dict):
             continue
@@ -266,15 +275,15 @@ def clean_result(data: dict) -> dict:
             'correct_answer': _text(raw.get('correct_answer'), 500), 'suggestions': _list(raw.get('suggestions')),
             'difficulty': _text(raw.get('difficulty'), 20), 'score': _score(raw.get('score')),
         })
+        weights.append(_weight(raw.get('weight')))
     summary = data.get('summary') if isinstance(data.get('summary'), dict) else {}
     overall = _score(data.get('overall_score'))
-    scores = [q['score'] for q in questions if q['score'] is not None]
-    if scores:
-        mean = round(sum(scores) / len(scores), 1)
-        # Og'irlikli o'rtacha doim eng past va eng yuqori savol bali oralig'ida bo'ladi. Undan tashqaridagi
-        # umumiy ball (masalan, model foiz o'rniga ballarni qo'shib yuborgan: 50 + 40 = 90) — xato: o'rtachani olamiz.
-        if overall is None or not min(scores) <= overall <= max(scores):
-            overall = mean
+    # Umumiy ballni model emas, kod hisoblaydi: model bir necha marta savollar ballariga mos kelmaydigan son bergan
+    # (masalan 100/0/100 savollarga 100). Og'irliklar — vazifada yozilgan ballar (yo'q bo'lsa hammasi 1).
+    scored = [(q['score'], w) for q, w in zip(questions, weights) if q['score'] is not None]
+    if scored:
+        total = sum(w for _, w in scored)
+        overall = round(sum(score * w for score, w in scored) / total, 1)
     return {
         'overall_score': overall,
         'grade': rules.grade_label(overall) if overall is not None else '',

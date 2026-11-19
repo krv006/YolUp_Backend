@@ -77,8 +77,8 @@ class EngineFlowTests(HomeworkBase):
         self.assertEqual(services.sync_ai_results(), {'done': 1, 'failed': 0, 'waiting': 0})
         submission.refresh_from_db()
         self.assertEqual(submission.status, 'pending_review')
-        self.assertEqual((submission.ai_overall_score, submission.ai_grade), (78.0, 'Yaxshi'))
-        self.assertEqual((submission.overall_score, submission.grade), (78.0, 'Yaxshi'))
+        self.assertEqual((submission.ai_overall_score, submission.ai_grade), (77.5, 'Yaxshi'))
+        self.assertEqual((submission.overall_score, submission.grade), (77.5, 'Yaxshi'))
         self.assertEqual(len(submission.result['questions']), 2)
         self.assertEqual(submission.result['summary']['weaknesses'], ['Ehtiyotkorlik'])
         self.assertEqual(submission.result['engine'], 'openai')
@@ -92,9 +92,9 @@ class EngineFlowTests(HomeworkBase):
         self.assertEqual(seen.data['status'], 'pending_review')
         self.assertIsNone(seen.data['overall_score'])
         approved = self.review(submission.id)
-        self.assertEqual((approved.data['status'], approved.data['overall_score']), ('done', 78.0))
+        self.assertEqual((approved.data['status'], approved.data['overall_score']), ('done', 77.5))
         seen = self.api(self.student).get(f'/api/v1/homework/submissions/{submission.id}/')
-        self.assertEqual(seen.data['overall_score'], 78.0)
+        self.assertEqual(seen.data['overall_score'], 77.5)
 
     def test_prompt_carries_the_task_the_student_text_and_the_teacher_instructions(self):
         self.checking(description='Tenglamalarni yeching', extra_instructions="Qat'iy bo'l")
@@ -152,7 +152,7 @@ class EngineFlowTests(HomeworkBase):
         self.fake.reply = completion(GRADE)
         self.assertEqual(services.sync_ai_results()['done'], 1)
         submission.refresh_from_db()
-        self.assertEqual(submission.ai_overall_score, 78.0)
+        self.assertEqual(submission.ai_overall_score, 77.5)  # model aytgan 78 emas, savollar o'rtachasi
 
     def test_one_cycle_grades_only_a_few_and_the_rest_wait(self):
         for _ in range(services.ENGINE_PER_RUN + 2):
@@ -215,12 +215,33 @@ class CleanResultTests(SimpleTestCase):
         self.assertEqual(result['grade'], 'Jiddiy yaxshilash kerak')
 
     @override_settings(**LLM_ON)
-    def test_a_weighted_overall_inside_the_item_range_is_kept(self):
-        result = ai_grader.clean_result({'overall_score': 62, 'questions': [{'score': 100}, {'score': 40}]})
-        self.assertEqual(result['overall_score'], 62.0)  # 100 va 40 orasida: og'irlikli o'rtacha bo'lishi mumkin
+    def test_the_overall_score_is_computed_from_the_items_not_taken_from_the_model(self):
+        # haqiqiy holat (gpt-4o-mini): savollar 100/0/100, model esa umumiy ball 100 bergan
+        result = ai_grader.clean_result({'overall_score': 100, 'questions': [{'score': 100}, {'score': 0}, {'score': 100}]})
+        self.assertEqual(result['overall_score'], 66.7)
+        # savollar 100/0, model umumiy 0 (yoki 80) bergan
+        self.assertEqual(ai_grader.clean_result({'overall_score': 0, 'questions': [{'score': 100}, {'score': 0}]})['overall_score'], 50.0)
+        self.assertEqual(ai_grader.clean_result({'overall_score': 80, 'questions': [{'score': 100}, {'score': 0}]})['overall_score'], 50.0)
+
+    @override_settings(**LLM_ON)
+    def test_item_weights_from_the_assignment_points_are_respected(self):
+        result = ai_grader.clean_result({'overall_score': 10, 'questions': [
+            {'score': 100, 'weight': 60}, {'score': 40, 'weight': 40}]})
+        self.assertEqual(result['overall_score'], 76.0)  # (100*60 + 40*40) / 100
+
+    @override_settings(**LLM_ON)
+    def test_broken_weights_count_as_equal(self):
+        for bad in (0, -3, 'x', None, float('inf'), 5000):
+            result = ai_grader.clean_result({'questions': [{'score': 100, 'weight': bad}, {'score': 50}]})
+            self.assertEqual(result['overall_score'], 75.0, bad)
+
+    @override_settings(**LLM_ON)
+    def test_items_without_a_score_do_not_count(self):
+        result = ai_grader.clean_result({'overall_score': 99, 'questions': [{'score': 80}, {'analysis': "bahosiz"}]})
+        self.assertEqual(result['overall_score'], 80.0)
 
     def test_prompt_defines_scores_as_percentages_and_caps_a_wrong_answer(self):
-        for phrase in ('PERCENTAGE', 'never raw points', 'weighted average', 'wrong final answer must not get more than 60'):
+        for phrase in ('PERCENTAGE', 'never raw points', 'weighted average', '"weight"', 'wrong final answer must not get more than 60'):
             self.assertIn(phrase, ai_grader._SYSTEM)
 
     @override_settings(**LLM_ON)

@@ -217,6 +217,22 @@ class EmbeddedImageTests(AiImageBase):
         self.grade()
         self.assertEqual(len(sent_images(self.fake)), 1)
 
+    def test_a_short_typed_answer_next_to_a_picture_is_not_thrown_away(self):
+        # haqiqiy holat: "1) 1 + 1 = 2" 80 belgidan qisqa bo'lgani uchun "matn yo'q" deb tashlanardi
+        assignment_id = self.assignment()
+        data = docx_with([jpeg_bytes((800, 600))], text='1) 1 + 1 = 2')
+        self.post(assignment_id, SimpleUploadedFile('ish.docx', data, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'))
+        self.grade()
+        self.assertIn('1 + 1 = 2', prompt_text(self.fake))
+        self.assertEqual(len(sent_images(self.fake)), 1)
+
+    def test_a_word_file_with_only_a_short_answer_is_graded(self):
+        assignment_id = self.assignment()
+        data = docx_with([], text='x = 5')
+        self.post(assignment_id, SimpleUploadedFile('ish.docx', data, content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'))
+        self.grade()
+        self.assertIn('x = 5', prompt_text(self.fake))
+
     def test_a_corrupt_archive_gives_no_images_instead_of_crashing(self):
         self.assertEqual(hw_images.docx_images(b'not a zip'), [])
         self.assertEqual(hw_images.pdf_images(b'%PDF-1.4 broken'), [])

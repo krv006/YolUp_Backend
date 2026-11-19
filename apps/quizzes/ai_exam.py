@@ -123,6 +123,8 @@ _WRITER_SYSTEM = (
     'expression (digits, + - * / ^ ( ) and sqrt() only, no words or units) whose value equals the correct answer, '
     'e.g. "check": "3*(4+5)"; it is used to verify your answer automatically. Omit it when the answer is not a '
     'single computable number. '
+    'For an mcq that asks to solve an equation for x, ALSO add "equation": the equation exactly as written with an explicit '
+    '* for multiplication, e.g. "equation": "8-2*x=3*x+11"; the correct option must be the value of x (checked automatically). '
     'Do not number the questions and do not repeat the block instruction inside each question '
     '(it is shown separately). The section spec may carry a "focus": use that part of the material for this section. If "passage" is requested, write the passage yourself from the source material '
     '(adapt/rewrite it into a coherent text within the word range, keep it factual); otherwise use "passage": "". '

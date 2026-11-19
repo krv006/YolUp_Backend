@@ -100,3 +100,58 @@ class SectionIntegrationTests(SimpleTestCase):
 
     def test_the_writer_is_told_to_send_a_check_expression(self):
         self.assertIn('"check"', ai_exam._WRITER_SYSTEM)
+
+
+class EquationKeyTests(SimpleTestCase):
+    """Tenglama savoli: belgilangan javob tenglamani qanoatlantiradimi (haqiqiy xato: "4x-3=2x+9" uchun 5 belgilangan edi)."""
+
+    def test_the_options_that_satisfy_the_equation_are_found(self):
+        self.assertEqual(mathcheck.satisfying_options('4*x-3=2*x+9', ['2', '3', '1', '5']), [])  # to'g'ri javob (6) yo'q
+        self.assertEqual(mathcheck.satisfying_options('4*x-3=2*x+9', ['2', '6', '1', '5']), [1])
+        self.assertEqual(mathcheck.satisfying_options('2x+3=11', ['x = 3', 'x = 4']), [1])  # "2x" va "x = " yozuvi
+
+    def test_fractions_negatives_and_brackets(self):
+        self.assertEqual(mathcheck.satisfying_options('8-2*x=3*x+11', ['-3', '-0.6', '1']), [1])
+        self.assertEqual(mathcheck.satisfying_options('5-2*x=3*x+1', ['0', '4/5', '1']), [1])
+        self.assertEqual(mathcheck.satisfying_options('x+4=3*(x-2)', ['x = 8', 'x = 5']), [1])
+        self.assertEqual(mathcheck.satisfying_options('6-x=2(x+2)', ['-2', '2/3']), [1])
+
+    def test_what_cannot_be_checked_is_left_alone(self):
+        self.assertIsNone(mathcheck.satisfying_options('', ['1', '2']))
+        self.assertIsNone(mathcheck.satisfying_options('2*x+3', ['1', '2']))            # tenglama emas
+        self.assertIsNone(mathcheck.satisfying_options('x^2=4', ['one', 'two']))        # variantlar son emas
+        self.assertIsNone(mathcheck.satisfying_options('import os=x', ['1']))           # xavfli matn
+        self.assertIsNone(mathcheck.satisfying_options('2*x=4', []))
+        self.assertIsNone(mathcheck.satisfying_options('2*x=4=6', ['2']))               # bitta "=" bo'lishi shart
+
+    def test_an_mcq_with_a_wrong_key_contradicts(self):
+        raw = {'kind': 'mcq', 'text': '4x-3=2x+9', 'equation': '4*x-3=2*x+9', 'options': ['2', '3', '1', '5'], 'answer': 3}
+        self.assertTrue(mathcheck.contradicts(raw))
+        right = {**raw, 'options': ['2', '3', '6', '5'], 'answer': 2}
+        self.assertFalse(mathcheck.contradicts(right))
+        wrong_key_right_value_present = {**right, 'answer': 0}
+        self.assertTrue(mathcheck.contradicts(wrong_key_right_value_present))
+
+    def test_an_unverifiable_mcq_is_never_rejected(self):
+        self.assertFalse(mathcheck.contradicts({'kind': 'mcq', 'equation': 'garbage', 'options': ['1', '2'], 'answer': 0}))
+        self.assertFalse(mathcheck.contradicts({'kind': 'mcq', 'equation': '2*x=4', 'options': ['1', '2'], 'answer': 'x'}))
+
+    def test_the_equation_is_taken_from_a_bare_question_text_when_the_model_omits_it(self):
+        self.assertEqual(mathcheck.equation_of({'text': 'Solve for x: 4*x - 7 = 3*x + 2'}), '4*x - 7 = 3*x + 2')
+        self.assertEqual(mathcheck.equation_of({'text': '2x+3=11?'}), '2x+3=11')
+        self.assertEqual(mathcheck.equation_of({'text': 'x yechimi?', 'equation': ' 2*x=4 '}), '2*x=4')
+        # tenglama emas yoki oddiy gap: aralashilmaydi
+        self.assertEqual(mathcheck.equation_of({'text': 'If x = 3, what is 2x + 1?'}), '')
+        self.assertEqual(mathcheck.equation_of({'text': 'Which number is a prime?'}), '')
+        self.assertEqual(mathcheck.equation_of({'text': 'Solve: x = 3 = y'}), '')
+        # to'liq gapli savollar: faqat x so'ralganda
+        self.assertEqual(mathcheck.equation_of({'text': 'What is the value of x in the equation 4 * x + 2 = 2 * x + 1'}), '4 * x + 2 = 2 * x + 1')
+        self.assertEqual(mathcheck.equation_of({'text': 'If 7 * x - 2 = 3 * x + 10, what is x?'}), '7 * x - 2 = 3 * x + 10')
+        self.assertEqual(mathcheck.equation_of({'text': 'If x + 2 = 5, what is 2x?'}), '')      # 2x so'ralyapti: tegilmaydi
+        self.assertEqual(mathcheck.equation_of({'text': 'If 2x = 6, what is 3x + 1?'}), '')
+        self.assertEqual(mathcheck.equation_of(None), '')
+
+    def test_an_mcq_whose_text_is_the_equation_is_checked_without_the_field(self):
+        raw = {'kind': 'mcq', 'text': 'Solve for x: 4*x - 7 = 3*x + 2', 'options': ['3', '7', '9', '1'], 'answer': 1}
+        self.assertTrue(mathcheck.contradicts(raw))
+        self.assertFalse(mathcheck.contradicts({**raw, 'answer': 2}))

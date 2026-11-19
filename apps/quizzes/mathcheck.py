@@ -121,9 +121,75 @@ def stated_answers(raw: dict) -> list:
     return []
 
 
+def _satisfies(equation: str, value: Fraction):
+    """True/False: `value` tenglamaga qo'yilganda ikki tomon tengmi. Tekshirib bo'lmasa None."""
+    text = str(equation or '').replace('−', '-').replace('×', '*').replace('·', '*').replace('÷', '/')
+    if text.count('=') != 1 or not re.search(r'(?<![A-Za-z])x(?![A-Za-z])', text) or len(text) > MAX_EXPRESSION:
+        return None
+    text = re.sub(r'(\d)\s*([x(])', r'\1*\2', text)  # 3x -> 3*x, 2(x+1) -> 2*(x+1)
+    text = re.sub(r'\)\s*\(', ')*(', text)          # (a)(b) -> (a)*(b)
+    text = re.sub(r'\)\s*x', ')*x', text)           # (a)x -> (a)*x
+    text = re.sub(r'x\s*\(', 'x*(', text)           # x(a) -> x*(a)
+    text = re.sub(r'(?<![A-Za-z])x(?![A-Za-z])', f'({value.numerator}/{value.denominator})', text)
+    left, right = text.split('=')
+    try:
+        return _close(evaluate(left), evaluate(right))
+    except Unsafe:
+        return None
+
+
+_EQUATION_RUN = re.compile(r'[0-9x+\-*/().\s−×÷]*=[0-9x+\-*/().\s−×÷]*')
+_ASKS_FOR_X = re.compile(r'\b(?:of|for|is|find|determine|solve)\s+x(?![A-Za-z0-9])|(?<![A-Za-z0-9])x\s*\?', re.IGNORECASE)
+_LONE_X = re.compile(r'(?<![A-Za-z])x(?![A-Za-z])')
+
+
+def equation_of(raw: dict) -> str:
+    """Savoldagi tenglama: modelning `equation` maydoni; yo'q bo'lsa — savol matnida bitta tenglama bor va savol aynan `x` ni
+    so'rasa ("Solve for x: 3x+5=2x+15", "What is x in 4x+2=2x+1?") shu tenglama. "If x = 3, what is 2x+1?" kabilarga tegilmaydi.
+    Aniqlanmasa ''."""
+    if not isinstance(raw, dict):
+        return ''
+    given = str(raw.get('equation') or '').strip()
+    if given:
+        return given
+    text = str(raw.get('text') or '')
+    if text.count('=') != 1:
+        return ''
+    runs = [run.strip() for run in _EQUATION_RUN.findall(text) if '=' in run]
+    runs = [run for run in runs if _LONE_X.search(run)]
+    if len(runs) != 1 or runs[0].count('=') != 1:
+        return ''
+    rest = _ASKS_FOR_X.sub(' ', text.replace(runs[0], ' '))
+    return '' if _LONE_X.search(rest) else runs[0]
+
+
+def satisfying_options(equation, options) -> list | None:
+    """Tenglama (bitta noma'lum `x`, ko'paytirish aniq yoki "3x" ko'rinishida) uchun variantlardan qaysilari uni qanoatlantiradi
+    (indekslar). Tenglamani/variantlarni tekshirib bo'lmasa — None (savol o'z holicha qoladi)."""
+    if not isinstance(options, (list, tuple)) or not options:
+        return None
+    verdicts = []
+    for option in options:
+        value = number_in(option)
+        verdicts.append(_satisfies(equation, value) if value is not None else None)
+    if all(v is None for v in verdicts):
+        return None
+    return [index for index, ok in enumerate(verdicts) if ok]
+
+
 def contradicts(raw: dict) -> bool:
     """True — savolda "check" ifodasi bor, hisoblab bo'ldi va javob bilan MOS KELMAYDI (savol yaroqsiz).
     Tekshirib bo'lmasa (ifoda yo'q/noto'g'ri, javob son emas) — False: savol o'z holicha qoladi."""
+    if isinstance(raw, dict) and raw.get('kind') == 'mcq' and equation_of(raw):
+        # tenglama savoli: belgilangan variant tenglamani qanoatlantirmasa — kalit xato
+        try:
+            index = int(raw.get('answer'))
+        except (TypeError, ValueError):
+            index = None
+        good = satisfying_options(equation_of(raw), raw.get('options'))
+        if good is not None and index is not None and index not in good:
+            logger.info("AI savoli kaliti tenglamani qanoatlantirmaydi: %s", str(raw.get('text'))[:120])
+            return True
     if not isinstance(raw, dict) or not raw.get('check'):
         return False
     try:
