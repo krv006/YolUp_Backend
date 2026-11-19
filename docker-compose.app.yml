@@ -28,7 +28,7 @@ x-backend: &backend
   volumes:
     - media:/app/media
     - logs:/app/logs
-    # - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
 
 services:
   db:
