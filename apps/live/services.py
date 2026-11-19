@@ -49,6 +49,12 @@ ATTENTION_SEGMENT_PAD = 0.15  # har bo'lakning chetidan 15% — qo'shni tekshiru
 _JOIN_QUEUE_WINDOW_SECONDS = 15  # shu vaqt jim tursa navbat o'zi nolga qaytadi
 _JOIN_QUEUE_BATCH_SIZE = 6
 _JOIN_QUEUE_BATCH_INTERVAL_MS = 1200
+# 2026-11-19 (haqiqiy hodisa): hisoblagich Redis'da MUDDATSIZ qolib ketgan edi (TTL -1, qiymat 3183) va har kirish uni
+# oshirib, o'quvchilarga `join_delay_ms` = 636 000 (10+ daqiqa) berdi: sahifa "loading" da qotdi, LiveKit'ga ulanish
+# umuman boshlanmadi. Sabab: Django `incr` kalit bor-yo'qligini tekshirib, KEYIN oshiradi; orada kalit tugasa, Redis INCR
+# uni muddatsiz qayta yaratadi. Endi (1) qayta yaratilgan hisoblagichga muddat qo'yiladi, (2) mantiqsiz katta qiymat
+# (haqiqiy portlashda ham 5 daqiqalik kutish = 1500 pozitsiya bir 15 soniyalik oynada bo'lmaydi) o'zini tiklaydi.
+_JOIN_QUEUE_MAX_POSITION = 1500
 # 2026-09-04: qat'iy CHEGARA (masalan 20s) ATAYLAB YO'Q — chegara qo'ysak,
 # chegaraga yetgan HAMMASI o'sha nuqtaning o'zida (yoki hatto tasodifiy
 # tarqatilgan tor oynada ham) zichlashib qolib, aynan oldini olishga
@@ -75,6 +81,12 @@ def _compute_join_delay_ms() -> int:
     except ValueError:
         cache.set(key, 1, timeout=_JOIN_QUEUE_WINDOW_SECONDS)
         position = 1
+    else:
+        if position == 1 or position > _JOIN_QUEUE_MAX_POSITION:
+            # position == 1: INCR kalitni o'zi (muddatsiz) yaratdi, ya'ni orada eskirgan edi; katta qiymat: qotib qolgan
+            # hisoblagich. Ikkalasida ham yangi oyna boshlaymiz (muddati bilan).
+            cache.set(key, 1, timeout=_JOIN_QUEUE_WINDOW_SECONDS)
+            position = 1
     return ((position - 1) // _JOIN_QUEUE_BATCH_SIZE) * _JOIN_QUEUE_BATCH_INTERVAL_MS
 
 

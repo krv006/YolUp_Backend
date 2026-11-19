@@ -1817,6 +1817,41 @@ class JoinQueueTests(APITestCase):
         self.assertEqual(delays[-1], expected_last)
 
 
+    def test_a_stuck_counter_without_expiry_heals_itself(self):
+        """2026-11-19 haqiqiy hodisa: hisoblagich muddatsiz qolib 3183 ga yetgan, o'quvchilar 10+ daqiqa kutgan."""
+        from django.core.cache import cache
+
+        from apps.live.services import _JOIN_QUEUE_MAX_POSITION, _compute_join_delay_ms
+
+        cache.set('live:join_queue:global', 3183, timeout=None)  # muddatsiz
+        self.assertEqual(_compute_join_delay_ms(), 0)
+        self.assertEqual(cache.get('live:join_queue:global'), 1)
+        self.assertLess(_JOIN_QUEUE_MAX_POSITION * 1200 // 6, 400_000)  # chegara ham 5 daqiqadan oshmaydi
+
+    def test_a_counter_recreated_by_a_race_gets_an_expiry(self):
+        """`incr` kalit tekshiruvidan keyin kalit tugasa, Redis uni muddatsiz yaratadi (qiymat 1): muddat qayta qo'yilishi shart."""
+        from unittest import mock
+
+        from django.core.cache import cache
+
+        from apps.live import services
+
+        with mock.patch.object(services.cache, 'incr', return_value=1), mock.patch.object(services.cache, 'set') as store:
+            self.assertEqual(services._compute_join_delay_ms(), 0)
+        store.assert_called_once_with('live:join_queue:global', 1, timeout=services._JOIN_QUEUE_WINDOW_SECONDS)
+
+    def test_normal_burst_is_not_reset_midway(self):
+        from django.core.cache import cache
+
+        from apps.live.services import _compute_join_delay_ms
+
+        cache.delete('live:join_queue:global')
+        delays = [_compute_join_delay_ms() for _ in range(20)]
+        self.assertEqual(delays[0], 0)
+        self.assertEqual(delays[6], 1200)   # 7-kishi: ikkinchi partiya
+        self.assertEqual(delays[19], 3600)  # 20-kishi: to'rtinchi partiya, oraliqda nolga qaytmagan
+
+
 class MicPermissionTests(APITestCase):
     """Mikrofon so'rov/ruxsat: o'quvchi standart holatda mikrofonsiz kiradi,
     so'raydi ("qo'l ko'tarish"), o'qituvchi ruxsat beradi."""
