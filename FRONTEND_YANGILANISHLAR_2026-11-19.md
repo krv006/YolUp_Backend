@@ -40,7 +40,11 @@ Hali tasdiqlanmagan: haqiqiy telefonga xabar yetib borishi (to'g'ri FCM tokeni k
 
 `sync_provisioned_passwords --apply` productionda ishga tushirildi: avtomatik ochilgan 4 ta rol akkaunti tuzatildi, takror ishga tushirish hech narsani o'zgartirmadi. Yangi avtomatik ochiladigan akkauntlar ham manba parolini oladi. O'qituvchi "O'quvchi"/"Kuzatuvchi" akkauntida "Parolni o'zgartirish" ni o'qituvchi paroli bilan ocha oladi. `uz` da parol xabarlari o'zbekcha. Frontendda o'zgarish shart emas. Batafsil: [FRONTEND_JAVOB_PAROL_OZGARTIRISH_2026-11-18.md](FRONTEND_JAVOB_PAROL_OZGARTIRISH_2026-11-18.md).
 
-## 4. Hali ochiq (backend tomonida, kalit/qaror kutilmoqda)
+## 4. AI qayta ishlayapti (yangi OpenAI kaliti, 2026-11-19)
 
-- **OpenAI kaliti muddati tugagan:** AI baholash, AI test yaratish, yozma imtihon AI va Speaking (STT/TTS) hozir ishlamaydi. O'qituvchi qo'lda baholaydi. Yangi kalit kelgach HEIC/ko'p sahifali rasmlar haqiqiy OpenAI bilan sinaladi.
+AI baholash, AI test yaratish, yozma imtihon AI va Speaking (ovoz → matn, matn → ovoz) yana ishlaydi. Haqiqiy tekshiruv: burilgan rasmli uy vazifasi to'g'ri baholandi (xato javob topildi, xulosa o'zbekcha), Speaking audio aylanishi ishladi. Frontendda o'zgarish shart emas. Oldingi ogohlantirishlar (HEIC, `ai_result.skipped_images`) o'z kuchida.
+
+## 5. Hali ochiq
+
 - **Haqiqiy mobil push:** to'g'ri FCM tokeni kerak (2-bo'lim).
+- HEIC va 3+ sahifali hujjat haqiqiy OpenAI bilan hali sinalmagan (testlarda tekshirilgan). QA'da shularni ham sinab ko'ring.

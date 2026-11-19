@@ -200,3 +200,16 @@ Firebase loyihasi `yolup-28bb7`. Service account JSON APP serverda `/etc/yolup/f
 ### 13a. MEDIA serverga ham ulandi (2026-11-19), `92cc52f`
 
 "Yozuv tayyor" xabarlarini MEDIA yaratadi, shuning uchun kalit u yerga ham qo'yildi (`/etc/yolup/firebase-service-account.json`, root, 600), `docker-compose.media.yml` uni ulaydi, `.env` ga ikki qator qo'shildi. MEDIA kodi `08c2296` ga yangilandi; `rec`, `rec-cron`, `transcoder` qayta yig'ilib ishga tushirildi (jonli dars 0, ffmpeg ishlamayotgan edi; LiveKit va Caddy tegilmadi). Tekshiruv: Firebase ishga tushdi, Google so'rovni qabul qildi (soxta tokenni rad etdi), loglarda xato 0.
+
+## 14. OpenAI kaliti almashtirildi, AI qayta ishlayapti (2026-11-19)
+
+Yangi `sk-proj-...` kalit APP `.env` ga qo'yildi (kalit hujjatga yozilmaydi), konteynerlar qayta yaratildi (jonli dars 0), web `healthy`. MEDIA'ga kerak emas: AI chaqiruvlari faqat APP'da.
+
+**Haqiqiy OpenAI bilan tekshirilgan:**
+- Kalit: `gpt-4o-mini`, `whisper-1`, `tts-1` hisobda ochiq; chat so'rovi `200`.
+- **To'liq AI baholash** (yon tomonga burilgan EXIF rasm, yuklash → `sync_ai_results`): `pending_review`, rasm to'g'ri o'qildi, 1-savol 100 ball, 2-savol (`2x+3=11`, o'quvchi x=5) xato deb topildi (to'g'ri javob x=4), umumiy ball 80, xulosa o'zbekcha; 26 461 token, ~5.7 soniya.
+- **Production konteynerida:** chat JSON (`17+25` → 42); Speaking: matn → ovoz → matn aylanishi ("The quick brown fox..." so'zma-so'z qaytdi, 9 ta so'z vaqti bilan).
+- **Rasm tokeni formulasi:** 768x1024 sahifa uchun taxmin 25 501, OpenAI haqiqiy hisobi 25 524 (farq: matn so'rovi). Byudjet hisobi to'g'ri.
+- Sinov vaqtinchalik edi: repoga test qo'shilmadi, productionda bazaga yozilgan narsa yo'q (faqat so'rovlar).
+
+**Hali sinalmagan:** HEIC va ko'p sahifali (3+) hujjat haqiqiy OpenAI bilan (unit testlarda tekshirilgan); AI test yaratish va IELTS writing haqiqiy so'rov bilan.
