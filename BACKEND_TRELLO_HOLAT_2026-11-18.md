@@ -186,3 +186,13 @@ Kod o'zgarmadi (`08c2296`). APP `.env` ga ikki qator qo'shildi: `REGISTER_REQUIR
 - Hozir productionda 28 foydalanuvchidan faqat 2 tasida tasdiqlangan email bor; qolganlarga `/me` da `email_setup_required: true` chiqadi. Muddatgacha bu faqat eslatma; 3-dekabrdan keyin majburiylikni frontend qo'llaydi.
 - `email_exempt` hech kimga qo'yilmadi: bolalar akkauntlarini ishonchli aniqlab bo'lmaydi (`child.create` audit yozuvi yo'q). Telefonsiz o'quvchilar: `lolo`, `Jaloliddin` (va test akkaunt `admin`). Ular bola bo'lsa, adminda `email_exempt` belgilanadi. Bolani ota-ona/o'qituvchi yaratganda belgi avtomatik qo'yiladi.
 - Qaytarish: `.env` dagi ikki qatorni olib tashlab, `docker compose -f docker-compose.app.yml up -d`.
+
+## 13. Mobil push (FCM) ulandi (2026-11-19), APP `18f5b13`
+
+Firebase loyihasi `yolup-28bb7`. Service account JSON APP serverda `/etc/yolup/firebase-service-account.json` (egasi root, ruxsat 600, papka 700), `docker-compose.app.yml` uni konteynerga `/run/secrets/...` sifatida faqat o'qish uchun ulaydi. `.env`: `GOOGLE_APPLICATION_CREDENTIALS` va `FCM_PROJECT_ID=yolup-28bb7`. Kalit repoga qo'shilmagan.
+
+**Productionda tekshirildi:** Firebase Admin ishga tushdi; ro'yxatdagi qurilma tokeniga `dry_run` yuborilganda Google so'rovni qabul qilib, faqat tokenning o'zini rad etdi ("not a valid FCM registration token"). Ya'ni kalit va loyiha to'g'ri, xato tokenda. Hech qanday haqiqiy xabar yuborilmadi.
+
+**Hali tasdiqlanmagan:** haqiqiy qurilmaga xabar yetib borishi. Productionda faqat 1 ta qurilma bor (`ios`) va tokeni FCM tokeni emas (ehtimol xom APNs tokeni yoki sinov qiymati). Mobil ilova to'g'ri FCM tokenini yuborganda sinab ko'riladi. iOS uchun Firebase konsolida APNs kaliti ham yuklangan bo'lishi kerak.
+
+**Eslatma:** `google-services.json` Android ilovasi uchun (mobil jamoaga beriladi), backendga kerak emas. MEDIA serverda FCM ulanmagan: "yozuv tayyor" xabarlarini MEDIA yaratadi, shuning uchun ular uchun mobil push hozircha ketmaydi (web push va ilova ichidagi xabar ishlaydi).
