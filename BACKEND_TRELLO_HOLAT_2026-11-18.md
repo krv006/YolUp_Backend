@@ -171,3 +171,18 @@ Frontend `BACKEND_PAROL_OZGARTIRISH.md` yubordi; ikkala kamchilik ham haqiqiy ek
 - Productionda haqiqiy 8 ta tekshiruv (bekor qilinadigan tranzaksiyada) o'tdi: yangi rol akkaunti ochilishi, xesh tengligi, manba paroli bilan kirish, parolni o'zgartirish, noto'g'ri joriy parol rad etilishi, uz va ru xabarlari.
 - Butun backend test to'plami: 2075 ta, hammasi o'tdi. MEDIA'ga tegilmadi (bu o'zgarish MEDIA'da ishlatilmaydi, u `17124e3` da qoldi).
 - Parol qoidalari (raqam/katta harf) backendda ataylab qattiqlashtirilmadi (mobil ilova va mavjud foydalanuvchilar).
+
+## 12. Email majburiy qilindi (2026-11-19), APP serverda faqat `.env` o'zgardi
+
+Kod o'zgarmadi (`08c2296`). APP `.env` ga ikki qator qo'shildi: `REGISTER_REQUIRES_EMAIL=1` va `EMAIL_SETUP_DEADLINE=2026-12-03` (14 kun). Konteynerlar qayta yaratildi (jonli dars 0 ta edi), web `healthy`, loglarda xato 0.
+
+**Productionda haqiqiy tekshiruv (bekor qilinadigan tranzaksiyada, iz qolmadi):**
+- `GET /auth/register/options/` → `email_required: true`.
+- Emailsiz ro'yxatdan o'tish `400`: "Email tasdiqlanishi shart: avval emailga kelgan kodni tasdiqlang." Akkaunt yaratilmadi.
+- Emailsiz mavjud foydalanuvchi `/auth/me/`: `email_setup_required: true`, `email_setup_deadline: 2026-12-03`.
+- `email_exempt` foydalanuvchi: `email_setup_required: false`.
+
+**Muhim:**
+- Hozir productionda 28 foydalanuvchidan faqat 2 tasida tasdiqlangan email bor; qolganlarga `/me` da `email_setup_required: true` chiqadi. Muddatgacha bu faqat eslatma; 3-dekabrdan keyin majburiylikni frontend qo'llaydi.
+- `email_exempt` hech kimga qo'yilmadi: bolalar akkauntlarini ishonchli aniqlab bo'lmaydi (`child.create` audit yozuvi yo'q). Telefonsiz o'quvchilar: `lolo`, `Jaloliddin` (va test akkaunt `admin`). Ular bola bo'lsa, adminda `email_exempt` belgilanadi. Bolani ota-ona/o'qituvchi yaratganda belgi avtomatik qo'yiladi.
+- Qaytarish: `.env` dagi ikki qatorni olib tashlab, `docker compose -f docker-compose.app.yml up -d`.
