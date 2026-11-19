@@ -27,6 +27,8 @@ x-backend: &backend
   volumes:
     - recordings:/app/recordings
     - logs:/app/logs
+    # Mobil push (FCM): "yozuv tayyor" xabarlarini shu serverdagi xizmatlar yaratadi (kalit /etc/yolup da, .env da GOOGLE_APPLICATION_CREDENTIALS)
+    - /etc/yolup/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
 
 services:
   livekit:
