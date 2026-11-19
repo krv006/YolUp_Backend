@@ -196,3 +196,7 @@ Firebase loyihasi `yolup-28bb7`. Service account JSON APP serverda `/etc/yolup/f
 **Hali tasdiqlanmagan:** haqiqiy qurilmaga xabar yetib borishi. Productionda faqat 1 ta qurilma bor (`ios`) va tokeni FCM tokeni emas (ehtimol xom APNs tokeni yoki sinov qiymati). Mobil ilova to'g'ri FCM tokenini yuborganda sinab ko'riladi. iOS uchun Firebase konsolida APNs kaliti ham yuklangan bo'lishi kerak.
 
 **Eslatma:** `google-services.json` Android ilovasi uchun (mobil jamoaga beriladi), backendga kerak emas. MEDIA serverda FCM ulanmagan: "yozuv tayyor" xabarlarini MEDIA yaratadi, shuning uchun ular uchun mobil push hozircha ketmaydi (web push va ilova ichidagi xabar ishlaydi).
+
+### 13a. MEDIA serverga ham ulandi (2026-11-19), `92cc52f`
+
+"Yozuv tayyor" xabarlarini MEDIA yaratadi, shuning uchun kalit u yerga ham qo'yildi (`/etc/yolup/firebase-service-account.json`, root, 600), `docker-compose.media.yml` uni ulaydi, `.env` ga ikki qator qo'shildi. MEDIA kodi `08c2296` ga yangilandi; `rec`, `rec-cron`, `transcoder` qayta yig'ilib ishga tushirildi (jonli dars 0, ffmpeg ishlamayotgan edi; LiveKit va Caddy tegilmadi). Tekshiruv: Firebase ishga tushdi, Google so'rovni qabul qildi (soxta tokenni rad etdi), loglarda xato 0.
