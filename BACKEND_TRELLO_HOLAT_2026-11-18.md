@@ -213,3 +213,41 @@ Yangi `sk-proj-...` kalit APP `.env` ga qo'yildi (kalit hujjatga yozilmaydi), ko
 - Sinov vaqtinchalik edi: repoga test qo'shilmadi, productionda bazaga yozilgan narsa yo'q (faqat so'rovlar).
 
 **Hali sinalmagan:** HEIC va ko'p sahifali (3+) hujjat haqiqiy OpenAI bilan (unit testlarda tekshirilgan); AI test yaratish va IELTS writing haqiqiy so'rov bilan.
+
+## 15. AI bo'yicha qolgan ishlar: haqiqiy OpenAI bilan sinash va topilgan xatolar (2026-11-19)
+
+Hamma AI imkoniyati haqiqiy OpenAI kaliti bilan (vaqtinchalik test, repoga qo'shilmagan) sinab chiqildi. Sinovdan o'tganlar va topilgan 4 ta haqiqiy xato:
+
+**Ishlagani (haqiqiy OpenAI bilan):**
+- 3 ta alohida surat (har biri bitta misol): hammasi o'qildi, xato misol topildi.
+- Yon tomonga burilgan (EXIF) surat: to'g'ri o'qildi.
+- HEIC (iPhone): `.jpg` ga o'tkazildi, o'qildi, xato topildi.
+- Vazifa sharti faqat rasmda, javoblar alohida suratda: AI savolni rasmdan o'qib baholadi.
+- 5 sahifali rasmli PDF: byudjetga 3 sahifa sig'di, 2 tasi `skipped_images` + o'qituvchiga ogohlantirish bilan qoldi.
+- Word (matn + ichiga qo'yilgan rasm).
+- Speaking: ovoz → matn (so'zma-so'z), 3 mezon bo'yicha baho.
+- Guruh AI xulosasi (`POST .../ai-summary/`).
+- AI test yaratish: Reading (8 savol, to'g'ri javoblar bilan, e'lon qilindi) va Listening (haqiqiy ovoz, 10 savol, skript yashirin).
+- O'quvchi uchun AI tushuntirish va mashq; IELTS Writing (Task 2, band 6.0, mezonlar bo'yicha).
+
+**Topilgan va tuzatilgan xatolar:**
+1. **Umumiy ball savollarga mos kelmasdi.** `gpt-4o-mini` savollar 100/0/100 bo'lsa ham umumiy 100, 100/0 bo'lsa 0 yoki 80 deb berardi (4 ta haqiqiy ishdan 4 tasida). O'qituvchining ball maydoni shu bilan to'ldiriladi. Endi umumiy ballni kod hisoblaydi: savol ballari o'rtachasi, vazifada ball yozilgan bo'lsa shu og'irliklar bilan (`weight`). Eski "oraliqda bo'lsa qabul" qoidasi olib tashlandi.
+2. **Qisqa matnli javob "matn yo'q" deb tashlanardi.** Word/PDF'da 80 belgidan qisqa matn (masalan "1) 1 + 1 = 2") AI'ga umuman berilmasdi. Endi o'quvchi ishida qisqa matn ham o'tadi.
+3. **O'quvchi mashqida noto'g'ri javobli savollar.** Haqiqiy sinovda 11 ta tenglama savolidan 4 tasida kalit xato edi ("4x-3=2x+9" uchun 5 belgilangan, aslida 6). Tuzatish: (a) model avval yechimini yozadi, keyin javobni tanlaydi; (b) savollar test yaratishdagi AI tekshiruvchidan o'tadi; (c) **tenglamani kod o'zi tekshiradi**: javobni qo'yib ikki tomonni solishtiradi (`mathcheck.satisfying_options`). Kalit xato bo'lib, to'g'ri qiymat variantlar orasida bo'lsa kalit tuzatiladi, bo'lmasa savol tashlanadi. Tuzatishdan keyin 38 ta tenglama savoli qo'lda hisoblab tekshirildi: hammasi to'g'ri.
+4. **AI test yaratishda (e'lon qilinadigan testlar) ham xuddi shunday xavf**: tenglama savollari uchun `equation` maydoni so'raladi va kalit tenglamaga zid bo'lsa savol tashlanib, zaxira savol o'rniga keladi.
+
+**Cheklov (muhim):** tekshirish faqat bitta noma'lumli (`x`) chiziqli tenglamalarni qamrab oladi. Boshqa mavzular (geometriya, so'z masalalari, kvadrat tenglama) uchun javob to'g'riligini AI tekshiruvchi tekshiradi, u algebrada ishonchsiz ekani sinovda ko'rindi. O'qituvchi AI yaratgan testni ko'rib chiqishi tavsiya etiladi.
+
+**Hali sinalmagan:** `gpt-4o-mini` "deprecated" bo'lgani uchun boshqa modelga o'tish (qaror sizniki, `OPENAI_MODEL`); IELTS Writing imtihon oqimi (apps/exams) alohida haqiqiy so'rov bilan (u shu `ielts_writing.evaluate` dan foydalanadi, u sinaldi).
+
+## 16. O'quvchi darsga kira olmadi ("loading" da qotdi): qotib qolgan navbat hisoblagichi (2026-11-19)
+
+**Nima bo'lgan:** o'qituvchi darsni ertaroq boshlagan, o'quvchi ekranda "loading" da qolgan. Backend o'quvchiga token bergan, lekin javobda `join_delay_ms = 636 000` (10 daqiqa 36 soniya) bo'lgan: frontend shuncha kutadi va undan keyin LiveKit'ga ulanadi. LiveKit loglarida o'quvchining izi umuman yo'q edi (ulanish hali boshlanmagan).
+
+**Sabab:** ulanishlar navbati (portlashni oldini olish uchun, 6 kishi/1.2 s) global hisoblagich bilan hisoblanadi (`live:join_queue:global`) va u 15 soniya jim turilsa nolga qaytishi kerak. Redis'da bu kalit **muddatsiz** (`TTL = -1`) qolib ketgan va qiymati **3183** ga yetgan: har bir kirish uni oshirib, kutishni o'stirgan. Mumkin bo'lgan mexanizm: Django `incr` avval kalit borligini tekshiradi, keyin oshiradi; orada kalit eskirsa, Redis uni muddatsiz qayta yaratadi. (Qachondan beri qotganini aniq bilmayman; kalit qiymati ko'p kirishni ko'rsatadi, ehtimol 2026-10-31 yuk sinovidan beri.)
+
+**Darhol qilingan:** productionda kalit o'chirildi (faqat vaqtinchalik navbat raqami): yangi kalit muddati bilan yaratildi (TTL 12 s ga tushdi), keyingi o'quvchining kutishi 0.
+
+**Kod tuzatishi (`apps/live/services.py`):** (1) hisoblagich qayta yaratilsa (qiymat 1) muddat majburan qo'yiladi; (2) mantiqsiz katta qiymat (>1500, ya'ni 5 daqiqadan ortiq kutish) o'zini tiklaydi. 3 ta yangi test (qotgan hisoblagich o'zi tiklanadi, poyga holatida muddat qo'yiladi, oddiy portlash o'rtada nolga qaytmaydi); dars va live testlari: 191 ta, hammasi o'tdi. **Serverda hali yo'q (deploy kutadi):** qo'lda tozalash hozircha yetarli, lekin kalit yana qotishi mumkin.
+
+**Frontendga:** `join_delay_ms` ni ko'rsating ("navbatdagi o'rin, ~N soniya") va juda uzun (masalan 30 soniyadan ortiq) bo'lsa foydalanuvchiga xabar bering, aks holda sahifa shunchaki "loading" bo'lib qoladi.
