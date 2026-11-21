@@ -69,6 +69,7 @@ Bu fayl ildizdagi alohida `.md` hujjatlarning hammasini bitta joyga yig'adi (REA
 - [FRONTEND_VAZIFALAR_2026-11-18](#frontend_vazifalar_2026-11-18) — Frontend uchun vazifalar: backend tayyor, frontend qiladigan ishlar (2026-11-18)
 - [FRONTEND_YANGILANISHLAR_2026-11-18_YAKUNIY](#frontend_yangilanishlar_2026-11-18_yakuniy) — Frontend uchun: bugun backendda nima qilindi va frontendda nima qoldi (2026-11-18, yakuniy)
 - [FRONTEND_YANGILANISHLAR_2026-11-19](#frontend_yangilanishlar_2026-11-19) — Frontend va mobil jamoa uchun: 2026-11-19 yangilanishlari
+- [FRONTEND_YANGILANISHLAR_2026-11-21](#frontend_yangilanishlar_2026-11-21) — Frontend va mobil jamoa uchun: 2026-11-21 (kirish tarixi qurilmalar bo'yicha, chat rasmi, dars vaqtidan oldin kirish)
 
 
 ---
@@ -6568,3 +6569,55 @@ AI baholash, AI test yaratish, yozma imtihon AI va Speaking (ovoz → matn, matn
 
 ---
 
+## FRONTEND_YANGILANISHLAR_2026-11-21
+
+> Yangi bo'lim (alohida fayl emas: hujjatlar endi shu faylda).
+
+### Frontend va mobil jamoa uchun: 2026-11-21
+
+Trello kartalari bo'yicha. Productionga chiqargach shu yerda "productionda" deb belgilanadi.
+
+### 1. "Kirish tarixi": har qurilma bitta qator (backend tayyor)
+
+Trello: "kirish tarixi qism da", "kun sana qib qo'yish kerak". Hozir ro'yxat har bir KIRISHNI alohida ko'rsatadi, shuning uchun juda uzun. Kerak: nechta qurilma bo'lsa shuncha qator, har birida oxirgi kirish sanasi va vaqti.
+
+`GET /api/v1/auth/logins/?group=device` (o'zingiz uchun; ota-ona uchun `&student=<id>`, avvalgi ruxsat qoidalari o'zgarmagan). Filtrlar: `device=phone|tablet|computer`, `from`, `to`. Sahifalash bilan ham ishlaydi (`page`, `page_size`: `{count, next, previous, results}`), `count` = qurilmalar soni. Qurilmalar eng oxirgi kirish bo'yicha tartiblangan.
+
+Har qatorda:
+
+| Maydon | Ma'nosi |
+|---|---|
+| `device` | Ko'rsatiladigan nom: "Chrome · Windows", "Mobil ilova" yoki mobil ilova yuborgan model |
+| `browser`, `os`, `device_type` | `device_type`: `phone`, `tablet`, `computer` |
+| `last_login_at` | OXIRGI kirish (ISO sana-vaqt). Kun, sana va soatni shundan ko'rsating |
+| `first_login_at`, `login_count` | Birinchi kirish va shu qurilmadan nechta kirish bo'lgan |
+| `last_ip`, `location`, `country` | Oxirgi kirishdagi IP va joylashuv (`location` GeoIP sozlangan bo'lsagina) |
+| `session_active` | Shu qurilmada hozir ochiq seans bor |
+| `is_current` | Hozirgi qurilma (faqat o'z tarixida) |
+| `last_login_id` | Oxirgi kirish yozuvining id'si (ota-onaning "Bu farzandim" amali uchun) |
+
+Eslatmalar:
+- Qurilma IP bo'yicha aniqlanmaydi (mobil internetda IP tez-tez o'zgaradi). Qurilma = ko'rsatiladigan nom + turi. Brauzer versiyasi yangilansa (Chrome 157 dan 158 ga) yangi qurilma bo'lmaydi.
+- **Mobil jamoaga:** bir nechta telefonni ajratish uchun login so'rovida `X-Device-Name: <model>` sarlavhasini yuboring (masalan "Xiaomi Redmi Note 12"). Aks holda hamma telefonlar bitta "Mobil ilova" qatoriga birlashadi. Sarlavha yuborilmagan eski kirishlar User-Agent bo'yicha guruhlanadi.
+- `?group=device` berilmasa eski ro'yxat (har kirish alohida) o'zgarishsiz qoladi.
+- Qatorni bosganda seansni yopish kerak bo'lsa avvalgi `GET/DELETE /auth/sessions/` ishlatiladi.
+
+### 2. Chatda rasm yuborish: hamma yubora oladi (kod kerak emas)
+
+Trello: "image yuborish qism qande qlamiz". Backendda rasm yuborishni rolga bog'lash yo'q: yozish huquqi bor har kim (o'quvchi, ota-ona, o'qituvchi) rasm yubora oladi: shaxsiy chat, guruh, kanalga izoh. Faqat kanalga POST (post yozish) va "e'lon rejimi" yoqilgan guruhda yozish hamma xabar turi uchun o'qituvchida qoladi. Frontend rasm tugmasini hamma rolga ko'rsatsa bo'ladi. Chegara: rasm 20 MB, bir xabarda 10 tagacha fayl.
+
+### 3. Mock test'ni olib tashlash
+
+Backend `exams` ga tegilmadi. Workspace'dagi "Mock testlar" kartasi va "Mock imtihon" statistikasi frontendda yashiriladi. Kerak bo'lsa backend API'ni ham o'chirishni ayting.
+
+### 4. Darsga vaqtidan oldin kirish (productionda, 2026-11-20)
+
+O'qituvchi ertaroq boshlagan darsga o'quvchilar kira olmasligining sababi kirish navbati hisoblagichi edi (`join_delay_ms` 10 daqiqadan oshib ketgan). Tuzatildi. Frontend `join_delay_ms > 0` bo'lsa "Navbatda, ~N soniya" deb ko'rsatsin, aks holda sahifa shunchaki "loading" bo'lib ko'rinadi.
+
+### 5. Aniqlashtirish kerak: doskadagi formulalar
+
+Trello: "Doskada bor formula qismlari hammasi yozish qismda chiqib kelsin va doskada ham shuni ko'rsatish". Rasm/tavsif yo'q. Doskadagi formula bloki (MathLive, LaTeX) allaqachon bor. Taxminim: shu formula tugmalari vazifa/test javobi yozish maydonida ham chiqsin. Bu asosan frontend ishi; qaysi sahifa ekanini ayting.
+
+[↑ Mundarija](#mundarija)
+
+---

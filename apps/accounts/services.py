@@ -947,6 +947,7 @@ def record_login(*, user: User, request, session_id=None) -> dict:
 
     meta = {
         'user_agent': user_agent,
+        'device_name': (request.META.get('HTTP_X_DEVICE_NAME') or '').strip()[:120],  # mobil ilova qurilma modeli (bir nechta telefonni ajratadi)
         'location': city_for_ip(ip) if ip else '',
         'first_login': last is None,
         'new_ip': bool(last and str(last.ip_address or '') != str(ip or '')),
@@ -1059,6 +1060,70 @@ def login_history(
         if len(result) >= limit:
             break
     return result
+
+
+def login_devices(*, viewer: User, student_id=None, request=None, date_from=None, date_to=None, device_type=None) -> list:
+    """Kirish tarixi QURILMALAR bo'yicha: har qurilma bitta qator (har kirish alohida emas), oxirgi kirish vaqti va soni bilan.
+
+    Qurilma = ko'rsatiladigan nom (mobil ilova `X-Device-Name` yuborsa — model, aks holda brauzer + tizim) va turi (phone | tablet | computer).
+    IP qurilmani aniqlamaydi (mobil tarmoqda IP tez-tez o'zgaradi), shuning uchun u faqat OXIRGI kirishdan olinadi. Ruxsatlar
+    `login_history` bilan bir xil (ota-ona faqat tasdiqlangan bolaniki, `analytics` roziligi bilan)."""
+    from apps.core.models import AuditLog
+
+    from . import consent
+    from .models import UserSession
+    from .sessions import city_for_ip, country_for_ip, parse_device, parse_ua
+
+    target = viewer
+    if student_id:
+        target = consent.approved_child(viewer, student_id)
+        consent.require(target, 'analytics')
+
+    rows = AuditLog.objects.filter(actor=target, action='auth.login').order_by('-created_at')
+    if date_from:
+        rows = rows.filter(created_at__gte=date_from)
+    if date_to:
+        rows = rows.filter(created_at__lte=date_to)
+    rows = rows[:5000]
+
+    active = {str(pk) for pk in UserSession.objects.filter(user=target, revoked_at__isnull=True).values_list('pk', flat=True)}
+    own = target == viewer and request is not None
+    current_key = None
+    if own:
+        current_agent = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+        current_key = (parse_device(current_agent, request.META.get('HTTP_X_DEVICE_NAME', '')), parse_ua(current_agent)['device_type'])
+
+    devices: dict = {}
+    for r in rows:  # yangidan eskiga: guruhdagi birinchi qator — oxirgi kirish
+        meta = r.meta or {}
+        agent = meta.get('user_agent', '')
+        parsed = parse_ua(agent)
+        if device_type and parsed['device_type'] != device_type:
+            continue
+        label = parse_device(agent, meta.get('device_name', ''))
+        key = (label, parsed['device_type'])
+        item = devices.get(key)
+        if item is None:
+            devices[key] = item = {
+                'device': label,
+                'browser': parsed['browser'],
+                'os': parsed['os'],
+                'device_type': parsed['device_type'],
+                'last_login_at': r.created_at,
+                'last_ip': r.ip_address,
+                'location': meta.get('location') or (city_for_ip(r.ip_address) if r.ip_address else '') or None,
+                'country': (country_for_ip(r.ip_address) if r.ip_address else '') or None,
+                'login_count': 0,
+                'first_login_at': r.created_at,
+                'session_active': False,
+                'is_current': own and key == current_key,
+                'last_login_id': str(r.pk),
+            }
+        item['login_count'] += 1
+        item['first_login_at'] = r.created_at
+        if meta.get('session_id') and meta['session_id'] in active:
+            item['session_active'] = True
+    return list(devices.values())
 
 
 @transaction.atomic

@@ -292,6 +292,9 @@ class LoginHistoryView(APIView):
 
     Har yozuvda: vaqt, IP, qurilma (User-Agent) va o'zgarish bayroqlari
     (new_ip / new_device) — "boshqa joydan kirildi" darhol ko'rinadi.
+
+    `?group=device` — har kirish emas, har QURILMA bitta qator: `device`, `last_login_at`, `login_count`, `last_ip`,
+    `location`, `session_active`, `is_current` (qurilmalar soni = `count` yoki massiv uzunligi).
     """
 
     permission_classes = [IsAuthenticated]
@@ -303,9 +306,15 @@ class LoginHistoryView(APIView):
         device = params.get('device')
         if device and device not in ('phone', 'tablet', 'computer'):
             raise ValidationError({'device': _("phone, tablet yoki computer bo'lishi kerak.")})
-        rows = services.login_history(
-            viewer=request.user, student_id=params.get('student'), limit=500, request=request,
+        group = params.get('group')
+        if group and group != 'device':
+            raise ValidationError({'group': _("Faqat group=device qo'llab-quvvatlanadi.")})
+        build = services.login_devices if group == 'device' else services.login_history
+        extra = {} if group == 'device' else {'limit': 500}
+        rows = build(
+            viewer=request.user, student_id=params.get('student'), request=request,
             date_from=parse_bound(params.get('from'), end=False), date_to=parse_bound(params.get('to'), end=True), device_type=device,
+            **extra,
         )
         if 'page' not in params and 'page_size' not in params:
             return Response(rows[:50])  # eski mijozlar uchun oddiy massiv
