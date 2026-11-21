@@ -3,9 +3,9 @@
 Onlayn ta'lim platformasi: jonli video darslar (LiveKit), avtomatik davomat va
 rozilikka asoslangan ota-ona paneli. O'zbekiston bozori uchun.
 
-> **Loyihaning to'liq umumiy hujjati: [PROJECT.md](PROJECT.md)** — modullar, API/WS
+> **Loyihaning to'liq umumiy hujjati: [DOKUMENTATSIYA.md](DOKUMENTATSIYA.md#project)** — modullar, API/WS
 > shartnomasi, deploy, talablar holati.
-> Arxitektura qoidalari: [ARCHITECTURE.md](ARCHITECTURE.md) — yangi kod yozishdan oldin o'qing.
+> Arxitektura qoidalari: [DOKUMENTATSIYA.md](DOKUMENTATSIYA.md#architecture) — yangi kod yozishdan oldin o'qing.
 
 ## Stack
 
