@@ -22,7 +22,7 @@ from . import (
     test_creator_import,
     xlsx_import,
 )
-from .models import AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt, QuizSession
+from .models import AnswerResponse, Option, Question, QuestionGroup, QuestionImage, Quiz, QuizAttempt, QuizSession
 
 _IMPORT_PARSERS = {
     '.docx': docx_import.parse_docx_questions,
@@ -195,6 +195,7 @@ def _create_question(quiz: Quiz, index: int, q_data: dict, groups: list = ()) ->
         quiz=quiz, type=qtype, text=q_data['text'], points=q_data.get('points', 2),
         order=q_data.get('order', index), answer_key=_build_answer_key(q_data),
         group=_group_for(q_data, list(groups), index),
+        image=q_data.get('image'), text_after=q_data.get('text_after') or '',
     )
     if qtype in (T.SINGLE, T.MULTIPLE):
         for o_index, o_data in enumerate(q_data['options']):
@@ -356,6 +357,23 @@ def import_google_form(*, url: str) -> dict:
     return result
 
 
+MAX_TEXT_IMPORT_CHARS = 100_000
+
+
+def import_text(*, text: str) -> dict:
+    """Joylangan matndan (masalan ChatGPT yozgan) preview qaytaradi — `.docx` import bilan bir xil format
+    ("1. Savol", "A) variant", "Javob: B"). HECH NARSA DB'ga yozilmaydi."""
+    if not text or not text.strip():
+        raise ValidationError({'text': _('Matn majburiy.')})
+    if len(text) > MAX_TEXT_IMPORT_CHARS:
+        raise ValidationError({'text': _("Matn juda uzun: %(max)s belgigacha.") % {'max': MAX_TEXT_IMPORT_CHARS}})
+    lines = [docx_import._normalize(line) for line in text.splitlines() if line.strip()]
+    result = docx_import.parse_lines(lines)
+    if not result['questions']:
+        raise ValidationError({'text': _("Matndan birorta ham savol topilmadi. Format: «1. Savol», «A) variant», «Javob: B».")})
+    return result
+
+
 def build_quiz_template(*, fmt: str, count) -> bytes:
     """Bo'sh shablon fayl (.docx / .xlsx) — `count` ta bo'sh savol bloki bilan,
     import parserlariga mos formatda (`template_export.py`)."""
@@ -472,6 +490,37 @@ def delete_quiz(*, teacher: User, quiz: Quiz) -> None:
 
 ALLOWED_AUDIO_EXTENSIONS = {'.mp3', '.m4a', '.aac', '.ogg', '.wav'}
 MAX_AUDIO_MB = 60
+
+# Savol rasmi: format Pillow orqali tekshiriladi (kengaytmaga ishonilmaydi), fayl nomi formatdan qo'yiladi
+_IMAGE_EXTENSIONS = {'PNG': 'png', 'JPEG': 'jpg', 'WEBP': 'webp', 'GIF': 'gif'}
+MAX_QUESTION_IMAGE_MB = 5
+MAX_QUESTION_IMAGE_PIXELS = 40_000_000
+
+
+def create_question_image(*, teacher: User, upload) -> QuestionImage:
+    """Savol rasmini yuklaydi. Rasm hali hech qaysi savolga bog'lanmagan — frontend `id`ni savol
+    bilan birga yuboradi (`QuestionWriteSerializer.image`)."""
+    from PIL import Image  # lazy: faqat rasm yuklashda kerak
+
+    if upload is None:
+        raise ValidationError({'file': _('Rasm fayl yuboring.')})
+    if upload.size > MAX_QUESTION_IMAGE_MB * 1024 * 1024:
+        raise ValidationError({'file': _("Rasm %(max)s MB dan katta bo'lmasligi kerak.") % {'max': MAX_QUESTION_IMAGE_MB}})
+    try:
+        with Image.open(upload) as picture:
+            image_format = picture.format
+            width, height = picture.size
+            picture.verify()
+    except Exception as exc:
+        raise ValidationError({'file': _("Rasmni o'qib bo'lmadi. PNG, JPG, WEBP yoki GIF yuboring.")}) from exc
+    if image_format not in _IMAGE_EXTENSIONS:
+        raise ValidationError({'file': _("Rasm formati qo'llab-quvvatlanmaydi. PNG, JPG, WEBP yoki GIF yuboring.")})
+    if width * height > MAX_QUESTION_IMAGE_PIXELS:
+        raise ValidationError({'file': _("Rasm o'lchami juda katta.")})
+    upload.seek(0)
+    image = QuestionImage(owner=teacher)
+    image.file.save(f'image.{_IMAGE_EXTENSIONS[image_format]}', upload, save=True)
+    return image
 
 
 def _owned_group(teacher: User, quiz: Quiz, group_id) -> QuestionGroup:

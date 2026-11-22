@@ -21,6 +21,7 @@ from django.db.models import (
     FileField,
     FloatField,
     ForeignKey,
+    ImageField,
     JSONField,
     Index,
     ManyToManyField,
@@ -44,6 +45,11 @@ def quiz_audio_path(instance, filename: str) -> str:
     """Taxmin qilib bo'lmaydigan fayl nomi (uuid) — audio URL'i ochiq `/media/`
     orqali beriladi, shuning uchun nomni topib bo'lmasligi himoya vazifasini o'taydi."""
     return f'quiz_audio/{uuid.uuid4().hex}{os.path.splitext(filename)[1].lower()}'
+
+
+def quiz_image_path(instance, filename: str) -> str:
+    """Savol rasmi ham uuid nom bilan saqlanadi (audio bilan bir xil sabab: `/media/` ochiq)."""
+    return f'quiz_images/{uuid.uuid4().hex}{os.path.splitext(filename)[1].lower()}'
 
 
 class Quiz(TimeStampedUUIDModel):
@@ -126,6 +132,24 @@ def _delete_group_audio(sender, instance, **kwargs):
         instance.audio.delete(save=False)
 
 
+class QuestionImage(TimeStampedUUIDModel):
+    """Savolga biriktiriladigan rasm. Savoldan ALOHIDA jadval: testni tahrirlashda savollar
+    o'chirilib qayta yaratiladi (`services.update_quiz`), rasm esa yo'qolmasligi kerak —
+    frontend rasm `id`sini savol bilan birga qayta yuboradi. Savol o'chsa rasm qoladi (SET_NULL)."""
+
+    owner = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='quiz_images')
+    file = ImageField(upload_to=quiz_image_path)
+
+    def __str__(self):
+        return str(self.id)
+
+
+@receiver(post_delete, sender=QuestionImage)
+def _delete_question_image_file(sender, instance, **kwargs):
+    if instance.file:
+        instance.file.delete(save=False)
+
+
 class Question(TimeStampedUUIDModel):
     class Type(TextChoices):
         SINGLE = 'single', "Bitta to'g'ri javob"
@@ -144,6 +168,9 @@ class Question(TimeStampedUUIDModel):
     )
     type = CharField(max_length=20, choices=Type.choices, default=Type.SINGLE)
     text = TextField()
+    # Savol matni (`text`) rasmdan OLDIN, `text_after` rasmdan KEYIN ko'rsatiladi (rasm bo'lmasa bo'sh).
+    image = ForeignKey('quizzes.QuestionImage', SET_NULL, null=True, blank=True, related_name='questions')
+    text_after = TextField(blank=True)
     order = PositiveIntegerField(default=0)
     points = PositiveIntegerField(default=2)
     # Turga xos javob kaliti (true_false/numeric/text/matching/fill_blank).

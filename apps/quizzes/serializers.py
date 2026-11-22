@@ -5,10 +5,11 @@ import re
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from apps.accounts.models import User
 from apps.lessons.models import Course
 
 from . import grading
-from .models import AiQuizJob, AnswerResponse, Option, Question, QuestionGroup, Quiz, QuizAttempt
+from .models import AiQuizJob, AnswerResponse, Option, Question, QuestionGroup, QuestionImage, Quiz, QuizAttempt
 
 T = Question.Type
 _BLANK_RE = re.compile(r'\{\{(\d+)\}\}')
@@ -31,6 +32,26 @@ class BlankWriteSerializer(serializers.Serializer):
     answers = serializers.ListField(
         child=serializers.CharField(max_length=500), allow_empty=False,
     )
+
+
+class OwnedQuestionImageField(serializers.PrimaryKeyRelatedField):
+    """Savolga faqat O'ZI yuklagan rasmni biriktirish mumkin (admin — istalganini)."""
+
+    def get_queryset(self):
+        user = getattr(self.context.get('request'), 'user', None)
+        if user is None or not user.is_authenticated:
+            return QuestionImage.objects.none()
+        if user.role in (User.Role.ADMIN, User.Role.SUPER_ADMIN):
+            return QuestionImage.objects.all()
+        return QuestionImage.objects.filter(owner=user)
+
+
+def _question_image_url(question, context) -> str | None:
+    if not question.image_id:
+        return None
+    url = question.image.file.url
+    request = context.get('request')
+    return request.build_absolute_uri(url) if request else url
 
 
 class GroupWriteSerializer(serializers.Serializer):
@@ -65,6 +86,9 @@ class QuestionWriteSerializer(serializers.Serializer):
     items = serializers.ListField(child=serializers.CharField(max_length=500), required=False)
     blanks = BlankWriteSerializer(many=True, required=False)
     min_words = serializers.IntegerField(min_value=0, max_value=2000, required=False, default=0)  # essay
+    # Savol rasmi (`POST /quizzes/question-images/` qaytargan id) va rasmdan keyingi matn
+    image = OwnedQuestionImageField(required=False, allow_null=True)
+    text_after = serializers.CharField(required=False, allow_blank=True, default='')
 
     def validate(self, attrs):
         getattr(self, f'_check_{attrs["type"]}')(attrs)
@@ -326,6 +350,7 @@ class QuestionTakeSerializer(serializers.Serializer):
     def to_representation(self, question):
         data = {
             'id': question.id, 'type': question.type, 'text': question.text,
+            'text_after': question.text_after, 'image': _question_image_url(question, self.context),
             'points': question.points, 'order': question.order, 'group': question.group_id,
             'options': [],
         }
@@ -443,6 +468,8 @@ class QuestionDetailSerializer(serializers.Serializer):
     def to_representation(self, question):
         data = {
             'id': question.id, 'type': question.type, 'text': question.text,
+            'text_after': question.text_after,
+            'image': {'id': question.image_id, 'url': _question_image_url(question, self.context)} if question.image_id else None,
             'points': question.points, 'order': question.order, 'group': question.group_id,
             'options': [],
         }

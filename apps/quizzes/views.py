@@ -84,7 +84,7 @@ class QuizListCreateView(generics.ListCreateAPIView):
 
     def create(self, request, *args, **kwargs):
         as_draft = request.data.get('status') == Quiz.Status.DRAFT
-        serializer = QuizCreateSerializer(data=request.data, context={'draft': as_draft})
+        serializer = QuizCreateSerializer(data=request.data, context={'draft': as_draft, 'request': request})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         quiz = services.create_quiz(
@@ -169,6 +169,32 @@ class QuizGoogleDocImportView(APIView):
     def post(self, request):
         result = services.import_google_doc(url=request.data.get('url'))
         return _import_response(request, result)
+
+
+class QuizTextImportView(APIView):
+    """Joylangan matndan (masalan ChatGPT yozgan savollar) test: `POST {text}` — preview, `topic` bilan —
+    darhol qoralama test. Format `.docx` import bilan bir xil ("1. Savol", "A) variant", "Javob: B")."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
+
+    def post(self, request):
+        result = services.import_text(text=request.data.get('text'))
+        return _import_response(request, result)
+
+
+class QuizQuestionImageView(APIView):
+    """Savol rasmini yuklash: `POST` multipart `file` (PNG/JPG/WEBP/GIF, 5 MB gacha) → `{id, url}`.
+    `id` savolning `image` maydoniga yuboriladi."""
+
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
+
+    def post(self, request):
+        image = services.create_question_image(teacher=request.user, upload=request.FILES.get('file'))
+        return Response({'id': image.id, 'url': request.build_absolute_uri(image.file.url)}, status=status.HTTP_201_CREATED)
 
 
 class QuizGoogleFormImportView(APIView):
@@ -359,7 +385,7 @@ class QuizDetailView(APIView):
         bu orqali o'zgartirilmaydi."""
         quiz = _get_quiz(request.user, pk)
         serializer = QuizUpdateSerializer(
-            data=request.data, partial=True, context={'draft': quiz.status == Quiz.Status.DRAFT},
+            data=request.data, partial=True, context={'draft': quiz.status == Quiz.Status.DRAFT, 'request': request},
         )
         serializer.is_valid(raise_exception=True)
         quiz = services.update_quiz(teacher=request.user, quiz=quiz, **serializer.validated_data)

@@ -23,7 +23,7 @@ class EssayQuestionTests(QuizTestBase):
         quiz_id = self.quiz()['id']
         essay = self.of_type(self.take(quiz_id)['questions'], 'essay')
         self.assertEqual(essay['min_words'], 250)
-        self.assertEqual(set(essay) - {'min_words'}, {'id', 'type', 'text', 'points', 'order', 'group', 'options'})
+        self.assertEqual(set(essay) - {'min_words'}, {'id', 'type', 'text', 'text_after', 'image', 'points', 'order', 'group', 'options'})
 
     def test_the_essay_is_saved_but_not_scored_and_not_in_the_maximum(self):
         created = self.quiz()
