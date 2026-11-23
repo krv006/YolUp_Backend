@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import User
 from apps.core.permissions import RequirePerm, TestCreationAllowed
 
-from . import ai_jobs, attempts_export, export, selectors, services
+from . import ai_answers, ai_jobs, attempts_export, export, selectors, services
 from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizAttempt, QuizDraft
 from .serializers import (
     AiQuizCreateSerializer,
@@ -195,6 +195,20 @@ class QuizQuestionImageView(APIView):
     def post(self, request):
         image = services.create_question_image(teacher=request.user, upload=request.FILES.get('file'))
         return Response({'id': image.id, 'url': request.build_absolute_uri(image.file.url)}, status=status.HTTP_201_CREATED)
+
+
+class QuizSuggestAnswersView(APIView):
+    """To'g'ri javobi belgilanmagan savollar uchun AI taklifi (masalan Google Form importidan keyin). HECH NARSA SAQLANMAYDI:
+    o'qituvchi taklifni tekshirib, muharrirda o'zi tasdiqlaydi. Faqat test egasi."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
+
+    def post(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        if not services._is_owner(quiz, request.user):
+            raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+        return Response(ai_answers.suggest_answers(quiz=quiz))
 
 
 class QuizGoogleFormImportView(APIView):

@@ -46,7 +46,7 @@ MAX_RULES_MB = 5
 MAX_RULES_TEXT = 30000
 MIN_QUESTIONS, MAX_QUESTIONS = 5, 60
 MAX_ACTIVE_PER_TEACHER = 3
-MAX_PER_DAY = 10
+MAX_PER_DAY = 0  # 0 = kunlik cheklov yo'q (2026-11-23, egasi qarori); bir vaqtda faqat MAX_ACTIVE_PER_TEACHER ta ish ishlaydi
 _BATCH = 5  # bir siklda ko'pi bilan nechta ish
 # Savollar yaratish (Gemini) muvaffaqiyatsiz bo'lsa: ko'pi bilan shuncha urinish, urinishlar orasida pauza.
 # (Tashqi xizmat sababni aytmaydi, odatda Gemini'ning kunlik limiti tugagan bo'ladi — cheksiz urinish limitni yeydi.)
@@ -164,7 +164,7 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
         raise ValidationError({'detail': _("Sizda %(n)s ta test hali yaratilmoqda. Tugashini kuting.") % {
             'n': MAX_ACTIVE_PER_TEACHER,
         }})
-    if mine.filter(created_at__gte=timezone.now() - timedelta(days=1)).count() >= MAX_PER_DAY:
+    if MAX_PER_DAY and mine.filter(created_at__gte=timezone.now() - timedelta(days=1)).count() >= MAX_PER_DAY:
         raise ValidationError({'detail': _("Bir kunda %(n)s tadan ko'p AI test yaratib bo'lmaydi.") % {'n': MAX_PER_DAY}})
 
     source_paths = [] if standard else _stash_material(uploads)

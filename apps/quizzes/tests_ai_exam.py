@@ -13,6 +13,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 
+from apps.accounts.models import User
 from apps.notifications.models import Notification
 
 from . import ai_exam, llm, material_text
@@ -665,6 +666,16 @@ class AiExamJobTests(QuizTestBase):
                                TEST_CREATOR_PASSWORD='x' * 12):
             resp = self.post_raw(standard='uzbmb', topic='', file=self.upload())
         self.assertEqual(resp.status_code, 400)
+
+    def test_there_is_no_daily_limit_but_only_a_few_jobs_run_at_once(self):
+        for index in range(12):  # kun ichida 12 ta tugagan ish — avval 10-dan keyin rad etilardi
+            AiQuizJob.objects.create(teacher=User.objects.get(username='t1'), topic=f'Eski {index}', status='done')
+        self.assertEqual(self.post_raw(file=self.upload()).status_code, 202)
+        for _ in range(2):
+            self.assertEqual(self.post_raw(file=self.upload()).status_code, 202)
+        blocked = self.post_raw(file=self.upload())  # 3 ta faol ish bor — to'rtinchisi kutadi
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('hali yaratilmoqda', blocked.json()['error']['message'])
 
     def test_too_many_files_and_one_bad_file(self):
         many = [self.upload(f'f{i}.txt') for i in range(6)]

@@ -208,11 +208,11 @@ class AiQuizJobTests(QuizTestBase):
         resp = self.start()
         self.assertEqual(resp.status_code, 400)
 
-    def test_daily_limit(self):
-        for _ in range(10):
+    def test_there_is_no_daily_limit(self):
+        # 2026-11-23: egasi qarori — kunlik cheklov yo'q (avval 10 tadan keyin rad etilardi)
+        for _ in range(12):
             self.assertEqual(self.start().status_code, 202)
             AiQuizJob.objects.update(status='done')
-        self.assertEqual(self.start().status_code, 400)
 
     # ── yurgizish ─────────────────────────────────────────────────────
 
