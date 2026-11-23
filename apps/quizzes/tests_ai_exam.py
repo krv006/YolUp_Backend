@@ -615,6 +615,57 @@ class AiExamJobTests(QuizTestBase):
         for payload in section_prompts:
             self.assertEqual((payload['source_material'], payload['topic']), ('', 'Climate change'))
 
+    def run_topic_job(self, **fields):
+        seen = []
+
+        def capture(url, json=None, **kwargs):
+            seen.append(json['messages'][1]['content'])
+            return self.fake(url, json=json, **kwargs)
+
+        with patch('apps.quizzes.llm.requests.post', side_effect=capture):
+            job_id = self.post_raw(rules_text=IELTS_RULES, **fields).json()['id']
+            self.sync()
+        payloads = [json.loads(c) for c in seen if 'section_spec' in c]
+        return AiQuizJob.objects.get(pk=job_id), payloads
+
+    def test_the_ai_sees_the_part_of_the_book_about_the_topic(self):
+        book = ('Cover page and contents of the grammar book. ' * 1500
+                + 'Using the verb to be: I am a student, he is a teacher. ' * 20
+                + 'Appendix with answer keys. ' * 1500)
+        self.assertNotIn('Using the verb to be', book[:40000])
+        job, payloads = self.run_topic_job(file=self.upload('book.txt', book), topic='to be')
+        self.assertEqual(job.status, 'done')
+        self.assertFalse(job.topic_auto)
+        self.assertTrue(payloads)
+        for payload in payloads:
+            self.assertEqual(payload['topic'], 'to be')
+            self.assertIn('Using the verb to be', payload['source_material'])
+
+    def test_topic_may_be_left_empty_when_there_is_material(self):
+        job, payloads = self.run_topic_job(file=self.upload('Biologiya_9-sinf.txt'), topic='')
+        self.assertEqual(job.status, 'done')
+        self.assertEqual((job.topic, job.topic_auto), ('Biologiya 9 sinf', True))
+        for payload in payloads:
+            self.assertEqual(payload['topic'], '')  # fayl nomi AI'ga mavzu sifatida berilmaydi
+            self.assertEqual(payload['section_spec']['focus'], '')
+
+    def test_empty_topic_with_pasted_text_uses_its_first_line(self):
+        job, _ = self.run_topic_job(material_text='\nFotosintez nima?\nBatafsil matn. ' * 5, topic='')
+        self.assertEqual((job.topic, job.topic_auto), ('Fotosintez nima?', True))
+
+    def test_no_topic_and_no_material_is_rejected(self):
+        self.auth(self.teacher_token)
+        resp = self.client.post('/api/v1/quizzes/ai-generate/', {'topic': '', 'question_count': 10}, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('topic', resp.json()['error']['details'])
+        self.assertEqual(AiQuizJob.objects.count(), 0)
+
+    def test_old_test_creator_path_still_needs_a_topic(self):
+        with override_settings(TEST_CREATOR_URL='http://tc-api:8000/api/v1', TEST_CREATOR_EMAIL='a@b.uz',
+                               TEST_CREATOR_PASSWORD='x' * 12):
+            resp = self.post_raw(standard='uzbmb', topic='', file=self.upload())
+        self.assertEqual(resp.status_code, 400)
+
     def test_too_many_files_and_one_bad_file(self):
         many = [self.upload(f'f{i}.txt') for i in range(6)]
         self.assertEqual(self.post_raw(file=many).status_code, 400)

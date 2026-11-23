@@ -105,13 +105,75 @@ def extract_text(data: bytes, filename: str, *, max_chars: int = 0, min_chars: i
     return text[:max_chars] if max_chars else text
 
 
-def combine_texts(named_texts: list, limit: int) -> str:
+_WORD = re.compile(r"[\w']+", re.UNICODE)
+_CHUNK_CHARS = 1500
+
+
+def _topic_matchers(topic: str):
+    """Mavzudan: (butun ibora, so'z o'zaklari). Qisqa/xizmat so'zlari (<3 harf) o'zak bo'lmaydi, lekin ibora sifatida
+    ("to be") qidiriladi. O'zbekcha qo'shimchalar uchun uzun so'zning boshi olinadi (tenglamalar -> tenglam)."""
+    words = [w.lower() for w in _WORD.findall(topic or '')]
+    if not words:
+        return None, []
+    phrase = re.compile(r'\b' + r'\s+'.join(re.escape(w) for w in words) + r'\b', re.IGNORECASE)
+    stems = []
+    for word in words:
+        if len(word) < 3:
+            continue
+        stem = word if len(word) <= 5 else word[:max(4, int(len(word) * 0.7))]
+        stems.append(re.compile(r'\b' + re.escape(stem) + r'\w*', re.IGNORECASE))
+    return phrase, stems
+
+
+def _chunks(text: str) -> list:
+    out, start = [], 0
+    while start < len(text):
+        end = min(len(text), start + _CHUNK_CHARS)
+        if end < len(text):
+            space = text.find(' ', end, end + 120)
+            end = space if space != -1 else end
+        out.append(text[start:end])
+        start = end
+    return out
+
+
+def select_relevant(text: str, topic: str, limit: int) -> str:
+    """Katta material (kitob) sig'masa — boshidan emas, MAVZUGA oid qismlardan `limit` belgi tanlanadi (asl tartibda).
+    Mavzu bo'sh yoki materialda umuman topilmasa — avvalgidek boshidan."""
+    if len(text) <= limit:
+        return text
+    phrase, stems = _topic_matchers(topic)
+    if phrase is None:
+        return text[:limit]
+    chunks = _chunks(text)
+    scores = [len(phrase.findall(chunk)) * 3 + sum(len(rx.findall(chunk)) for rx in stems) for chunk in chunks]
+    if not any(scores):
+        return text[:limit]
+    ranked = sorted((i for i, score in enumerate(scores) if score), key=lambda i: (-scores[i], i))
+    chosen, used = set(), 0
+    for index in ranked:
+        if used + len(chunks[index]) > limit and chosen:
+            break
+        chosen.add(index)
+        used += len(chunks[index]) + 5
+    for index in ranked:  # qolgan joyga eng yaxshi bo'laklarning davomi (tushuntirish ko'pincha keyingi bo'lakda)
+        nxt = index + 1
+        if used >= limit:
+            break
+        if nxt < len(chunks) and nxt not in chosen and used + len(chunks[nxt]) <= limit:
+            chosen.add(nxt)
+            used += len(chunks[nxt]) + 5
+    return '\n...\n'.join(chunks[i] for i in sorted(chosen))[:limit]
+
+
+def combine_texts(named_texts: list, limit: int, topic: str = '') -> str:
     """[(nom, matn), ...] -> bitta matn. Sig'masa har faylga teng ulush beriladi (so'nggi fayl butunlay
-    kesilib ketmasin). Bitta matn bo'lsa sarlavhasiz qaytariladi."""
+    kesilib ketmasin); `topic` berilsa har fayldan mavzuga oid qismlar olinadi (boshidan emas).
+    Bitta matn bo'lsa sarlavhasiz qaytariladi."""
     named_texts = [(name, text) for name, text in named_texts if text.strip()]
     if not named_texts:
         return ''
     if len(named_texts) == 1:
-        return named_texts[0][1][:limit]
+        return select_relevant(named_texts[0][1], topic, limit)
     share = limit // len(named_texts)
-    return '\n\n'.join(f'=== {name} ===\n{text[:share]}' for name, text in named_texts)
+    return '\n\n'.join(f'=== {name} ===\n{select_relevant(text, topic, share)}' for name, text in named_texts)

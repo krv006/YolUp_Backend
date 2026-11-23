@@ -661,7 +661,8 @@ class AttemptListSerializer(serializers.ModelSerializer):
 class AiQuizCreateSerializer(serializers.Serializer):
     """Multipart: material fayli (`file`) + sozlamalar. Guruh (`course`) yoki fan (`subject`) shart."""
 
-    topic = serializers.CharField(max_length=200)
+    # Mavzu ixtiyoriy: material (fayl/matn) bo'lsa bo'sh qoldirish mumkin — AI materialning o'zidan savol tuzadi
+    topic = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     title = serializers.CharField(max_length=200, required=False, allow_blank=True, default='')
     # Bo'sh = imtihon qoidalari bo'yicha AI generator (asosiy); berilsa — Test-creator (eski yo'l)
     standard = serializers.ChoiceField(choices=AiQuizJob.Standard.choices, required=False, allow_blank=True, default='')

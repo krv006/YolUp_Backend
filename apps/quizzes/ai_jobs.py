@@ -136,8 +136,15 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
     rules_text = (rules_text or '').strip()
     if len(rules_text) > MAX_RULES_TEXT:
         raise ValidationError({'rules_text': _('Qoidalar matni juda uzun (%(max)s belgigacha).') % {'max': MAX_RULES_TEXT}})
-    if not topic.strip():
-        raise ValidationError({'topic': _("Mavzu bo'sh bo'lishi mumkin emas.")})
+    topic_auto = False
+    topic = (topic or '').strip()
+    if not topic:
+        # Mavzu ixtiyoriy, lekin material ham bo'lmasa AI nima haqida yozishini bilmaydi
+        shown = Path(uploads[0].name).stem.replace('_', ' ').replace('-', ' ').strip() if uploads else \
+            next((line.strip() for line in (material_text_value or '').splitlines() if line.strip()), '')
+        if not shown or standard:
+            raise ValidationError({'topic': _("Mavzu yozing yoki material (fayl yoki matn) qo'shing.")})
+        topic, topic_auto = shown[:200], True
     has_format = bool(exam_name.strip() or rules_text or rules_upload is not None)
     if question_count == 0 and not has_format:
         question_count = 20  # imtihon ko'rsatilmasa 'avto' ma'nosiz: oddiy testning standart soni
@@ -162,7 +169,7 @@ def create_job(*, teacher: User, uploads: list = (), course, subject: str, topic
 
     source_paths = [] if standard else _stash_material(uploads)
     return AiQuizJob.objects.create(
-        teacher=teacher, course=course, subject=subject, topic=topic.strip(), title=title.strip(),
+        teacher=teacher, course=course, subject=subject, topic=topic, topic_auto=topic_auto, title=title.strip(),
         standard=standard, question_count=question_count, language=language or '',
         source_file=uploads[0] if standard else None, source_name=', '.join(source_names)[:255],
         source_text=source_text, source_paths=source_paths, exam_name=(exam_name or '').strip()[:120],
@@ -364,7 +371,9 @@ def _run_engine(job: AiQuizJob) -> None:
         named = [(entry['name'], _read_stored(entry)) for entry in job.source_paths or []]
         if job.source_text.strip():
             named.append((str(_("Qo'yilgan matn")), job.source_text.strip()))
-        state['material'] = material_text.combine_texts(named, settings.AI_EXAM_MATERIAL_CHARS)
+        # Katta material (kitob) sig'masa mavzuga oid qismlar olinadi; mavzu yozilmagan bo'lsa — boshidan
+        state['material'] = material_text.combine_texts(
+            named, settings.AI_EXAM_MATERIAL_CHARS, topic='' if job.topic_auto else job.topic)
         job.plan = state
         job.save(update_fields=['plan', 'updated_at'])
     material = state['material']
@@ -372,7 +381,8 @@ def _run_engine(job: AiQuizJob) -> None:
     if not plan:
         language = job.language or ai_exam.default_language(exam_name=job.exam_name, rules=rules, material=material)
         plan = ai_exam.plan_exam(
-            rules, target_total=job.question_count, topic=job.topic, exam_name=job.exam_name, material=material,
+            rules, target_total=job.question_count, topic='' if job.topic_auto else job.topic,
+            exam_name=job.exam_name, material=material,
             language=language)
         if language:  # tanlangan (yoki avtomatik o'zbekcha) til — reja/material tilidan ustun
             plan['language'] = ai_exam.LANGUAGE_NAMES[language]
@@ -390,7 +400,8 @@ def _run_engine(job: AiQuizJob) -> None:
         key = str(index)
         if key not in sections:
             sections[key] = ai_exam.generate_section(
-                plan, index, material, avoid_topics=avoid, topic=job.topic, avoid_questions=known)
+                plan, index, material, avoid_topics=avoid, topic='' if job.topic_auto else job.topic,
+                avoid_questions=known)
             job.plan = state
             job.save(update_fields=['plan', 'updated_at'])
         done = sections[key]

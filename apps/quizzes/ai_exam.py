@@ -114,6 +114,11 @@ _WRITER_SYSTEM = (
     'range, question difficulty and distractor quality); IELTS band 5-5.5 = clear everyday texts and mostly direct '
     'questions, 6-6.5 = standard Academic texts with paraphrase, 7-7.5 = dense argumentative texts and '
     'subtle distractors, 8+ = very demanding abstract texts. '
+    'TOPIC: when "topic" is a subject (not only a band or level), EVERY question must test that topic: take the '
+    'parts of "source_material" that cover it, and if the material covers it only partly, write the remaining '
+    'questions about the same topic in the same style from your own accurate knowledge. When "topic" is empty, use '
+    'the main teaching content of the material. NEVER write questions about the document itself: its title, author, '
+    'publisher, edition, cover, table of contents, preface, page numbers, exercise numbering or printed instructions. '
     'Follow the question blocks in order. For every block write its "count" questions PLUS its "spare" extra '
     'questions of the same kind (spares replace questions that fail validation; put the best questions first). '
     'Use the block type as "kind" and put the block "index" into every question as "block". '
@@ -615,7 +620,8 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     section = plan['sections'][index]
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
-        'passage': section['passage'], 'audio': section.get('audio'), 'focus': section.get('focus', ''),
+        'passage': section['passage'], 'audio': section.get('audio'),
+        'focus': section.get('focus', '') or (f'Every question must be about the topic: {topic}' if topic.strip() else ''),
         'blocks': [{**block, 'index': i, 'spare': _block_spares(block)} for i, block in enumerate(section['blocks'])],
     }
     payload = {

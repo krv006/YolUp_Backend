@@ -300,6 +300,8 @@ class AiQuizJob(TimeStampedUUIDModel):
     course = ForeignKey('lessons.Course', SET_NULL, null=True, blank=True, related_name='+')
     subject = CharField(max_length=100, choices=Course.Subject.choices, blank=True)
     topic = CharField(max_length=200)
+    # True — o'qituvchi mavzu yozmagan, `topic` fayl nomi/matndan o'zimiz olingan nom: AI'ga mavzu sifatida berilmaydi
+    topic_auto = BooleanField(default=False)
     title = CharField(max_length=200, blank=True)
     # Bo'sh = imtihon qoidalari bo'yicha AI generator (apps/quizzes/ai_exam.py); to'ldirilgan = Test-creator (eski yo'l)
     standard = CharField(max_length=10, choices=Standard.choices, blank=True, default='')
