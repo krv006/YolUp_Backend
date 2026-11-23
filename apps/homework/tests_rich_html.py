@@ -114,6 +114,10 @@ class SanitizeRichHtmlTests(SimpleTestCase):
         self.assertNotIn('data-latex', self.clean('<span data-type="inline-math" data-latex="%s"></span>' % ('x' * 2001)))
         self.assertNotIn('data-type', self.clean('<span data-type="evil" data-latex="x"></span>'))
 
+    def test_formula_latex_may_contain_colons_and_backslashes(self):
+        out = self.clean('<span data-type="inline-math" data-latex="f: A \\to B"></span>')
+        self.assertIn('data-latex="f: A \\to B"', out)
+
     def test_too_large_body_is_rejected(self):
         with self.assertRaises(ValidationError):
             self.clean('<p>' + 'a' * (services.MAX_BODY_CHARS + 1) + '</p>')
