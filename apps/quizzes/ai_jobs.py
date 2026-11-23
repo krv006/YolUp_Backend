@@ -379,7 +379,8 @@ def _run_engine(job: AiQuizJob) -> None:
     material = state['material']
     plan = state.get('plan')
     if not plan:
-        language = job.language or ai_exam.default_language(exam_name=job.exam_name, rules=rules, material=material)
+        language = job.language or ai_exam.resolve_language(
+            subject=job.subject, exam_name=job.exam_name, rules=rules, material=material)
         plan = ai_exam.plan_exam(
             rules, target_total=job.question_count, topic='' if job.topic_auto else job.topic,
             exam_name=job.exam_name, material=material,
@@ -399,9 +400,17 @@ def _run_engine(job: AiQuizJob) -> None:
     for index in range(len(plan['sections'])):
         key = str(index)
         if key not in sections:
+            partial = state.setdefault('partial', {})
+
+            def save_progress(acc, key=key):  # har AI so'rovidan keyin: xato bo'lsa keyingi urinish shu joydan davom etadi
+                partial[key] = acc
+                job.plan = state
+                job.save(update_fields=['plan', 'updated_at'])
+
             sections[key] = ai_exam.generate_section(
                 plan, index, material, avoid_topics=avoid, topic='' if job.topic_auto else job.topic,
-                avoid_questions=known)
+                avoid_questions=known, resume=partial.get(key), progress=save_progress)
+            partial.pop(key, None)
             job.plan = state
             job.save(update_fields=['plan', 'updated_at'])
         done = sections[key]

@@ -141,6 +141,9 @@ _WRITER_SYSTEM = (
     'recording is 4-5 minutes long, so write a full, detailed conversation or talk with realistic distractors '
     '(e.g. a speaker corrects a day or a number, offers alternatives, spells a name) instead of stating each answer '
     'once in plain words. '
+    'If "passage_given" or "script_given" is present, that text is ALREADY written: do NOT write it again (use '
+    '"passage": "" and no "script") and write ONLY the requested questions about it, different from every '
+    'text in "avoid_questions". '
     'Write in the requested language ("auto" = the language of the source material). Use topics/parts of the material '
     'that differ from "avoid_topics" and write NEW questions that do not repeat or closely paraphrase any text in '
     '"avoid_questions" (questions that already exist). If "source_material" is empty, there is no source: write original, accurate, '
@@ -252,7 +255,11 @@ def _material_outline(material: str, limit: int = 12000) -> str:
 
 
 # Test tili kodi -> AI ko'rsatmasidagi nom
-LANGUAGE_NAMES = {'uz': 'Uzbek (Latin script)', 'uz_cyrl': 'Uzbek (Cyrillic script)', 'ru': 'Russian', 'en': 'English'}
+LANGUAGE_NAMES = {'uz': 'Uzbek (Latin script)', 'uz_cyrl': 'Uzbek (Cyrillic script)', 'ru': 'Russian', 'en': 'English',
+                  'tr': 'Turkish'}
+_CODE_BY_NAME = {name: code for code, name in LANGUAGE_NAMES.items()}
+# Til fanlari: test o'sha tilning o'zida bo'ladi (ingliz tili darsi testini o'zbekcha chiqarishdan ma'no yo'q)
+SUBJECT_LANGUAGE = {'english': 'en', 'russian': 'ru', 'turkish': 'tr'}
 
 _ENGLISH_EXAM = re.compile(r'ielts|toefl|\bsat\b|\bgre\b|gmat|cambridge|english|ingliz|angliy', re.IGNORECASE)
 
@@ -263,6 +270,20 @@ def default_language(*, exam_name: str, rules: str, material: str) -> str:
     if material.strip() or (rules or '').strip() or _ENGLISH_EXAM.search(exam_name or ''):
         return ''
     return 'uz'
+
+
+def resolve_language(*, subject: str, exam_name: str, rules: str, material: str) -> str:
+    """O'qituvchi tilni tanlamagan ("Avto") bo'lsa test tilini o'zi aniqlaydi:
+      1. til fani (ingliz/rus/turk tili) -> o'sha til;  2. ingliz tilidagi imtihon (IELTS, SAT...) -> inglizcha;
+      3. boshqa fan (guruh tanlangan) -> o'zbekcha: material boshqa tilda bo'lsa ham test platforma tilida bo'ladi;
+      4. fan ham yo'q -> eski qoida (`default_language`: material tili yoki o'zbekcha)."""
+    if subject in SUBJECT_LANGUAGE:
+        return SUBJECT_LANGUAGE[subject]
+    if _ENGLISH_EXAM.search(exam_name or '') or _ENGLISH_EXAM.search((rules or '')[:3000]):
+        return 'en'
+    if subject:
+        return 'uz'
+    return default_language(exam_name=exam_name, rules=rules, material=material)
 
 
 _IELTS_WRITING = re.compile(r'ielts.*writing|writing.*ielts', re.IGNORECASE)
@@ -613,27 +634,154 @@ def _essays_ok(data: dict, section: dict) -> bool:
     return True
 
 
-def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '',
-                     avoid_questions: list = ()) -> dict:
-    """`plan['sections'][index]` uchun matn parchasi va savollar. Qaytaradi:
-    {'title', 'passage', 'questions': [{...create_quiz formati, 'block': i}], 'dropped': n, 'missing': n}."""
+CHUNK = 12  # bir so'rovda bir blokdan eng ko'pi bilan shuncha savol so'raladi (uzun ro'yxatni model oxirigacha yozmaydi)
+MAX_PASSES = 8
+_WORD = re.compile(r"[A-Za-zА-Яа-яЁёЎўҚқҒғҲҳ'‘’`ʻʼ]+")
+_EN_STOP = frozenset(
+    'the an is are was were be been of and or to in on at for with by from as that this these those which what who whom '
+    'whose when where why how does do did can could will would should may might have has had not no it its their there '
+    'following correct best most only into than then also if'.split())
+_UZ_STOP = frozenset(
+    "va bilan uchun qaysi nima qanday qancha ning dan ga da ni bu shu u ham yoki lekin agar mumkin kerak bo'ladi "
+    "bo'lsa quyidagi to'g'ri hisoblanadi nechta qaysidir deb".split())
+_TR_STOP = frozenset('ve bir bu için ile ne hangi nedir olan olarak daha çok gibi ama veya de da mi mı mu mü'.split())
+
+
+def _key(text) -> str:
+    return re.sub(r'\W+', ' ', str(text or '').lower()).strip()
+
+
+def _shares(text: str) -> dict:
+    words = [w.lower().strip("'‘’`ʻʼ") for w in _WORD.findall(text or '')]
+    letters = [c for c in text or '' if c.isalpha()]
+    cyr = sum(1 for c in letters if 'А' <= c <= 'я' or c in 'ЁёЎўҚқҒғҲҳ')
+    n = max(1, len(words))
+    return {
+        'words': len(words),
+        'cyrillic': cyr / max(1, len(letters)),
+        'en': sum(1 for w in words if w in _EN_STOP) / n,
+        'uz': sum(1 for w in words if w in _UZ_STOP) / n,
+        'tr': sum(1 for w in words if w in _TR_STOP) / n,
+    }
+
+
+def language_mismatch(code: str, text: str) -> bool:
+    """Matn kerakli tilda emasmi (taxminiy, so'z va harflar bo'yicha). Aniq bo'lmasa False: tarjima keraksiz qimmatga tushmasin."""
+    share = _shares(text)
+    if share['words'] < 6:
+        return False
+    if code == 'ru':
+        return share['cyrillic'] < 0.5
+    if code == 'uz_cyrl':
+        return share['cyrillic'] < 0.5 or share['en'] > 0.2
+    if code == 'en':
+        return share['cyrillic'] > 0.3 or (share['uz'] > 0.1 and share['en'] < 0.08)
+    if code in ('uz', 'tr'):
+        wrong_en = share['en'] > 0.14 and share['uz'] + share['tr'] < 0.05
+        return share['cyrillic'] > 0.3 or wrong_en
+    return False
+
+
+def _question_text(question: dict) -> str:
+    parts = [str(question.get('text') or '')]
+    parts += [str(o.get('text') or '') for o in question.get('options') or [] if isinstance(o, dict)]
+    return ' '.join(parts)
+
+
+_TRANSLATE_SYSTEM = (
+    'You translate exam questions. For every item translate "text" and every entry of "options" into the target language '
+    '(item "language"). Keep the meaning, the number and the ORDER of the options exactly (the correct answer is chosen by '
+    'position), and keep programming code, identifiers, formulas, numbers, proper names and established technical terms '
+    'unchanged. Do not add or remove anything. Return ONLY JSON: {"items": [{"id": 0, "text": "...", "options": ["..."]}]} '
+    'with one entry per input id.'
+)
+
+
+def _translate(questions: list, language_name: str) -> int:
+    """Tili mos kelmagan savollarni kerakli tilga o'giradi (bir necha savol bitta so'rovda). Qaytaradi: o'girilganlar soni.
+    Xato bo'lsa savollar o'z holicha qoladi: tarjima hech qachon test yaratishni to'xtatmasligi kerak."""
+    done = 0
+    for start in range(0, len(questions), 15):
+        batch = questions[start:start + 15]
+        items = [{'id': n, 'text': q.get('text', ''), 'options': [o.get('text', '') for o in q.get('options') or []]}
+                 for n, q in enumerate(batch)]
+        try:
+            data = llm.chat_json(_TRANSLATE_SYSTEM, json.dumps({'language': language_name, 'items': items}, ensure_ascii=False))
+        except llm.LLMError as exc:
+            logger.warning("Savollarni tarjima qilib bo'lmadi, o'z tilida qoldi: %s", exc)
+            continue
+        for item in data.get('items') or []:
+            number = _int(item.get('id')) if isinstance(item, dict) else None
+            if number is None or not 0 <= number < len(batch):
+                continue
+            question = batch[number]
+            options = item.get('options') if isinstance(item.get('options'), list) else []
+            if not str(item.get('text') or '').strip() or len(options) != len(question.get('options') or []):
+                continue
+            question['text'] = str(item['text']).strip()
+            for option, text in zip(question.get('options') or [], options):
+                option['text'] = str(text).strip() or option['text']
+            done += 1
+    return done
+
+
+def _enforce_language(language_name: str, questions: list) -> None:
+    code = _CODE_BY_NAME.get(language_name)
+    if not code:  # "auto" yoki noma'lum nom
+        return
+    wrong = [q for q in questions if q.get('type') in ('single', 'multiple', 'true_false', 'text', 'numeric')
+             and language_mismatch(code, _question_text(q))]
+    if wrong:
+        logger.info("AI savollari %s tilida emas edi (%d/%d), tarjima qilinmoqda", language_name, len(wrong), len(questions))
+        _translate(wrong, language_name)
+
+
+def _writer_system(language: str) -> str:
+    """Til talabi eng tepada va materialning tilidan ustun: aks holda inglizcha kitobdan inglizcha savollar chiqadi."""
+    name = (language or '').strip()
+    if not name or name.lower() == 'auto':
+        return _WRITER_SYSTEM
+    return (f'OUTPUT LANGUAGE (highest priority, it overrides the language of the source material): write every passage, '
+            f'question, option, explanation and instruction in {name}. If the source material is in another language, '
+            f'translate the ideas into {name} - never copy sentences in the source language. Keep programming code, '
+            f'identifiers, formulas, proper names and established technical terms as they are.\n\n' + _WRITER_SYSTEM)
+
+
+def _filled(questions: list) -> dict:
+    counts = {}
+    for question in questions:
+        counts[question['block']] = counts.get(question['block'], 0) + _size(question)
+    return counts
+
+
+def _write_pass(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str, avoid_questions: list,
+                asks: dict, given):
+    """Bitta AI so'rovi: `asks` = {blok raqami: nechta savol}. `given` — oldingi so'rovda yozilgan matn/audio skripti
+    (bo'lsa qayta yozilmaydi, savollar shu matn haqida). Qaytaradi: matn/audio va savollar ro'yxati (`block` belgisi bilan)."""
     section = plan['sections'][index]
+    blocks = [(i, {**block, 'count': asks[i]}) for i, block in enumerate(section['blocks']) if asks.get(i, 0) > 0]
     spec = {
         'section_number': index + 1, 'sections_total': len(plan['sections']), 'title': section['title'],
-        'passage': section['passage'], 'audio': section.get('audio'),
+        'passage': None if given else section['passage'], 'audio': None if given else section.get('audio'),
         'focus': section.get('focus', '') or (f'Every question must be about the topic: {topic}' if topic.strip() else ''),
-        'blocks': [{**block, 'index': i, 'spare': _block_spares(block)} for i, block in enumerate(section['blocks'])],
+        'blocks': [{**block, 'index': i, 'spare': _block_spares(block)} for i, block in blocks],
     }
     payload = {
         'section_spec': spec, 'exam_rules': plan['rules'], 'language': plan['language'],
         'avoid_topics': avoid_topics, 'topic': topic,
         'source_material': material[:settings.AI_EXAM_MATERIAL_CHARS],
     }
-    if avoid_questions:  # shu o'qituvchining oldingi testlaridagi savollar - takrorlanmasin
+    if avoid_questions:  # oldingi testlardagi va shu testda yozilgan savollar takrorlanmasin
         payload['avoid_questions'] = list(avoid_questions)
+    if given:
+        if given.get('passage'):
+            payload['passage_given'] = given['passage']
+        if given.get('transcript'):
+            payload['script_given'] = given['transcript']
+    system = _writer_system(plan['language'])
     user = json.dumps(payload, ensure_ascii=False)
-    data = llm.chat_json(_WRITER_SYSTEM, user)
-    if section.get('audio'):  # Listening skripti juda qisqa bo'lsa — bir marta kengaytirishni so'raymiz
+    data = llm.chat_json(system, user)
+    if not given and section.get('audio'):  # Listening skripti juda qisqa bo'lsa — bir marta kengaytirishni so'raymiz
         words, wanted = _words(_transcript(_script_turns(data))), section['audio']['min_words']
         if words < wanted * 0.7:
             retry = json.dumps({
@@ -642,9 +790,9 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                            'Write the FULL script again, longer and with realistic distractors, and re-write the '
                            'questions to match it.',
             }, ensure_ascii=False)
-            data = llm.chat_json(_WRITER_SYSTEM, retry)
+            data = llm.chat_json(system, retry)
 
-    if any(block['type'] == 'essay' for block in section['blocks']) and not _essays_ok(data, section):  # topshiriq to'liq emas - bir marta qayta so'raymiz
+    if not given and any(block['type'] == 'essay' for _i, block in blocks) and not _essays_ok(data, {**section, 'blocks': section['blocks']}):
         retry = json.dumps({
             **json.loads(user),
             'problem': 'Each essay question must contain the COMPLETE writing task (context, data table for Task 1 / '
@@ -652,14 +800,16 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                        'table rows separated by " | ". Block 0 is Task 1 and block 1 is Task 2 - keep that order. Write '
                        'all of them again, in full.',
         }, ensure_ascii=False)
-        data = llm.chat_json(_WRITER_SYSTEM, retry)
+        data = llm.chat_json(system, retry)
 
-    passage = str(data.get('passage') or '').strip() if section['passage'] else ''
-    if section['passage'] and len(passage) < 150:
-        raise llm.LLMError('AI matn parchasini yozmadi (bo\'sh/juda qisqa javob).')
+    passage = ''
+    if not given:
+        passage = str(data.get('passage') or '').strip() if section['passage'] else ''
+        if section['passage'] and len(passage) < 150:
+            raise llm.LLMError('AI matn parchasini yozmadi (bo\'sh/juda qisqa javob).')
 
     transcript, audio_path = '', ''
-    if section.get('audio'):
+    if not given and section.get('audio'):
         turns = _script_turns(data)
         if len(_transcript(turns)) < 200 or _words(_transcript(turns)) < section['audio']['min_words'] * 0.4:
             raise llm.LLMError('AI audio skriptini yozmadi (bo\'sh/juda qisqa javob).')
@@ -671,7 +821,7 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
     raw_questions = [q for q in (data.get('questions') or []) if isinstance(q, dict)]
     judging = bool(settings.AI_EXAM_JUDGE)
     candidates, dropped = [], 0  # candidates: [(blok, savol, zaxirami)]
-    for block_index, block in enumerate(section['blocks']):
+    for block_index, block in blocks:
         filled, spare_taken = 0, 0
         for raw in list(raw_questions):
             over = filled >= block['count']
@@ -695,24 +845,75 @@ def generate_section(plan: dict, index: int, material: str, *, avoid_topics: lis
                 else:
                     filled += _size(valid)
 
-    rejected = _judge(candidates, passage or transcript or material[:settings.AI_EXAM_JUDGE_CHARS], plan['language']) \
-        if judging and candidates else set()
+    rejected = _judge(candidates, passage or (given or {}).get('passage') or transcript or (given or {}).get('transcript')
+                      or material[:settings.AI_EXAM_JUDGE_CHARS], plan['language']) if judging and candidates else set()
     dropped += len(rejected)
 
-    result, missing = [], 0
-    for block_index, block in enumerate(section['blocks']):
-        mine, filled = [], 0
+    result = []
+    for block_index, block in blocks:
+        filled = 0
         for number, (owner, valid, _spare) in enumerate(candidates):
             if owner != block_index or number in rejected or filled >= block['count']:
                 continue
-            mine.append(valid)
+            result.append({**valid, 'block': block_index})
             filled += _size(valid)
-        missing += max(0, block['count'] - filled)
-        if mine and block['instruction'] and block['type'] != 'essay':
-            mine[0] = {**mine[0], 'text': f"{block['instruction']}\n\n{mine[0]['text']}"}
-        result.extend({**q, 'block': block_index} for q in mine)
-    return {'title': section['title'], 'passage': passage, 'transcript': transcript, 'audio_path': audio_path,
-            'questions': result, 'dropped': dropped, 'missing': missing}
+    return {'passage': passage, 'transcript': transcript, 'audio_path': audio_path, 'questions': result, 'dropped': dropped}
+
+
+def generate_section(plan: dict, index: int, material: str, *, avoid_topics: list, topic: str = '',
+                     avoid_questions: list = (), resume=None, progress=None) -> dict:
+    """`plan['sections'][index]` uchun matn parchasi va savollar. Qaytaradi:
+    {'title', 'passage', 'questions': [{...create_quiz formati, 'block': i}], 'dropped': n, 'missing': n}.
+
+    Uzun ro'yxatni model bitta so'rovda oxirigacha yozmaydi (57 so'ralsa 10 ta yozib to'xtaydi), shuning uchun savollar
+    `CHUNK` tadan bo'laklab so'raladi; oxirida yetishmagani qayta so'raladi (takrorlar tashlanadi). Matn parchasi/audio faqat
+    birinchi so'rovda yoziladi. `progress(acc)` har so'rovdan keyin chaqiriladi, `resume` — shu holatdan davom ettirish."""
+    section = plan['sections'][index]
+    acc = resume or {'passage': '', 'transcript': '', 'audio_path': '', 'questions': [], 'dropped': 0, 'passes': 0}
+    biggest = max(block['count'] for block in section['blocks'])
+    limit = min(MAX_PASSES, -(-biggest // CHUNK) + 2)
+    seen = {_key(q['text']) for q in acc['questions']}
+    stalls = 0
+    while acc['passes'] < limit:
+        filled = _filled(acc['questions'])
+        asks = {i: min(block['count'] - filled.get(i, 0), CHUNK) for i, block in enumerate(section['blocks'])
+                if block['count'] - filled.get(i, 0) > 0}
+        if not asks:
+            break
+        given = {'passage': acc['passage'], 'transcript': acc['transcript']} \
+            if acc['passes'] and (acc['passage'] or acc['transcript']) else None
+        known = list(avoid_questions) + [q['text'] for q in acc['questions']][-60:]
+        got = _write_pass(plan, index, material, avoid_topics=avoid_topics, topic=topic, avoid_questions=known,
+                          asks=asks, given=given)
+        if not acc['passes']:
+            acc['passage'], acc['transcript'], acc['audio_path'] = got['passage'], got['transcript'], got['audio_path']
+        fresh = []
+        for question in got['questions']:
+            key = _key(question['text'])
+            if key not in seen:
+                seen.add(key)
+                fresh.append(question)
+        acc['questions'] += fresh
+        acc['dropped'] += got['dropped']
+        acc['passes'] += 1
+        if progress:
+            progress(acc)
+        stalls = 0 if fresh else stalls + 1
+        if stalls >= 2:
+            break
+
+    questions = sorted(acc['questions'], key=lambda q: q['block'])
+    _enforce_language(plan['language'], questions)
+    filled = _filled(questions)
+    missing = sum(max(0, block['count'] - filled.get(i, 0)) for i, block in enumerate(section['blocks']))
+    seen_blocks = set()
+    for number, question in enumerate(questions):  # blok ko'rsatmasi har blokning birinchi savoliga qo'shiladi
+        block = section['blocks'][question['block']]
+        if question['block'] not in seen_blocks and block['instruction'] and block['type'] != 'essay':
+            questions[number] = {**question, 'text': f"{block['instruction']}\n\n{question['text']}"}
+        seen_blocks.add(question['block'])
+    return {'title': section['title'], 'passage': acc['passage'], 'transcript': acc['transcript'],
+            'audio_path': acc['audio_path'], 'questions': questions, 'dropped': acc['dropped'], 'missing': missing}
 
 
 def assemble(plan: dict, sections: list) -> tuple:

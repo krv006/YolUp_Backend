@@ -409,6 +409,9 @@ class FakeOpenAI:
         if system.startswith('You are an exam designer'):
             self.calls.append(('plan', None))
             return completion(planner_reply())
+        if system.startswith('You translate exam questions'):  # til tekshiruvi/tarjima: o'zgarishsiz qaytaramiz
+            self.calls.append(('translate', None))
+            return completion({'items': __import__('json').loads(user)['items']})
         spec = __import__('json').loads(user)['section_spec']
         number = spec['section_number']
         self.calls.append(('section', number))
@@ -430,6 +433,10 @@ class AiExamJobTests(QuizTestBase):
         patcher = patch('apps.quizzes.llm.requests.post', side_effect=self.fake)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Bu sinflardagi kutilgan chaqiruvlar soni bitta so'rovli eski oqimga mos; bo'lib yozish/to'ldirish/til — tests_ai_batching.py da
+        single = patch('apps.quizzes.ai_exam.MAX_PASSES', 1)
+        single.start()
+        self.addCleanup(single.stop)
 
     def upload(self, name='material.txt', text=LONG * 5):
         return SimpleUploadedFile(name, text.encode(), content_type='text/plain')
@@ -790,7 +797,7 @@ class AiExamJobTests(QuizTestBase):
 
     def test_with_material_the_language_still_follows_it(self):
         self.auth(self.teacher_token)
-        data = {'topic': 'Bees', 'course': self.course_id, 'file': self.upload(text=LONG * 5)}
+        data = {'topic': 'Bees', 'file': self.upload(text=LONG * 5)}
         response = self.client.post('/api/v1/quizzes/ai-generate/', data, format='multipart')
         self.sync()
         job = AiQuizJob.objects.get(pk=response.json()['id'])
@@ -1111,7 +1118,8 @@ class LetterPrefixAndGapCountTests(SimpleTestCase):
             {'title': 'S', 'passage': None, 'audio': None, 'focus': '', 'blocks': [
                 {'type': 'fill_blank', 'count': 5, 'instruction': '', 'options': 4, 'points': 1}]}]}
         two = {'kind': 'fill_blank', 'text': 'x {{1}} y {{2}}', 'blanks': [['a'], ['b']], 'block': 0}
-        with patch('apps.quizzes.llm.chat_json', return_value={'passage': '', 'questions': [two, two]}):
+        other = {**two, 'text': 'p {{1}} q {{2}}'}
+        with patch('apps.quizzes.llm.chat_json', return_value={'passage': '', 'questions': [two, other]}):
             result = ai_exam.generate_section(plan, 0, 'material', avoid_topics=[])
         self.assertEqual((len(result['questions']), result['missing']), (2, 1))  # 2 + 2 = 4 bo'shliq, 5 kerak
 

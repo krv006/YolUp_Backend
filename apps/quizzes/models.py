@@ -293,6 +293,7 @@ class AiQuizJob(TimeStampedUUIDModel):
         UZ_CYRL = 'uz_cyrl', 'Ўзбекча (кирилл)'
         RU = 'ru', 'Русский'
         EN = 'en', 'English'
+        TR = 'tr', 'Türkçe'
 
     ACTIVE_STATUSES = ('queued', 'processing', 'generating')
 

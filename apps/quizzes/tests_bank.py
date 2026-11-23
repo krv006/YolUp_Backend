@@ -67,7 +67,7 @@ class QuestionBankTests(QuizTestBase):
 
     def test_the_first_test_sends_no_avoid_list_and_the_second_does(self):
         self.generate()
-        self.assertTrue(all('avoid_questions' not in s for s in self.fake.sections))
+        self.assertNotIn('avoid_questions', self.fake.sections[0])  # birinchi so'rov: oldingi testlar yo'q (keyingi to'ldirish so'rovlari shu testning o'z savollarini ko'radi)
         self.fake.sections.clear()
         self.generate()
         sent = self.fake.sections[0]['avoid_questions']
