@@ -26,8 +26,8 @@ from apps.lessons.models import Course, Enrollment, Lesson
 
 from apps.quizzes import llm
 
-from . import ai_client, ai_grader, images as hw_images, questions as hw_questions, rules
-from .models import Assignment, AssignmentFocusEvent, Submission, SubmissionFile
+from . import ai_client, ai_grader, html_clean, images as hw_images, questions as hw_questions, rules
+from .models import Assignment, AssignmentFocusEvent, AssignmentImage, Submission, SubmissionFile
 
 logger = logging.getLogger('apps')
 
@@ -51,33 +51,52 @@ AI_FAILED_NOTE = "AI baholay olmadi — o'zingiz baholang."
 # Vazifa fayli (o'qituvchi biriktiradi) — faqat yuklab olinadi
 ATTACHMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp'}
 
-# Rich editor HTML'iga ruxsat etilgan teglar — XSS'dan himoya
-_ALLOWED_TAGS = {
-    'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike',
-    'h2', 'h3', 'ul', 'ol', 'li', 'blockquote', 'div', 'span', 'sub', 'sup',
-}
+# Vazifa matni (rich HTML): ruxsat etilgan teg/atribut/CSS ro'yxati va tozalash `html_clean` da (2026-11-23).
+MAX_BODY_CHARS = 300_000
 
 
 def sanitize_html(html: str) -> str:
-    """O'qituvchi yozgan HTML'ni tozalaydi. nh3 (Rust ammonia) bo'lsa u bilan,
-    bo'lmasa konservativ regex fallback (skript/atributlar olib tashlanadi)."""
+    """O'qituvchi yozgan HTML'ni tozalaydi (jadval, rasm, kod, formula, rang saqlanadi; script, on* va begona
+    manzillar o'chiriladi). Katta matn (masalan base64 rasm joylangan) rad etiladi."""
     html = (html or '').strip()
-    if not html:
-        return ''
-    try:
-        import nh3
-        return nh3.clean(html, tags=_ALLOWED_TAGS, attributes={})
-    except ImportError:
-        # Fallback: teg atributlarini butunlay olib tashlaymiz va faqat
-        # ruxsat etilgan teglarni qoldiramiz
-        html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.S | re.I)
+    if len(html) > MAX_BODY_CHARS:
+        raise ValidationError({'body': _("Vazifa matni juda katta. Rasmlarni matnga joylamang, ularni yuklang.")})
+    return html_clean.clean_rich_html(html)
 
-        def _tag(m):
-            closing, name = m.group(1), m.group(2).lower()
-            if name in _ALLOWED_TAGS:
-                return f'<{closing}{name}>'
-            return ''
-        return re.sub(r'<\s*(/?)\s*([a-zA-Z0-9]+)[^>]*>', _tag, html)
+
+# Vazifa matniga rasm: format Pillow bo'yicha tekshiriladi (kengaytmaga ishonilmaydi)
+_IMAGE_EXTENSIONS = {'PNG': 'png', 'JPEG': 'jpg', 'WEBP': 'webp', 'GIF': 'gif'}
+MAX_IMAGE_MB = 5
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGES_PER_HOUR = 200
+
+
+def create_assignment_image(*, teacher: User, upload) -> AssignmentImage:
+    """Vazifa matniga qo'yiladigan rasmni yuklaydi; qaytgan manzil `body` HTML'iga `<img src>` bo'lib kiradi."""
+    from PIL import Image  # lazy: faqat rasm yuklashda kerak
+
+    if upload is None:
+        raise ValidationError({'file': _('Rasm fayl yuboring.')})
+    if upload.size > MAX_IMAGE_MB * 1024 * 1024:
+        raise ValidationError({'file': _("Rasm %(max)s MB dan katta bo'lmasligi kerak.") % {'max': MAX_IMAGE_MB}})
+    try:
+        with Image.open(upload) as picture:
+            image_format = picture.format
+            width, height = picture.size
+            picture.verify()
+    except Exception as exc:
+        raise ValidationError({'file': _("Rasmni o'qib bo'lmadi. PNG, JPG, WEBP yoki GIF yuboring.")}) from exc
+    if image_format not in _IMAGE_EXTENSIONS:
+        raise ValidationError({'file': _("Rasm formati qo'llab-quvvatlanmaydi. PNG, JPG, WEBP yoki GIF yuboring.")})
+    if width * height > MAX_IMAGE_PIXELS:
+        raise ValidationError({'file': _("Rasm o'lchami juda katta.")})
+    recent = AssignmentImage.objects.filter(owner=teacher, created_at__gte=timezone.now() - timedelta(hours=1)).count()
+    if recent >= MAX_IMAGES_PER_HOUR:
+        raise ValidationError({'file': _("Bir soatda juda ko'p rasm yuklandi. Birozdan keyin urinib ko'ring.")})
+    upload.seek(0)
+    image = AssignmentImage(owner=teacher)
+    image.file.save(f'image.{_IMAGE_EXTENSIONS[image_format]}', upload, save=True)
+    return image
 
 
 # ── yordamchilar ────────────────────────────────────────────────────────────

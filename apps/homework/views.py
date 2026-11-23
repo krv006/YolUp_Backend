@@ -5,6 +5,7 @@ from django.http import FileResponse
 from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework import status as http_status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -379,3 +380,17 @@ class RemindChildView(APIView):
         return Response(services.remind_child(
             parent=request.user, assignment_id=assignment_id, student_id=student, request=request,
         ))
+
+
+class AssignmentImageView(APIView):
+    """Vazifa matniga rasm yuklash: `POST` multipart `file` (PNG/JPG/WEBP/GIF, 5 MB gacha) → `{id, url}`.
+    `url` muharrirda `<img src>` bo'lib qo'yiladi (matn saqlanganda manzil tekshiriladi, begona manzil o'chadi)."""
+
+    permission_classes = [RequirePerm('homework.assign')]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        image = services.create_assignment_image(teacher=request.user, upload=request.FILES.get('file'))
+        return Response(
+            {'id': image.id, 'url': request.build_absolute_uri(image.file.url)}, status=http_status.HTTP_201_CREATED,
+        )

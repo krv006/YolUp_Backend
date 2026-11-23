@@ -11,6 +11,9 @@ AI (Gemini) tekshiruv olib tashlangan (2026-10): `Submission.ai_*`, `check_attem
 `feedback_language`, `Assignment.extra_instructions` maydonlari eski ma'lumotlarni
 saqlash uchun qoldirilgan, yangi topshiriqlarda ishlatilmaydi.
 """
+import os
+import uuid
+
 from django.conf import settings
 from django.db.models import (
     CASCADE,
@@ -21,6 +24,7 @@ from django.db.models import (
     FileField,
     FloatField,
     ForeignKey,
+    ImageField,
     JSONField,
     ManyToManyField,
     PositiveIntegerField,
@@ -32,6 +36,9 @@ from django.db.models import (
 )
 
 from apps.core.models import TimeStampedUUIDModel
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+
 from apps.core.uploads import homework_submission_path, homework_task_path
 
 
@@ -279,3 +286,26 @@ class SubmissionAnswer(TimeStampedUUIDModel):
 
     class Meta:
         constraints = [UniqueConstraint(fields=['submission', 'question'], name='unique_submission_question_answer')]
+
+
+def homework_image_path(instance, filename: str) -> str:
+    """Vazifa matniga qo'yilgan rasm: `/media/` ochiq, shuning uchun taxmin qilib bo'lmaydigan uuid nom.
+    Yo'l boshlanishi (`homework_images/`) `html_clean.IMAGE_PATH_PREFIX` bilan mos bo'lishi shart."""
+    return f'homework_images/{uuid.uuid4().hex}{os.path.splitext(filename)[1].lower()}'
+
+
+class AssignmentImage(TimeStampedUUIDModel):
+    """Vazifa matni (`Assignment.body`) ichidagi rasm. Matn rasmga faqat manzil bilan bog'lanadi (FK yo'q): vazifa
+    nusxalansa yoki bazaga tushsa ham rasm yo'qolmaydi. Yuklagan o'qituvchi o'chsa rasm ham o'chadi."""
+
+    owner = ForeignKey(settings.AUTH_USER_MODEL, CASCADE, related_name='homework_images')
+    file = ImageField(upload_to=homework_image_path)
+
+    def __str__(self):
+        return str(self.id)
+
+
+@receiver(post_delete, sender=AssignmentImage)
+def _delete_assignment_image_file(sender, instance, **kwargs):
+    if instance.file:
+        instance.file.delete(save=False)

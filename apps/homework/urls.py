@@ -22,5 +22,6 @@ urlpatterns = [
     path('assignments/<uuid:assignment_id>/remind-child/', views.RemindChildView.as_view(), name='hw-remind-child'),
     path('assignments/<uuid:assignment_id>/ai-summary/', views.AiSummaryView.as_view(), name='hw-ai-summary'),
     path('assignments/<uuid:assignment_id>/focus/', views.AssignmentFocusView.as_view(), name='hw-focus'),
+    path('images/', views.AssignmentImageView.as_view(), name='hw-image'),
     path('report/', views.ProgressReportView.as_view(), name='hw-report'),
 ]
