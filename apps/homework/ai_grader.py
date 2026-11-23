@@ -22,7 +22,7 @@ from django.conf import settings
 
 from apps.quizzes import ielts_writing, llm, material_text
 
-from . import images as hw_images, rules
+from . import ai_prompt, images as hw_images, rules
 
 logger = logging.getLogger('apps')
 
@@ -330,12 +330,15 @@ def _grade(submission) -> dict:
             'They are NOT the student work; do not grade them.')
     if (assignment.extra_instructions or '').strip():
         lines.append('TEACHER INSTRUCTIONS:\n' + assignment.extra_instructions.strip()[:1500])
-    lines.append('STUDENT WORK (text):\n' + (material.text or '[no text: see the attached image(s) of the work]'))
+    lines.append('STUDENT WORK (text):\n' + (
+        ai_prompt.wrap_student_text(material.text) if material.text else '[no text: see the attached image(s) of the work]'))
     if material.images:
         lines.append(f'The last {len(material.images)} attached image(s) are the student work, in the order of the uploaded files.')
     language = _LANGUAGES[language_key]
-    data = llm.chat_json(
-        _SYSTEM.replace('{language}', language), '\n\n'.join(lines), images=tuple([*shown_task, *material.images]))
+    # Fan/ko'nikma profili + qat'iy baholash + himoya (RJalol'ning AI-home-checker'idan) — ustiga bizning platforma qoidalari
+    system = ai_prompt.build_system_prompt(
+        _SYSTEM.replace('{language}', language), assignment.course.subject, assignment.skill_key)
+    data = llm.chat_json(system, '\n\n'.join(lines), images=tuple([*shown_task, *material.images]))
     return _note_skipped(clean_result(data), material.skipped_images, language_key)
 
 
@@ -412,10 +415,10 @@ def _grade_speaking(assignment, submission) -> dict:
     ]
     if (assignment.extra_instructions or '').strip():
         lines.append('TEACHER INSTRUCTIONS:\n' + assignment.extra_instructions.strip()[:1500])
-    lines.append('STUDENT WORK (automatic transcript of the spoken answer):\n' + transcript[:STUDENT_CHARS])
+    lines.append('STUDENT WORK (automatic transcript of the spoken answer):\n' + ai_prompt.wrap_student_text(transcript[:STUDENT_CHARS]))
     lines.append('DELIVERY STATISTICS: ' + ', '.join(f'{key}={value}' for key, value in stats.items()))
     language_key = submission.feedback_language if submission.feedback_language in _LANGUAGES else 'uz'
-    system = (_SYSTEM + _SPEAKING_RULES).replace('{language}', _LANGUAGES[language_key])
+    system = (ai_prompt.UNTRUSTED_INPUT_BLOCK + '\n\n' + _SYSTEM + _SPEAKING_RULES).replace('{language}', _LANGUAGES[language_key])
     result = clean_result(llm.chat_json(system, '\n\n'.join(lines)))
     result['summary']['recommendations'].insert(0, _PRONUNCIATION_NOTE[language_key])
     result['summary']['recommendations'] = result['summary']['recommendations'][:9]
