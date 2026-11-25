@@ -257,6 +257,18 @@ class QuizUpdateSerializer(serializers.ModelSerializer):
         return questions
 
 
+class QuizAssignSerializer(serializers.Serializer):
+    """`POST /quizzes/{id}/assign/` — testni guruhga NUSXALAB berish (asl test o'zgarmaydi)."""
+
+    course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.all())
+    opens_at = serializers.DateTimeField(required=False, allow_null=True)
+    due_at = serializers.DateTimeField(required=False, allow_null=True)
+    student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
+    time_limit_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=600)
+    max_attempts = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=20)
+    questions_per_attempt = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+
 class AudienceMixin(serializers.Serializer):
     """`student_ids`: test faqat shu o'quvchilarga berilgan; `null` — guruhdagi hamma. Faqat o'qituvchi/admin ko'radi."""
 
@@ -271,6 +283,7 @@ class AudienceMixin(serializers.Serializer):
 
 
 class QuizListSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSerializer):
+    source_quiz_id = serializers.UUIDField(read_only=True)
     question_count = serializers.IntegerField(source='questions.count', read_only=True)
     # O'quvchi uchun (boshqa rollarda null): urinishlar va boshlangan, hali tugamagan vaqtli seans
     attempts_used = serializers.SerializerMethodField()
@@ -306,7 +319,7 @@ class QuizListSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSeri
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'question_count', 'student_ids', 'time_limit_minutes', 'max_attempts',
-            'questions_per_attempt', 'attempts_used', 'attempts_left', 'session_ends_at', 'created_at',
+            'questions_per_attempt', 'attempts_used', 'attempts_left', 'session_ends_at', 'created_at', 'source_quiz_id',
         ]
 
 
@@ -498,6 +511,7 @@ class QuestionDetailSerializer(serializers.Serializer):
 
 
 class QuizDetailSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSerializer):
+    source_quiz_id = serializers.UUIDField(read_only=True)
     """Faqat o'qituvchi/admin uchun — to'g'ri javoblar bilan (javob kaliti)."""
 
     questions = QuestionDetailSerializer(many=True, read_only=True)
@@ -508,7 +522,7 @@ class QuizDetailSerializer(AudienceMixin, SubjectLabelMixin, serializers.ModelSe
         fields = [
             'id', 'course', 'subject', 'subject_label', 'lesson', 'status', 'topic', 'title', 'description',
             'due_at', 'opens_at', 'student_ids', 'time_limit_minutes', 'max_attempts', 'questions_per_attempt',
-            'groups', 'questions', 'created_at',
+            'groups', 'questions', 'created_at', 'source_quiz_id',
         ]
 
 

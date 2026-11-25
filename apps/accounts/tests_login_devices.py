@@ -87,12 +87,21 @@ class LoginDevicesTests(APITestCase):
 
         self.login(APP)
         before = self.devices().json()[0]
-        self.assertEqual(before['last_active_at'], before['last_login_at'])  # hali faollik yangilanmagan
+        self.assertEqual(before['last_seen_at'], before['last_login_at'])  # hali faollik yangilanmagan
         later = timezone.now() + timedelta(days=2)
         UserSession.objects.filter(user=self.student).update(last_active=later)
         row = self.devices().json()[0]
-        self.assertGreater(row['last_active_at'], row['last_login_at'])  # mobil ilova qayta kirmasdan ishlayapti
+        self.assertGreater(row['last_seen_at'], row['last_login_at'])  # mobil ilova qayta kirmasdan ishlayapti
         self.assertEqual(row['last_login_at'], before['last_login_at'])  # kirish vaqti o'zgarmaydi
+
+    def test_devices_are_ordered_by_last_seen(self):
+        from apps.accounts.models import UserSession
+
+        self.login(CHROME_WIN)
+        self.login(APP)
+        self.assertEqual([r['device'] for r in self.devices().json()], ['Mobil ilova', 'Chrome · Windows'])  # eng yangi kirish birinchi
+        UserSession.objects.filter(user=self.student, user_agent__startswith='Mozilla').update(last_active=timezone.now() + timedelta(days=1))
+        self.assertEqual([r['device'] for r in self.devices().json()], ['Chrome · Windows', 'Mobil ilova'])
 
     def test_current_device_and_session_state(self):
         self.login(CHROME_WIN)

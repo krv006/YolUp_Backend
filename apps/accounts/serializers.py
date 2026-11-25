@@ -144,7 +144,7 @@ class MeSerializer(UserSerializer):
 
     linked_accounts = serializers.SerializerMethodField()
     # Akkauntni almashtirish oynasi uchun (2026-11-12): hali ochilmagan rollar (`switch-role` bilan ochiladi) va telefon yo'qligi sababli
-    # almashtirib bo'lmasligi. Telefon yo'q bo'lsa `available_roles` bo'sh, `role_switch_blocked` = "phone_required";
+    # almashtirib bo'lmasligi. Telefon ham, tasdiqlangan email ham yo'q bo'lsa `available_roles` bo'sh, `role_switch_blocked` = "phone_required";
     # o'zi o'quvchi bo'lib kirgan (boshqa akkaunti yo'q) bo'lsa — "student_not_allowed".
     available_roles = serializers.SerializerMethodField()
     role_switch_blocked = serializers.SerializerMethodField()
@@ -240,14 +240,14 @@ class MeSerializer(UserSerializer):
         return obj.role == User.Role.STUDENT and not selectors.linked_accounts(obj).exists()
 
     def get_available_roles(self, obj) -> list:
-        if not obj.phone or self._student_without_links(obj):
+        if not selectors.has_switch_contact(obj) or self._student_without_links(obj):
             return []
         existing = {obj.role, *selectors.linked_accounts(obj).values_list('role', flat=True)}
         return [role for role in ('teacher', 'parent', 'student') if role not in existing]
 
     def get_role_switch_blocked(self, obj):
-        if not obj.phone:
-            return 'phone_required'
+        if not selectors.has_switch_contact(obj):
+            return 'phone_required'  # telefon ham, tasdiqlangan email ham yo'q
         return 'student_not_allowed' if self._student_without_links(obj) else None
 
 

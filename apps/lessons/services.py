@@ -115,6 +115,26 @@ def cancel_lesson(*, teacher: User, lesson: Lesson, scope: str = 'one', request=
     return targets
 
 
+def _notify_teacher_lesson_finished(lesson: Lesson) -> None:
+    """Dars tugaganda o'qituvchiga ilova ichidagi bildirishnoma ("So'nggi faollik" va qo'ng'iroqcha); push yo'q."""
+    from apps.notifications.models import Notification
+    from apps.notifications.services import send_notification
+
+    teacher = lesson.course.teacher
+    start = timezone.localtime(lesson.live_started_at or lesson.starts_at).strftime('%H:%M')
+    end = timezone.localtime().strftime('%H:%M')
+    attended = lesson.attendances.filter(joined_at__isnull=False).count()
+    topic = f' — {lesson.title}' if lesson.title else ''
+    text = f"Dars tugadi: {lesson.course.title}{topic} · {start}–{end} · {attended} ta o'quvchi qatnashdi"
+    try:
+        send_notification(
+            sender=teacher, description=text, target_type=Notification.Target.USER, user_id=teacher.id,
+            kind='lesson.finished', link_type='lesson', link_id=str(lesson.id),
+        )
+    except Exception:  # noqa: BLE001 — bildirishnoma ixtiyoriy, dars yakuni to'xtamasin
+        logging.getLogger('apps').warning('lesson.finished bildirishnomasi yuborilmadi', exc_info=True)
+
+
 def _notify_cancelled(teacher: User, lesson: Lesson, targets: list) -> None:
     from apps.notifications.models import Notification
     from apps.notifications.services import send_notification
@@ -513,8 +533,11 @@ def finish_lesson(*, teacher: User, lesson: Lesson, recording_title: str = '', r
     video yozuv to'xtatilib O'QITUVCHI BERGAN NOM bilan guruh chatga e'lon qilinadi."""
     if lesson.course.teacher_id != teacher.id:
         raise PermissionDenied(_("Faqat o'qituvchi darsni tugata oladi."))
+    was_finished = lesson.status == Lesson.Status.FINISHED
     lesson.status = Lesson.Status.FINISHED
     lesson.save(update_fields=['status'])
+    if not was_finished and lesson.live_started_at:  # qo'lda va avtomatik yopilishda bir marta
+        _notify_teacher_lesson_finished(lesson)
     lesson.attendances.filter(left_at__isnull=True).update(left_at=timezone.now())
     try:  # dars tugadi, hali kirmagan o'quvchilarning ota-onalariga "darsga kelmadi" (takrorlanmaydi)
         if lesson.live_started_at:

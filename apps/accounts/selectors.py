@@ -156,6 +156,12 @@ def linked_accounts(user: User) -> QuerySet[User]:
     return User.objects.filter(link_group=user.link_group, is_active=True).exclude(pk=user.pk).order_by('role', 'username')
 
 
+def has_switch_contact(user: User) -> bool:
+    """Rol almashtirish uchun akkauntda telefon YOKI tasdiqlangan email bo'lishi kerak (begona akkauntni egallashdan
+    himoya shu kontakt bo'yicha tekshiriladi)."""
+    return bool(user.phone or ((user.email or '').strip() and (user.email_verified or user.email_exempt)))
+
+
 def users_with_phone(raw_phone: str) -> QuerySet[User]:
     """Shu raqamli BARCHA akkauntlar — raqamlarni (faqat raqamlar) solishtirib: `901234567`,
     `+998 90 123 45 67` va `+998901234567` bir xil raqam hisoblanadi (2026-11-10: avval aniq satr

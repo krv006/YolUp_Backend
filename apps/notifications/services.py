@@ -83,6 +83,10 @@ def push_title(notification: Notification) -> str:
     return announce_title(notification) or title_of(notification.kind, notification.link_type) or PUSH_DEFAULT_TITLE
 
 
+# Faqat ilova ichida ko'rinadigan turlar: push (brauzer/telefon) va email ketmaydi
+IN_APP_ONLY_KINDS = frozenset({'lesson.finished'})
+
+
 @transaction.atomic
 def send_notification(
     *, sender: User, description: str, target_type: str, user_id=None, request=None,
@@ -131,9 +135,10 @@ def send_notification(
 
     transaction.on_commit(lambda: realtime.broadcast_notification(notification, recipients))
     # Push tashqi xizmatlarga (brauzer/FCM) har qurilmaga alohida so'rov yuboradi: so'rov ichida emas, fonda (sekin qurilma xabar yuborishni to'xtatmasin)
-    transaction.on_commit(lambda: background.run(send_web_push, notification, recipients))
-    transaction.on_commit(lambda: background.run(send_mobile_push, notification, recipients))
-    transaction.on_commit(lambda: send_email_notification(notification, recipients))
+    if kind not in IN_APP_ONLY_KINDS:
+        transaction.on_commit(lambda: background.run(send_web_push, notification, recipients))
+        transaction.on_commit(lambda: background.run(send_mobile_push, notification, recipients))
+        transaction.on_commit(lambda: send_email_notification(notification, recipients))
     audit.record(
         action='notification.send', actor=sender, target=notification,
         meta={'target_type': target_type, 'recipient_count': len(recipients)}, request=request,

@@ -22,6 +22,8 @@ def category_of(kind: str, link_type: str = '') -> str:
         return 'submission'
     if kind.startswith('payment'):
         return 'payment'
+    if kind == 'lesson.finished':
+        return 'lesson_reminder'
     return 'announcement'
 
 
@@ -33,7 +35,7 @@ KIND_TITLES = {
     'homework_pending_review': 'Tekshiruv kutmoqda', 'homework_reviewed': 'Yangi baho',
     'homework_resubmit': 'Qayta topshirish', 'homework_reminder': 'Vazifa eslatmasi',
     'ai_quiz_ready': 'AI test tayyor', 'ai_quiz_failed': 'AI test yaratilmadi',
-    'lesson_cancelled': 'Dars bekor qilindi', 'lesson_invite': 'Darsga taklif', 'exam_scheduled': 'Imtihon belgilandi',
+    'lesson_cancelled': 'Dars bekor qilindi', 'lesson.finished': 'Dars tugadi', 'lesson_invite': 'Darsga taklif', 'exam_scheduled': 'Imtihon belgilandi',
     'teacher_approved': 'Hisob tasdiqlandi', 'teacher_pending_approval': 'Tasdiq kutilmoqda',
     'chat_message': 'Yangi xabar',
     'certificate_verified': 'Sertifikat tasdiqlandi', 'certificate_rejected': 'Sertifikat rad etildi',

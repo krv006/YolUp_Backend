@@ -64,6 +64,8 @@ class Quiz(TimeStampedUUIDModel):
         settings.AUTH_USER_MODEL, SET_NULL, null=True, blank=True, related_name='authored_quizzes',
     )
     subject = CharField(max_length=100, choices=Course.Subject.choices, blank=True)
+    # Shu test boshqa testdan guruhga NUSXALAB berilgan bo'lsa — asl test (`POST /quizzes/{id}/assign/`); asl o'chsa bo'sh qoladi
+    source_quiz = ForeignKey('self', SET_NULL, null=True, blank=True, related_name='copies')
     # Aniq (tugagan yoki tugamagan) darsga bog'lash ixtiyoriy — Assignment bilan bir xil naqsh.
     lesson = ForeignKey(
         'lessons.Lesson', SET_NULL, null=True, blank=True, related_name='quizzes',

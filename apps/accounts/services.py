@@ -1135,8 +1135,8 @@ def login_devices(*, viewer: User, student_id=None, request=None, date_from=None
     } if all_ids else {}
     for item in devices.values():
         stamps = [seen[sid] for sid in item.pop('_session_ids') if sid in seen]
-        item['last_active_at'] = max([item['last_login_at'], *stamps])
-    return list(devices.values())
+        item['last_seen_at'] = max([item['last_login_at'], *stamps])
+    return sorted(devices.values(), key=lambda item: item['last_seen_at'], reverse=True)  # oxirgi faol qurilma birinchi
 
 
 @transaction.atomic
@@ -1367,7 +1367,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     if role == current_user.role:
         raise ValidationError({'role': _('Siz allaqachon shu roldasiz.')})
     verified_email = (current_user.email or '').strip() if (current_user.email_verified or current_user.email_exempt) else ''
-    if not current_user.phone and not verified_email:
+    from . import selectors as _sel
+
+    if not _sel.has_switch_contact(current_user):
         raise ValidationError({'role': _("Rol almashtirish uchun avval emailingizni tasdiqlang yoki telefon raqamingizni kiriting.")})
 
     from . import selectors

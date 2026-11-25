@@ -11,6 +11,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from apps.accounts.models import User
+from apps.core import audit
 from apps.lessons.models import Course, Enrollment, Lesson
 
 from . import (
@@ -478,6 +479,65 @@ def update_quiz(*, teacher: User, quiz: Quiz, **fields) -> Quiz:
         if quiz.opens_at is None or quiz.opens_at <= timezone.now():
             transaction.on_commit(lambda: _notify_students(quiz, newly_assigned))  # keyin qo'shilgan o'quvchilarga xabar
     return quiz
+
+
+@transaction.atomic
+def assign_copy(
+    *, teacher: User, quiz: Quiz, course: Course, opens_at=None, due_at=None, student_ids=None,
+    time_limit_minutes=None, max_attempts=None, questions_per_attempt=None,
+) -> Quiz:
+    """Testni guruhga NUSXALAB berish: asl test (bankda yoki boshqa guruhda) o'zgarmaydi, guruhga yangi nusxa tushadi
+    (savollar, variantlar, to'g'ri javoblar, matn/audio guruhlari, rasmlar). Nusxada `source_quiz` — asl test."""
+    if not _is_owner(quiz, teacher):
+        raise PermissionDenied(_('Bu test sizga tegishli emas.'))
+    if course.teacher_id != teacher.id:
+        raise PermissionDenied(_('Bu guruh sizga tegishli emas.'))
+    questions = list(quiz.questions.prefetch_related('options').order_by('order', 'created_at'))
+    if not questions:
+        raise ValidationError({'detail': _("Testda savol yo'q.")})
+    _check_limits(
+        question_count=len(questions), has_groups=quiz.groups.exists(), time_limit_minutes=time_limit_minutes,
+        max_attempts=max_attempts, questions_per_attempt=questions_per_attempt,
+    )
+    root = quiz.source_quiz or quiz  # nusxadan nusxa olinsa ham asl testga ishora qiladi
+    copy = Quiz.objects.create(
+        course=course, author=teacher, subject=quiz.subject or course.subject, topic=quiz.topic, title=quiz.title,
+        description=quiz.description, status=quiz.status, due_at=due_at, opens_at=opens_at, source_quiz=root,
+        time_limit_minutes=time_limit_minutes, max_attempts=max_attempts, questions_per_attempt=questions_per_attempt,
+    )
+    group_map = {}
+    for group in quiz.groups.all():
+        new_group = QuestionGroup.objects.create(
+            quiz=copy, order=group.order, title=group.title, passage=group.passage, transcript=group.transcript,
+        )
+        if group.audio:  # fayl nusxasi: bittasi o'chsa (post_delete) ikkinchisining audiosi yo'qolmasin
+            from django.core.files.base import ContentFile
+
+            try:
+                with group.audio.open('rb') as handle:
+                    new_group.audio.save(group.audio.name.rsplit('/', 1)[-1], ContentFile(handle.read()), save=True)
+            except OSError:
+                import logging
+                logging.getLogger('apps').warning('quiz audio nusxalanmadi: %s', group.audio.name, exc_info=True)
+        group_map[group.id] = new_group
+    for question in questions:
+        new_question = Question.objects.create(
+            quiz=copy, group=group_map.get(question.group_id), type=question.type, text=question.text,
+            image=question.image, text_after=question.text_after, order=question.order, points=question.points,
+            answer_key=question.answer_key,
+        )
+        Option.objects.bulk_create([
+            Option(question=new_question, text=o.text, is_correct=o.is_correct, order=o.order) for o in question.options.all()
+        ])
+    if student_ids:
+        set_audience(teacher=teacher, quiz=copy, student_ids=student_ids)
+    audit.record(
+        action='quiz.assign_copy', actor=teacher, target=copy,
+        meta={'source_quiz_id': str(root.pk), 'course_id': str(course.pk)},
+    )
+    if copy.status == Quiz.Status.PUBLISHED:
+        _notify_if_open(copy)
+    return copy
 
 
 def delete_quiz(*, teacher: User, quiz: Quiz) -> None:

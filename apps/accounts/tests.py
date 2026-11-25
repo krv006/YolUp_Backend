@@ -846,6 +846,16 @@ class SwitchRoleTests(APITestCase):
         self.assertEqual((parent.role, parent.email, parent.email_verified), ('parent', 'Teach@Example.com', True))
         self.assertFalse(parent.phone)
 
+    def test_me_lists_available_roles_for_a_phoneless_user_with_verified_email(self):
+        register(self.client, 'srme_teacher', 'teacher')
+        self.auth(login(self.client, 'srme_teacher'))
+        me = self.client.get('/api/v1/auth/me/').json()
+        self.assertEqual((me['available_roles'], me['role_switch_blocked']), ([], 'phone_required'))  # kontakt yo'q
+        User.objects.filter(username='srme_teacher').update(email='me@example.com', email_verified=True)
+        me = self.client.get('/api/v1/auth/me/').json()
+        self.assertEqual(sorted(me['available_roles']), ['parent', 'student'])
+        self.assertIsNone(me['role_switch_blocked'])
+
     def test_unverified_email_is_not_enough(self):
         register(self.client, 'sremailu_teacher', 'teacher')
         User.objects.filter(username='sremailu_teacher').update(email='x@example.com', email_verified=False, email_exempt=False)

@@ -29,6 +29,7 @@ from .serializers import (
     AttemptListSerializer,
     AttemptResultSerializer,
     AttemptSubmitSerializer,
+    QuizAssignSerializer,
     QuizCreateSerializer,
     QuizDetailSerializer,
     QuizListSerializer,
@@ -409,6 +410,21 @@ class QuizDetailView(APIView):
         quiz = _get_quiz(request.user, pk)
         services.delete_quiz(teacher=request.user, quiz=quiz)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QuizAssignView(APIView):
+    """`POST /quizzes/{id}/assign/` — testni guruhga NUSXALAB berish (201 + yangi test). Asl test bankda/eski guruhda
+    o'zgarishsiz qoladi; bitta testni bir nechta guruhga berish mumkin. Nusxada `source_quiz_id` — asl test."""
+
+    def get_permissions(self):
+        return [RequirePerm('quiz.create')(), TestCreationAllowed()]
+
+    def post(self, request, pk):
+        quiz = _get_quiz(request.user, pk)
+        serializer = QuizAssignSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        copy = services.assign_copy(teacher=request.user, quiz=quiz, **serializer.validated_data)
+        return Response(QuizDetailSerializer(copy, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 
 class QuizGroupAudioView(APIView):

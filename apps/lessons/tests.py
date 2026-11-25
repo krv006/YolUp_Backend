@@ -85,6 +85,35 @@ class CourseLessonFlowTests(APITestCase):
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.json()['status'], 'approved')
 
+    def test_teacher_gets_one_in_app_notification_when_lesson_finishes(self):
+        from unittest.mock import patch
+
+        from apps.notifications.models import NotificationRecipient
+
+        self.auth(self.parent_token)
+        self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
+        self.approve_all_requests()
+        self.auth(self.teacher_token)
+        self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
+        self.auth(self.child_token)
+        self.client.post('/api/v1/live/token/', {'lesson_id': self.lesson_id})
+        self.auth(self.teacher_token)
+
+        with patch('apps.notifications.services.send_web_push') as web, patch('apps.notifications.services.send_mobile_push') as mobile, \
+                self.captureOnCommitCallbacks(execute=True):
+            self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')
+            self.client.post(f'/api/v1/lessons/{self.lesson_id}/finish/')  # qayta bosilsa ikkinchi xabar ketmaydi
+        rows = NotificationRecipient.objects.filter(notification__kind='lesson.finished', notification__link_id=str(self.lesson_id))
+        self.assertEqual(rows.count(), 1)
+        row = rows.get()
+        self.assertEqual(row.user.role, 'teacher')
+        self.assertIn("1 ta o'quvchi qatnashdi", row.notification.description)
+        self.assertEqual(row.notification.link_type, 'lesson')
+        web.assert_not_called()
+        mobile.assert_not_called()  # faqat ilova ichida
+        feed = self.client.get('/api/v1/dashboard/activity/').json()
+        self.assertEqual((feed[0]['title'], feed[0]['category']), ('Dars tugadi', 'lesson_reminder'))
+
     def test_room_token_flow_and_attendance(self):
         self.auth(self.parent_token)
         self.client.post(f'/api/v1/courses/{self.course_id}/enroll/', {'student_id': self.child_id})
