@@ -155,7 +155,7 @@ def course_folders(user: User) -> list:
     `file_count` (yuklangan fayllar + chatga yuborilgan fayllar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
     Video/doska sonlari `lesson_folders` bilan bir xil qoidada: bekor qilingan/o'chirilgan darslar sanalmaydi,
     o'quvchi/ota-ona faqat tayyor yozuvni sanaydi."""
-    courses = list(visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('title').distinct())
+    courses = list(visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('-created_at', 'title').distinct())  # yangi guruh birinchi
     ids = [c.id for c in courses]
     sees_all = user.role in (User.Role.TEACHER, User.Role.ADMIN, User.Role.SUPER_ADMIN)
     lessons = (

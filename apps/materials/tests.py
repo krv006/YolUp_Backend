@@ -293,3 +293,10 @@ def _png():
     buffer = io.BytesIO()
     Image.new('RGB', (2, 2)).save(buffer, 'PNG')
     return buffer.getvalue()
+
+
+class MaterialCourseOrderTests(MaterialTests):
+    def test_groups_list_is_newest_first(self):
+        newer = Course.objects.create(teacher=self.teacher, title='Aaa yangi', subject='math')
+        titles = [row['title'] for row in self.api(self.teacher).get('/api/v1/materials/courses/').json()]
+        self.assertEqual(titles, [newer.title, 'Algebra'])  # nom bo'yicha emas: yangi guruh birinchi
