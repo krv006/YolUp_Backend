@@ -68,8 +68,6 @@ class AssignmentListCreateView(APIView):
             lesson_id=request.data.get('lesson_id') or None,
             extra_instructions=request.data.get('extra_instructions') or '',
             attachment=request.FILES.get('attachment'),
-            voice=request.FILES.get('voice'),
-            voice_duration_ms=request.data.get('voice_duration_ms'),
             status=request.data.get('status') or 'active',
             announce_in_chat=request.data.get('announce_in_chat'),
             allow_late=request.data.get('allow_late'),
@@ -104,12 +102,6 @@ class AssignmentDetailView(APIView):
                 kwargs[field] = request.data.get(field)
         if 'attachment' in request.FILES:
             kwargs['attachment'] = request.FILES.get('attachment')
-        if 'voice' in request.FILES:
-            kwargs['voice'] = request.FILES.get('voice')
-            if 'voice_duration_ms' in request.data:
-                kwargs['voice_duration_ms'] = request.data.get('voice_duration_ms')
-        if 'remove_voice' in request.data:
-            kwargs['remove_voice'] = request.data.get('remove_voice')
         if 'questions' in request.data:
             kwargs['questions'] = _json_field(request.data.get('questions'))
 
@@ -168,16 +160,6 @@ class AssignmentFileView(APIView):
     def get(self, request, assignment_id):
         path, name = services.assignment_file(user=request.user, assignment_id=assignment_id)
         return FileResponse(open(path, 'rb'), as_attachment=True, filename=name)
-
-
-class AssignmentVoiceView(APIView):
-    """O'qituvchining ovozli izohi (himoyalangan: token bilan, vazifa fayli bilan bir xil ruxsat)."""
-
-    permission_classes = [RequirePerm('homework.view')]
-
-    def get(self, request, assignment_id):
-        path, mime = services.assignment_voice(user=request.user, assignment_id=assignment_id)
-        return FileResponse(open(path, 'rb'), content_type=mime)
 
 
 class SubmissionDraftView(APIView):
