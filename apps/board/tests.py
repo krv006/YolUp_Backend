@@ -140,18 +140,37 @@ class BoardTests(TestCase):
         r = self.api(self.teacher).get(self.url())
         self.assertEqual(len(r.data['pending_mic_requests']), 1)
 
-    def test_erase_requires_reason(self):
-        r = self.api(self.teacher).post(self.url('stroke/'), {'sheet': 0, 'stroke': STROKE}, format='json')
-        sid = r.data['id']
-        r = self.api(self.teacher).post(
-            self.url('erase/'), {'sheet': 0, 'stroke_ids': [sid], 'reason': ''}, format='json',
-        )
-        self.assertEqual(r.status_code, 400)
-        r = self.api(self.teacher).post(
-            self.url('erase/'), {'sheet': 0, 'stroke_ids': [sid], 'reason': "Xato chizildi"}, format='json',
-        )
+    def test_erase_reason_is_optional_and_empty_reason_stays_silent(self):
+        from unittest.mock import patch
+
+        from .models import BoardErase
+
+        def draw():
+            return self.api(self.teacher).post(self.url('stroke/'), {'sheet': 0, 'stroke': STROKE}, format='json').data['id']
+
+        sid = draw()
+        with patch('apps.board.realtime.broadcast_erase') as broadcast:
+            with self.captureOnCommitCallbacks(execute=True):
+                r = self.api(self.teacher).post(self.url('erase/'), {'sheet': 0, 'stroke_ids': [sid]}, format='json')
+        self.assertEqual((r.status_code, r.data['removed']), (200, 1))
+        self.assertEqual(broadcast.call_args.args[4], '')  # sabab yo'q -> o'quvchiga xabar yo'q
+        self.assertEqual(BoardErase.objects.get().reason, '')
+
+        sid = draw()
+        r = self.api(self.teacher).post(self.url('erase/'), {'sheet': 0, 'stroke_ids': [sid], 'reason': '  '}, format='json')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data['removed'], 1)
+
+        sid = draw()
+        with patch('apps.board.realtime.broadcast_erase') as broadcast:
+            with self.captureOnCommitCallbacks(execute=True):
+                r = self.api(self.teacher).post(
+                    self.url('erase/'), {'sheet': 0, 'stroke_ids': [sid], 'reason': 'Xato chizildi'}, format='json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(broadcast.call_args.args[4], 'Xato chizildi')  # sabab berilsa avvalgidek ketadi
+
+        # nimani o'chirish ko'rsatilmasa baribir 400
+        r = self.api(self.teacher).post(self.url('erase/'), {'sheet': 0, 'stroke_ids': []}, format='json')
+        self.assertEqual(r.status_code, 400)
 
     def test_finish_publishes_pdf_message(self):
         from unittest.mock import patch

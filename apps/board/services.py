@@ -456,10 +456,9 @@ def rename_sheet(*, user: User, lesson_id, index: int, title) -> dict:
 
 @transaction.atomic
 def erase_strokes(*, user: User, lesson_id, sheet_index: int, stroke_ids: list, reason: str) -> int:
-    """O'chirish — sabab MAJBURIY (EduTech.docx: "ochirish sababi bosh bolishi kere emas")."""
-    reason = (reason or '').strip()
-    if not reason:
-        raise ValidationError({'reason': _("O'chirish sababi bo'sh bo'lishi mumkin emas.")})
+    """O'chirish. Sabab IXTIYORIY (2026-11-25, mahsulot egasi): bo'sh bo'lsa o'quvchiga xabar ketmaydi
+    (`reason: ""`), lekin o'chirish jurnali va audit yozuvi saqlanadi."""
+    reason = str(reason or '').strip()
     if not stroke_ids:
         raise ValidationError({'stroke_ids': _("Nimani o'chirish ko'rsatilmadi.")})
     lesson = _get_lesson(lesson_id)

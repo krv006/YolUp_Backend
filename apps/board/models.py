@@ -53,7 +53,7 @@ class BoardGrant(TimeStampedUUIDModel):
 
 
 class BoardErase(TimeStampedUUIDModel):
-    """O'chirish jurnali — sabab MAJBURIY (EduTech.docx)."""
+    """O'chirish jurnali — sabab ixtiyoriy (bo'sh bo'lishi mumkin)."""
 
     lesson = ForeignKey('lessons.Lesson', CASCADE, related_name='board_erases')
     user = ForeignKey('accounts.User', CASCADE, related_name='board_erases')
