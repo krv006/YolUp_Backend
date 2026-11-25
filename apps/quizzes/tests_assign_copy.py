@@ -123,3 +123,19 @@ class AssignCopyTests(HomeworkBase):
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.json()['status'], 'draft')
         self.assertFalse(NotificationRecipient.objects.filter(user=self.student).exists())
+
+    def test_list_filters_for_the_assign_picker_originals_only_incl_tests_in_a_group(self):
+        moved = self.api(self.teacher).patch(f'/api/v1/quizzes/{self.quiz.id}/', {'course': str(self.course.id)}, format='json')
+        self.assertEqual(moved.status_code, 200, moved.content)
+        self.assign(self.quiz, self.course2)  # nusxa
+        draft = services.create_quiz(
+            teacher=self.teacher, topic='Qoralama', subject='math', questions=QUESTIONS[1:], status=Quiz.Status.DRAFT)
+
+        def ids(query):
+            rows = self.api(self.teacher).get(f'/api/v1/quizzes/?{query}').json()
+            return {row['id'] for row in rows.get('results', rows)}
+
+        self.assertEqual(ids('is_copy=false&status=published'), {str(self.quiz.id)})  # guruhda turgan asl test ham chiqadi
+        self.assertEqual(ids('is_copy=false&status=draft'), {str(draft.id)})
+        self.assertEqual(len(ids('is_copy=true')), 1)  # faqat nusxa
+        self.assertEqual(len(ids('')), 3)  # filtrsiz: hammasi

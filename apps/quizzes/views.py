@@ -20,6 +20,7 @@ from apps.accounts.models import User
 from apps.core.permissions import RequirePerm, TestCreationAllowed
 
 from . import ai_answers, ai_jobs, attempts_export, export, selectors, services
+from .filters import QuizFilter
 from .models import AiQuizJob, AnswerResponse, Question, Quiz, QuizAttempt, QuizDraft
 from .serializers import (
     AiQuizCreateSerializer,
@@ -69,7 +70,7 @@ def _import_response(request, preview: dict) -> Response:
 
 
 class QuizListCreateView(generics.ListCreateAPIView):
-    filterset_fields = ['course', 'lesson', 'subject']
+    filterset_class = QuizFilter  # course, lesson, subject, status, is_copy
     search_fields = ['topic', 'title']
     ordering_fields = ['created_at', 'due_at', 'opens_at']
 
