@@ -50,6 +50,10 @@ AI_FAILED_NOTE = "AI baholay olmadi — o'zingiz baholang."
 
 # Vazifa fayli (o'qituvchi biriktiradi) — faqat yuklab olinadi
 ATTACHMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp'}
+# O'qituvchining ovozli izohi: kengaytma -> MIME (brauzer MediaRecorder `video/webm` deb yuborishi mumkin, shuning uchun kengaytmadan olamiz)
+VOICE_MIME = {'.webm': 'audio/webm', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg', '.wav': 'audio/wav'}
+VOICE_MAX_MB = 20
+VOICE_MAX_MS = 10 * 60 * 1000
 
 # Vazifa matni (rich HTML): ruxsat etilgan teg/atribut/CSS ro'yxati va tozalash `html_clean` da (2026-11-23).
 MAX_BODY_CHARS = 300_000
@@ -271,6 +275,36 @@ def _file_size(field) -> int | None:
         return None
 
 
+def _clean_voice(voice, duration_ms) -> tuple:
+    """Ovozli izoh: format, hajm (20 MB) va davomiylik (10 daqiqa) tekshiriladi -> (fayl, davomiylik ms, MIME)."""
+    ext = Path(voice.name or '').suffix.lower()
+    if ext not in VOICE_MIME:
+        raise ValidationError({'voice': _("'%(ext)s' qo'llab-quvvatlanmaydi. Mumkin: %(allowed)s") % {
+            'ext': ext, 'allowed': ', '.join(sorted(VOICE_MIME)),
+        }})
+    if voice.size > VOICE_MAX_MB * 1024 * 1024:
+        raise ValidationError({'voice': _('Ovoz %(max_mb)s MB dan katta.') % {'max_mb': VOICE_MAX_MB}})
+    if voice.size == 0:
+        raise ValidationError({'voice': _("Ovoz fayli bo'sh.")})
+    ms = None
+    if duration_ms not in (None, ''):
+        try:
+            ms = int(float(duration_ms))
+        except (TypeError, ValueError):
+            raise ValidationError({'voice_duration_ms': _("Davomiylik son bo'lishi kerak (millisekund).")})
+        if ms < 0:
+            raise ValidationError({'voice_duration_ms': _("Davomiylik manfiy bo'lishi mumkin emas.")})
+        if ms > VOICE_MAX_MS:
+            raise ValidationError({'voice_duration_ms': _('Ovoz %(minutes)s daqiqadan uzun bo\'lmasin.') % {'minutes': VOICE_MAX_MS // 60000}})
+    return voice, ms, VOICE_MIME[ext]
+
+
+def _voice_dict(a: Assignment):
+    if not a.voice:
+        return None
+    return {'url': f'/api/v1/homework/assignments/{a.id}/voice/', 'duration_ms': a.voice_duration_ms, 'mime': a.voice_mime}
+
+
 def _assignment_dict(a: Assignment) -> dict:
     return {
         'status': a.status,
@@ -293,6 +327,7 @@ def _assignment_dict(a: Assignment) -> dict:
         'attachment_name': a.attachment_name,
         'attachment_size': _file_size(a.attachment),
         'has_attachment': bool(a.attachment),
+        'voice': _voice_dict(a),
         'due_at': a.due_at,
         'skill_key': a.skill_key,
         'lesson_id': str(a.lesson_id) if a.lesson_id else None,
@@ -411,7 +446,7 @@ def _resolve_lesson(*, course: Course, lesson_id) -> Lesson | None:
 
 def create_assignment(*, teacher: User, course_id, title: str, description: str = '',
                       body: str = '', due_at=None, skill_key: str = '', lesson_id=None,
-                      extra_instructions: str = '', attachment=None, status='active', announce_in_chat=True,
+                      extra_instructions: str = '', attachment=None, voice=None, voice_duration_ms=None, status='active', announce_in_chat=True,
                       allow_late=True, grading='five', max_score=None, ai_check=None, questions=None,
                       google_form_url='') -> dict:
     """`course_id` bo'sh bo'lsa — vazifa "bazaga" tushadi (faqat muallifga ko'rinadi), keyin `assign_from_bank` bilan beriladi."""
@@ -447,9 +482,14 @@ def create_assignment(*, teacher: User, course_id, title: str, description: str 
             })
         attachment_name = (attachment.name or 'vazifa')[:255]
 
+    voice_ms = voice_mime = None
+    if voice is not None:
+        voice, voice_ms, voice_mime = _clean_voice(voice, voice_duration_ms)
+
     assignment = Assignment.objects.create(
         course=course,
         author=teacher,
+        voice=voice, voice_duration_ms=voice_ms, voice_mime=voice_mime or '',
         google_form_url=form_url,
         lesson=lesson,
         title=title.strip(),
@@ -601,7 +641,7 @@ _UNSET = object()  # "maydon umuman yuborilmadi" — bo'sh qiymatdan (o'chirish)
 def update_assignment(
     *, teacher: User, assignment_id, title=_UNSET, description=_UNSET, body=_UNSET,
     due_at=_UNSET, skill_key=_UNSET, lesson_id=_UNSET, extra_instructions=_UNSET,
-    attachment=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
+    attachment=_UNSET, voice=_UNSET, voice_duration_ms=_UNSET, remove_voice=_UNSET, status=_UNSET, announce_in_chat=_UNSET, allow_late=_UNSET, grading=_UNSET, max_score=_UNSET,
     ai_check=_UNSET, questions=_UNSET, google_form_url=_UNSET,
 ) -> dict:
     """Vazifani qisman yangilaydi (PATCH) — faqat yuborilgan maydonlar
@@ -660,6 +700,12 @@ def update_assignment(
         a.attachment = attachment
         a.attachment_name = (attachment.name or 'vazifa')[:255]
         fields += ['attachment', 'attachment_name']
+    if voice is not _UNSET and voice is not None:
+        a.voice, a.voice_duration_ms, a.voice_mime = _clean_voice(voice, None if voice_duration_ms is _UNSET else voice_duration_ms)
+        fields += ['voice', 'voice_duration_ms', 'voice_mime']
+    elif _bool(None if remove_voice is _UNSET else remove_voice, False) and a.voice:
+        a.voice, a.voice_duration_ms, a.voice_mime = None, None, ''
+        fields += ['voice', 'voice_duration_ms', 'voice_mime']
 
     if announce_in_chat is not _UNSET:
         a.announce_in_chat = _bool(announce_in_chat, True)
@@ -697,6 +743,20 @@ def update_assignment(
     if publish_now:
         _publish(a)  # qoralama e'lon qilindi: bildirishnoma va chat kartasi endi tushadi
     return _with_questions(a, include_correct=True)
+
+
+def assignment_voice(*, user: User, assignment_id) -> tuple:
+    """Ovozli izoh: ruxsat vazifa fayli bilan bir xil (guruh a'zosi, ota-ona, muallif)."""
+    a = _get_assignment(assignment_id, allow_bank=True)
+    if a.course_id is None:
+        if not _is_owner(a, user):
+            raise NotFound(_('Vazifa topilmadi.'))
+    elif not _can_view_course(user, a.course):
+        raise PermissionDenied(_("Bu ovozni eshitish huquqingiz yo'q."))
+    _ensure_visible(user, a)
+    if not a.voice:
+        raise NotFound(_("Bu vazifada ovozli izoh yo'q."))
+    return a.voice.path, a.voice_mime or 'audio/mpeg'
 
 
 def assignment_file(*, user: User, assignment_id) -> tuple:
@@ -900,6 +960,7 @@ def assign_from_bank(*, teacher: User, assignment_id, course_ids=None, student_i
         copy = Assignment.objects.create(
             course=course, author=teacher, source=bank, title=bank.title, description=bank.description, body=bank.body,
             attachment=bank.attachment.name if bank.attachment else None, attachment_name=bank.attachment_name,
+            voice=bank.voice.name if bank.voice else None, voice_duration_ms=bank.voice_duration_ms, voice_mime=bank.voice_mime,
             due_at=due, skill_key=bank.skill_key, extra_instructions=bank.extra_instructions,
             status=Assignment.Status.ACTIVE,
             announce_in_chat=_bool(announce_in_chat, True) and not only,
