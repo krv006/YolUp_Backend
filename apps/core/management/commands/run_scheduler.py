@@ -28,6 +28,7 @@ JOBS = [
     ('recover_recordings', 'recover_recordings', (), 300),
     ('send_deadline_reminders', 'send_deadline_reminders', (), 300),
     ('close_stale_voice_rooms', 'close_stale_voice_rooms', (), 300),
+    ('close_finished_lesson_rooms', 'close_finished_lesson_rooms', (), 60),  # tugagan darsga eski token bilan qayta kirib xona qayta ochilsa yopadi
     ('sync_ai_quizzes', 'sync_ai_quizzes', (), 30),
     ('sync_exam_writing_ai', 'sync_exam_writing_ai', (), 30),
     ('send_lesson_reminders', 'send_lesson_reminders', (), 60),

@@ -299,6 +299,7 @@ class LessonViewSet(viewsets.ModelViewSet):
     serializer_class = LessonSerializer
     filterset_class = LessonFilter  # course, status, student (ota-ona: farzand), starts_at__gte / starts_at__lte
     ordering_fields = ['starts_at']
+    ordering = ['-starts_at']  # standart: YANGIDAN ESKIGA (Trello 83); eskidan yangiga kerak bo'lsa `?ordering=starts_at`
 
     def get_permissions(self):
         if self.action in ('create', 'bulk_create'):

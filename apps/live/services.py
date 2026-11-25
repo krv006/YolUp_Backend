@@ -90,6 +90,18 @@ def _compute_join_delay_ms() -> int:
     return ((position - 1) // _JOIN_QUEUE_BATCH_SIZE) * _JOIN_QUEUE_BATCH_INTERVAL_MS
 
 
+TOKEN_AFTER_END = timedelta(hours=2)   # dars rejalashtirilgan vaqtidan keyin ham token shuncha amal qiladi (cho'zilgan dars uchun zaxira)
+TOKEN_MAX_TTL = timedelta(hours=8)
+
+
+def _token_ttl(lesson: Lesson) -> timedelta:
+    """Token muddati: dars tugashiga qolgan vaqt + 2 soat (ko'pi bilan 8 soat). Avval har doim 8 soat edi: dars
+    tugagach ham eski token bilan xonaga qayta kirib bo'lardi (Trello 84). Kechikib boshlangan dars uchun ham kamida 2 soat."""
+    planned_end = lesson.starts_at + timedelta(minutes=lesson.duration_min or 45)
+    remaining = max(planned_end - timezone.now(), timedelta(0))
+    return min(remaining + TOKEN_AFTER_END, TOKEN_MAX_TTL)
+
+
 def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
     """Dars xonasiga kirish tokeni.
 
@@ -143,7 +155,7 @@ def issue_room_token(*, user: User, lesson_id, request=None) -> dict:
         # muddat tugagandan KEYIN qisqa tarmoq uzilishi + qayta ulanish bir
         # vaqtga to'g'ri kelsa — nazariy jihatdan xato berishi mumkin. Katta
         # zaxira bilan bu xavfni butunlay yo'qotamiz (hech qanday zarari yo'q).
-        .with_ttl(timedelta(hours=8))
+        .with_ttl(_token_ttl(lesson))
         .with_grants(
             VideoGrants(
                 room_join=True,
@@ -1237,6 +1249,41 @@ def end_room(lesson: Lesson) -> None:
         asyncio.run(_delete())
     except Exception as exc:  # noqa: BLE001 — xona allaqachon yo'q bo'lishi mumkin
         logging.getLogger('apps').info('end_room: %s', exc)
+
+
+def close_finished_lesson_rooms() -> int:
+    """Tugagan/bekor qilingan darsning LiveKit xonasi hamon ochiq bo'lsa (eski token bilan qayta ulangan odam xonani qayta
+    yaratib yuboradi) — xonani yopadi. Qaytaradi: yopilgan xonalar soni. Cron har daqiqa (Trello 84). LiveKit javob bermasa
+    jim o'tadi (keyingi siklda qayta uriniladi)."""
+    import logging
+
+    from livekit.protocol.room import ListRoomsRequest
+
+    async def _list():
+        client = LiveKitAPI(url=_livekit_http_url(), api_key=settings.LIVEKIT_API_KEY, api_secret=settings.LIVEKIT_API_SECRET)
+        try:
+            result = await client.room.list_rooms(ListRoomsRequest())
+            return [room.name for room in result.rooms if room.name.startswith('lesson-') and room.num_participants > 0]
+        finally:
+            await client.aclose()
+
+    try:
+        names = asyncio.run(_list())
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger('apps').info('close_finished_lesson_rooms: LiveKit javob bermadi: %s', exc)
+        return 0
+    if not names:
+        return 0
+    finished = Lesson.objects.filter(
+        room_name__in=names, status__in=(Lesson.Status.FINISHED, Lesson.Status.CANCELLED),
+    ).values_list('room_name', flat=True)
+    closed = 0
+    for name in finished:
+        from types import SimpleNamespace
+        end_room(SimpleNamespace(room_name=name))
+        logging.getLogger('apps').warning("Tugagan dars xonasi qayta ochilgan edi, yopildi: %s", name)
+        closed += 1
+    return closed
 
 
 # O'qituvchi "Yakunlash"ni bosgach xona shuncha soniyadan keyin yopiladi (2026-10-30): o'qituvchining brauzeri shu vaqt ichida
