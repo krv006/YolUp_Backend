@@ -1,5 +1,6 @@
 import mimetypes
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import FileResponse
 from rest_framework import generics, status
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -18,7 +19,7 @@ def material_dict(material: Material) -> dict:
         'lesson_id': str(material.lesson_id) if material.lesson_id else None,
         'title': material.title, 'name': material.original_name, 'size': material.size, 'kind': material.kind,
         'mime': mimetypes.guess_type(material.original_name)[0] or '',
-        'url': f'/api/v1/materials/{material.id}/file/',
+        'url': f'/api/v1/materials/{material.id}/file/', 'source': 'upload',
         'uploaded_by': {'id': str(uploader.id), 'name': uploader.get_full_name() or uploader.username} if uploader else None,
         'created_at': material.created_at,
     }
@@ -44,8 +45,30 @@ class MaterialListCreateView(generics.ListCreateAPIView):
         return qs
 
     def list(self, request, *args, **kwargs):
-        page = self.paginate_queryset(self.get_queryset())
-        return self.get_paginated_response([material_dict(item) for item in page])
+        rows = [material_dict(item) for item in self.get_queryset()]
+        rows += self.chat_rows()
+        rows.sort(key=lambda row: row['created_at'], reverse=True)
+        return self.get_paginated_response(self.paginate_queryset(rows))
+
+    def chat_rows(self) -> list:
+        """Guruh chatiga yuborilgan fayllar ("Umumiy" papka, `source: "chat"`): `?lesson=<id>` bo'lsa ular yo'q. Yuklab olish — `url`
+        (chat endpointi); o'chirish bu yerdan emas, faqat chatdan."""
+        params = self.request.query_params
+        if params.get('lesson') not in (None, '', 'general'):
+            return []
+        user = self.request.user
+        course_ids = [params['course']] if params.get('course') else list(services.visible_courses(user).values_list('id', flat=True))
+        try:
+            files = list(services.chat_files(user, course_ids).filter(message__room__course__in=services.visible_courses(user)))
+        except (ValueError, TypeError, DjangoValidationError):
+            return []
+        rows = [services.chat_file_dict(row) for row in files]
+        if params.get('kind'):
+            rows = [row for row in rows if row['kind'] == params['kind']]
+        if params.get('search'):
+            needle = params['search'].lower()
+            rows = [row for row in rows if needle in row['title'].lower()]
+        return rows
 
     def create(self, request, *args, **kwargs):
         material = services.upload(

@@ -209,3 +209,87 @@ class MaterialLessonFolderTests(MaterialTests):
         pdf = self.api(self.parent).get(body['board']['pdf_url'])
         self.assertEqual(pdf.status_code, 200)
         self.assertEqual(pdf['Content-Type'], 'application/pdf')
+
+
+class MaterialChatFilesTests(MaterialTests):
+    """2026-11-25: guruh chatiga yuborilgan fayllar ("Umumiy" papka) ham songa va ro'yxatga kiradi (`source: "chat"`)."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.chat import services as chat_services
+
+        self.chat = chat_services
+        self.room = chat_services.ensure_course_room(self.course)
+
+    def send(self, name='kitob.pdf', content=b'%PDF-1.4 x', user=None, **extra):
+        return self.chat.send_message(
+            user=user or self.teacher, room_id=self.room.id, upload=SimpleUploadedFile(name, content), **extra)
+
+    def folders(self, user):
+        return {row['title']: row for row in self.api(user).get('/api/v1/materials/courses/').json()}
+
+    def test_chat_documents_are_counted_with_uploaded_files(self):
+        self.post(title='Yuklangan')
+        self.send()
+        self.send('nota.docx', b'docx-bytes', user=self.student)
+        for user in (self.teacher, self.student):
+            self.assertEqual(self.folders(user)['Algebra']['file_count'], 3, user.username)
+            body = self.api(user).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()
+            self.assertEqual(body['general']['file_count'], 3, user.username)
+
+    def test_list_includes_chat_files_in_general_and_not_in_a_lesson_folder(self):
+        lesson = Lesson.objects.create(course=self.course, title='1-dars', starts_at=timezone_now(), status='finished')
+        self.post(title='Yuklangan')
+        self.send()
+        api = self.api(self.student)
+        rows = api.get(f'/api/v1/materials/?course={self.course.id}&lesson=general').json()['results']
+        self.assertEqual({row['source'] for row in rows}, {'upload', 'chat'})
+        chat = next(row for row in rows if row['source'] == 'chat')
+        self.assertEqual((chat['name'], chat['kind'], chat['lesson_id']), ('kitob.pdf', 'pdf', None))
+        self.assertTrue(chat['url'].startswith('/api/v1/chat/attachments/'))
+        self.assertEqual(api.get(chat['url']).status_code, 200)  # shu havola bilan yuklab olinadi
+        self.assertEqual(api.get(f'/api/v1/materials/?lesson={lesson.id}').json()['count'], 0)
+        self.assertEqual(len(api.get(f'/api/v1/materials/?course={self.course.id}&kind=pdf').json()['results']), 2)
+        self.assertEqual(len(api.get('/api/v1/materials/?search=kitob').json()['results']), 1)
+
+    def test_only_documents_from_users_count(self):
+        self.send('rasm.png', _png())
+        self.send('ovoz.webm', b'webm-bytes', message_type='voice', duration=3)
+        self.send('matn.txt', b'hello')
+        self.chat.send_message(user=self.teacher, room_id=self.room.id, text='salom')
+        self.assertEqual(self.folders(self.teacher)['Algebra']['file_count'], 1)  # faqat matn.txt
+
+    def test_deleted_message_and_system_board_pdf_are_not_counted(self):
+        message = self.send()
+        self.assertEqual(self.folders(self.teacher)['Algebra']['file_count'], 1)
+        from django.utils import timezone
+
+        message.deleted_at = timezone.now()
+        message.save(update_fields=['deleted_at'])
+        self.assertEqual(self.folders(self.teacher)['Algebra']['file_count'], 0)
+        system = self.send(name='doska_x.pdf')
+        system.kind = 'system'
+        system.save(update_fields=['kind'])
+        self.assertEqual(self.folders(self.teacher)['Algebra']['file_count'], 0)
+
+    def test_parent_and_outsider_do_not_see_chat_files(self):
+        self.send()
+        self.assertEqual(self.folders(self.parent)['Algebra']['file_count'], 0)  # ota-ona chatni ko'ra olmaydi
+        self.assertEqual(self.api(self.parent).get('/api/v1/materials/').json()['count'], 0)
+        self.assertEqual(self.api(self.outsider).get('/api/v1/materials/').json()['count'], 0)
+
+
+def timezone_now():
+    from django.utils import timezone
+
+    return timezone.now()
+
+
+def _png():
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new('RGB', (2, 2)).save(buffer, 'PNG')
+    return buffer.getvalue()

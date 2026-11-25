@@ -112,11 +112,47 @@ def file_for(*, user: User, material_id):
     return material.file.path, material.original_name, mimetypes.guess_type(material.original_name)[0] or 'application/octet-stream'
 
 
+# ── Chatga yuborilgan fayllar ham "Umumiy" papkaga sanaladi (2026-11-25) ─────────────────────────────
+
+def chat_files(user: User, course_ids):
+    """Guruh chatiga yuborilgan HUJJAT/audio fayllari (`message_type=file`): foydalanuvchi yuborgan, o'chirilmagan. Tizim xabarlari
+    (doska PDF'i — u dars papkasida alohida turadi), rasm, video va ovozli xabarlar sanalmaydi. Ota-ona guruh chatini ko'ra olmaydi,
+    shuning uchun u uchun bunday fayllar ko'rsatilmaydi (ochib bo'lmaydigan fayl sanalmasin)."""
+    from apps.chat.models import ChatRoom, Message, MessageAttachment
+
+    if user.role == User.Role.PARENT:
+        return MessageAttachment.objects.none()
+    return MessageAttachment.objects.filter(
+        message__room__kind=ChatRoom.Kind.COURSE, message__room__course_id__in=course_ids,
+        message__kind=Message.Kind.USER, message__message_type=Message.Type.FILE, message__deleted_at__isnull=True,
+    ).select_related('message__sender', 'message__room__course')
+
+
+def chat_file_counts(user: User, course_ids) -> dict:
+    return dict(
+        chat_files(user, course_ids).order_by().values('message__room__course_id').annotate(n=Count('id'))
+        .values_list('message__room__course_id', 'n'),
+    )
+
+
+def chat_file_dict(row) -> dict:
+    sender = row.message.sender
+    name = row.name or row.file.name.split('/')[-1]
+    course = row.message.room.course
+    return {
+        'id': str(row.id), 'course_id': str(course.id), 'course_title': course.title, 'lesson_id': None,
+        'title': Path(name).stem, 'name': name, 'size': row.size, 'kind': kind_of(name), 'mime': row.mime,
+        'url': f'/api/v1/chat/attachments/{row.id}/', 'source': 'chat',
+        'uploaded_by': {'id': str(sender.id), 'name': sender.get_full_name() or sender.username},
+        'created_at': row.created_at,
+    }
+
+
 # ── Papka tuzilmasi: Guruh -> darslar -> fayllar (2026-11-10) ──────────────────────────────────────
 
 def course_folders(user: User) -> list:
     """Guruhlar va ulardagi sonlar (Workspace -> Materiallar boshlanish ekrani):
-    `file_count` (yuklangan fayllar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
+    `file_count` (yuklangan fayllar + chatga yuborilgan fayllar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
     Video/doska sonlari `lesson_folders` bilan bir xil qoidada: bekor qilingan/o'chirilgan darslar sanalmaydi,
     o'quvchi/ota-ona faqat tayyor yozuvni sanaydi."""
     courses = list(visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('title').distinct())
@@ -132,9 +168,10 @@ def course_folders(user: User) -> list:
         return dict(rows)
 
     recordings, boards = per_course('has_recording'), per_course('has_board')
+    in_chat = chat_file_counts(user, ids)
     return [
         {
-            'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject, 'file_count': c.file_count,
+            'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject, 'file_count': c.file_count + in_chat.get(c.id, 0),
             'recording_count': recordings.get(c.id, 0), 'board_count': boards.get(c.id, 0),
         }
         for c in courses
@@ -175,7 +212,10 @@ def lesson_folders(*, user: User, course_id) -> dict:
         lessons = lessons.filter(Q(file_count__gt=0) | Q(has_recording=True) | Q(has_board=True))
     return {
         'course': {'id': str(course.id), 'title': course.title, 'kind': course.kind},
-        'general': {'file_count': Material.objects.filter(course=course, lesson__isnull=True).count()},
+        'general': {
+            'file_count': Material.objects.filter(course=course, lesson__isnull=True).count()
+            + chat_files(user, [course.id]).count(),  # chatga yuborilgan fayllar ham "Umumiy" papkada
+        },
         'lessons': [{
             'id': str(lesson.id), 'title': lesson.title or course.title, 'starts_at': lesson.starts_at, 'status': lesson.status,
             'file_count': lesson.file_count, 'has_recording': lesson.has_recording, 'has_board': lesson.has_board,
