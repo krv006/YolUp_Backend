@@ -835,6 +835,31 @@ class SwitchRoleTests(APITestCase):
         resp = self.switch_role('parent')
         self.assertEqual(resp.status_code, 400)
 
+    def test_verified_email_replaces_phone_number(self):
+        register(self.client, 'sremail_teacher', 'teacher')  # telefonsiz, email bilan
+        User.objects.filter(username='sremail_teacher').update(email='Teach@Example.com', email_verified=True)
+        self.auth(login(self.client, 'sremail_teacher'))
+
+        resp = self.switch_role('parent')
+        self.assertEqual(resp.status_code, 200)
+        parent = User.objects.get(pk=resp.json()['user']['id'])
+        self.assertEqual((parent.role, parent.email, parent.email_verified), ('parent', 'Teach@Example.com', True))
+        self.assertFalse(parent.phone)
+
+    def test_unverified_email_is_not_enough(self):
+        register(self.client, 'sremailu_teacher', 'teacher')
+        User.objects.filter(username='sremailu_teacher').update(email='x@example.com', email_verified=False, email_exempt=False)
+        self.auth(login(self.client, 'sremailu_teacher'))
+        self.assertEqual(self.switch_role('parent').status_code, 400)
+
+    def test_stranger_with_same_verified_email_is_not_taken_over(self):
+        register(self.client, 'sremailx_teacher', 'teacher')
+        register(self.client, 'sremailx_other', 'parent')
+        User.objects.filter(username='sremailx_teacher').update(email='same@example.com', email_verified=True)
+        User.objects.filter(username='sremailx_other').update(email='same@example.com', email_verified=True)
+        self.auth(login(self.client, 'sremailx_teacher'))
+        self.assertEqual(self.switch_role('parent').status_code, 409)
+
     def test_requires_auth(self):
         resp = self.client.post('/api/v1/auth/switch-role/', {'role': 'parent'}, format='json')
         self.assertEqual(resp.status_code, 401)

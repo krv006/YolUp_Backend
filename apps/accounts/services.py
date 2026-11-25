@@ -1118,11 +1118,24 @@ def login_devices(*, viewer: User, student_id=None, request=None, date_from=None
                 'session_active': False,
                 'is_current': own and key == current_key,
                 'last_login_id': str(r.pk),
+                '_session_ids': set(),
             }
         item['login_count'] += 1
         item['first_login_at'] = r.created_at
+        if meta.get('session_id'):
+            item['_session_ids'].add(str(meta['session_id']))
         if meta.get('session_id') and meta['session_id'] in active:
             item['session_active'] = True
+
+    # "Oxirgi faollik": shu qurilma seanslari oxirgi marta ishlatilgan payt (mobil ilova uzoq seans bilan ishlaydi — yangi
+    # "kirish" bo'lmasa ham faollik yangilanadi; ~soatiga bir). Seans ma'lumoti bo'lmasa — oxirgi kirish vaqti.
+    all_ids = set().union(*(d['_session_ids'] for d in devices.values())) if devices else set()
+    seen = {
+        str(pk): last for pk, last in UserSession.objects.filter(user=target, pk__in=list(all_ids)).values_list('pk', 'last_active')
+    } if all_ids else {}
+    for item in devices.values():
+        stamps = [seen[sid] for sid in item.pop('_session_ids') if sid in seen]
+        item['last_active_at'] = max([item['last_login_at'], *stamps])
     return list(devices.values())
 
 
@@ -1353,8 +1366,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
         raise ValidationError({'role': _("Noto'g'ri rol.")})
     if role == current_user.role:
         raise ValidationError({'role': _('Siz allaqachon shu roldasiz.')})
-    if not current_user.phone:
-        raise ValidationError({'role': _("Rol almashtirish uchun avval telefon raqamingizni kiriting.")})
+    verified_email = (current_user.email or '').strip() if (current_user.email_verified or current_user.email_exempt) else ''
+    if not current_user.phone and not verified_email:
+        raise ValidationError({'role': _("Rol almashtirish uchun avval emailingizni tasdiqlang yoki telefon raqamingizni kiriting.")})
 
     from . import selectors
 
@@ -1366,7 +1380,11 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
     if target is None:
         if current_user.link_group and User.objects.filter(link_group=current_user.link_group, role=role, is_active=False).exists():
             raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
-        stranger = selectors.users_with_phone(current_user.phone).filter(role=role).exclude(pk=current_user.pk).first()
+        stranger = None
+        if current_user.phone:
+            stranger = selectors.users_with_phone(current_user.phone).filter(role=role).exclude(pk=current_user.pk).first()
+        if stranger is None and verified_email:  # telefonsiz (email bilan ro'yxatdan o'tgan) akkaunt: shu tasdiqlangan email bo'yicha
+            stranger = User.objects.filter(email__iexact=verified_email, email_verified=True, role=role).exclude(pk=current_user.pk).first()
         if stranger is not None:
             if not stranger.is_active:
                 raise PermissionDenied(_('Bu akkaunt faolsizlantirilgan.'))
@@ -1378,6 +1396,9 @@ def switch_or_provision_role(*, current_user: User, role: str, request=None) -> 
             username=_generate_unique_username(f'{current_user.username}_{role}'),
             role=role,
             phone=current_user.phone,
+            email=current_user.email if verified_email else '',
+            email_verified=current_user.email_verified if verified_email else False,
+            email_exempt=current_user.email_exempt if verified_email else False,
             first_name=current_user.first_name,
             last_name=current_user.last_name,
         )

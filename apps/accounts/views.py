@@ -293,7 +293,8 @@ class LoginHistoryView(APIView):
     Har yozuvda: vaqt, IP, qurilma (User-Agent) va o'zgarish bayroqlari
     (new_ip / new_device) — "boshqa joydan kirildi" darhol ko'rinadi.
 
-    `?group=device` — har kirish emas, har QURILMA bitta qator: `device`, `last_login_at`, `login_count`, `last_ip`,
+    `?group=device` — har kirish emas, har QURILMA bitta qator: `device`, `last_login_at`, `last_active_at` (qurilma
+    oxirgi marta ishlatilgan payt), `login_count`, `last_ip`,
     `location`, `session_active`, `is_current` (qurilmalar soni = `count` yoki massiv uzunligi).
     """
 

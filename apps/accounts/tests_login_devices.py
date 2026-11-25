@@ -82,6 +82,18 @@ class LoginDevicesTests(APITestCase):
         self.assertEqual(set(by_name), {'Xiaomi Redmi Note 12', 'iPhone 15'})
         self.assertEqual(by_name['Xiaomi Redmi Note 12']['login_count'], 2)
 
+    def test_last_active_follows_the_session_not_only_the_login(self):
+        from apps.accounts.models import UserSession
+
+        self.login(APP)
+        before = self.devices().json()[0]
+        self.assertEqual(before['last_active_at'], before['last_login_at'])  # hali faollik yangilanmagan
+        later = timezone.now() + timedelta(days=2)
+        UserSession.objects.filter(user=self.student).update(last_active=later)
+        row = self.devices().json()[0]
+        self.assertGreater(row['last_active_at'], row['last_login_at'])  # mobil ilova qayta kirmasdan ishlayapti
+        self.assertEqual(row['last_login_at'], before['last_login_at'])  # kirish vaqti o'zgarmaydi
+
     def test_current_device_and_session_state(self):
         self.login(CHROME_WIN)
         tokens = self.login(APP)

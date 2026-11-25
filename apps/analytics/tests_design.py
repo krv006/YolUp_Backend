@@ -98,6 +98,24 @@ class ActivityTests(ScheduleBase):
         self.assertEqual(len(self.api(self.teacher).get('/api/v1/dashboard/activity/?limit=abc').json()), 4)
         self.assertEqual(self.api(self.student).get('/api/v1/dashboard/activity/').json(), [])  # boshqaning xabari ko'rinmaydi
 
+    def test_finished_lessons_show_up_for_the_teacher_only(self):
+        lesson = Lesson.objects.create(
+            course=self.course, title='Present Perfect', starts_at=timezone.now() - timedelta(hours=3), duration_min=90,
+            status=Lesson.Status.FINISHED)
+        Lesson.objects.create(course=self.course, starts_at=timezone.now() - timedelta(hours=5), status=Lesson.Status.SCHEDULED)
+        Lesson.objects.create(
+            course=self.course, starts_at=timezone.now() - timedelta(days=40), status=Lesson.Status.FINISHED)  # 30 kundan eski
+        self.notify()
+        rows = self.api(self.teacher).get('/api/v1/dashboard/activity/').json()
+        lessons = [r for r in rows if r['link_type'] == 'lesson']
+        self.assertEqual(len(lessons), 1)
+        self.assertEqual(
+            (lessons[0]['id'], lessons[0]['link_id'], lessons[0]['title']),
+            (f'lesson-{lesson.id}', str(lesson.id), "Dars o'tdi"))
+        self.assertIn('Present Perfect', lessons[0]['body'])
+        self.assertEqual(rows[0]['category'], 'member_joined')  # bildirishnoma dars tugashidan keyin keldi
+        self.assertEqual(self.api(self.student).get('/api/v1/dashboard/activity/').json(), [])
+
     def test_inbox_items_have_title_and_plain_body(self):
         self.notify()
         body = self.api(self.teacher).get('/api/v1/notifications/').json()

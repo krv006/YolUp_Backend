@@ -42,14 +42,42 @@ def teacher_overview(teacher: User) -> dict:
     }
 
 
+def _finished_lesson_activity(user: User, limit: int) -> list:
+    """O'qituvchining oxirgi tugagan darslari "So'nggi faollik"da ko'rinadi (dars tugaganda unga bildirishnoma ketmaydi).
+    Vaqt — darsning rejalangan tugash payti (tugatilgan haqiqiy vaqt saqlanmaydi). Oxirgi 30 kun."""
+    if user.role != User.Role.TEACHER:
+        return []
+    since = timezone.now() - timedelta(days=30)
+    lessons = (
+        Lesson.objects.filter(course__teacher=user, status=Lesson.Status.FINISHED, starts_at__gte=since)
+        .select_related('course').order_by('-starts_at')[:limit]
+    )
+    rows = []
+    for lesson in lessons:
+        ended = min(lesson.starts_at + timedelta(minutes=lesson.duration_min or 45), timezone.now())  # erta tugatilgan bo'lsa ham kelajakda ko'rinmasin
+        rows.append({
+            'id': f'lesson-{lesson.id}',
+            'category': 'lesson_reminder',
+            'title': "Dars o'tdi",
+            'body': f'{lesson.course.title} — {timezone.localtime(lesson.starts_at):%H:%M}'
+                    + (f' · {lesson.title}' if lesson.title else ''),
+            'link_type': 'lesson',
+            'link_id': str(lesson.id),
+            'is_read': True,
+            'created_at': ended,
+        })
+    return rows
+
+
 def recent_activity(user: User, limit=10) -> list:
-    """Foydalanuvchining oxirgi bildirishnomalari — ro'yxat kartasi shaklida (sarlavha va oddiy matn alohida)."""
+    """Foydalanuvchining oxirgi bildirishnomalari va (o'qituvchi uchun) tugagan darslari — ro'yxat kartasi shaklida
+    (sarlavha va oddiy matn alohida), yangisi birinchi."""
     try:
         limit = max(1, min(int(limit), MAX_ACTIVITY))
     except (TypeError, ValueError):
         limit = 10
     rows = NotificationRecipient.objects.filter(user=user).select_related('notification').order_by('-created_at')[:limit]
-    return [{
+    items = [{
         'id': str(row.notification_id),
         'category': category_of(row.notification.kind, row.notification.link_type),
         'title': title_of(row.notification.kind, row.notification.link_type),
@@ -59,3 +87,6 @@ def recent_activity(user: User, limit=10) -> list:
         'is_read': row.read_at is not None,
         'created_at': row.created_at,
     } for row in rows]
+    items += _finished_lesson_activity(user, limit)
+    items.sort(key=lambda item: item['created_at'], reverse=True)
+    return items[:limit]
