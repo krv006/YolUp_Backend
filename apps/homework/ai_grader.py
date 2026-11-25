@@ -71,6 +71,11 @@ _SYSTEM = (
 )
 
 
+def model_name() -> str:
+    """Uy vazifasini baholaydigan model: `HOMEWORK_AI_MODEL`, bo'sh bo'lsa umumiy `OPENAI_MODEL`."""
+    return getattr(settings, 'HOMEWORK_AI_MODEL', '') or settings.OPENAI_MODEL
+
+
 def enabled() -> bool:
     return llm.enabled() and getattr(settings, 'HOMEWORK_AI_ENGINE', True)
 
@@ -290,7 +295,7 @@ def clean_result(data: dict) -> dict:
         'questions': questions,
         'summary': {key: _list(summary.get(key)) for key in
                     ('strengths', 'weaknesses', 'topics_to_review', 'recommendations')},
-        'engine': 'openai', 'model': settings.OPENAI_MODEL,
+        'engine': 'openai', 'model': model_name(),
     }
 
 
@@ -303,7 +308,7 @@ def grade(submission) -> dict:
     with llm.track_usage() as usage:
         result = _grade(submission)
     if usage['calls']:
-        result['usage'] = {**usage, 'model': settings.OPENAI_MODEL}
+        result['usage'] = {**usage, 'model': model_name()}
     return result
 
 
@@ -338,7 +343,7 @@ def _grade(submission) -> dict:
     # Fan/ko'nikma profili + qat'iy baholash + himoya (RJalol'ning AI-home-checker'idan) — ustiga bizning platforma qoidalari
     system = ai_prompt.build_system_prompt(
         _SYSTEM.replace('{language}', language), assignment.course.subject, assignment.skill_key)
-    data = llm.chat_json(system, '\n\n'.join(lines), images=tuple([*shown_task, *material.images]))
+    data = llm.chat_json(system, '\n\n'.join(lines), images=tuple([*shown_task, *material.images]), model=model_name())
     return _note_skipped(clean_result(data), material.skipped_images, language_key)
 
 
@@ -419,7 +424,7 @@ def _grade_speaking(assignment, submission) -> dict:
     lines.append('DELIVERY STATISTICS: ' + ', '.join(f'{key}={value}' for key, value in stats.items()))
     language_key = submission.feedback_language if submission.feedback_language in _LANGUAGES else 'uz'
     system = (ai_prompt.UNTRUSTED_INPUT_BLOCK + '\n\n' + _SYSTEM + _SPEAKING_RULES).replace('{language}', _LANGUAGES[language_key])
-    result = clean_result(llm.chat_json(system, '\n\n'.join(lines)))
+    result = clean_result(llm.chat_json(system, '\n\n'.join(lines), model=model_name()))
     result['summary']['recommendations'].insert(0, _PRONUNCIATION_NOTE[language_key])
     result['summary']['recommendations'] = result['summary']['recommendations'][:9]
     result.update({'source': 'audio-transcript', 'transcript': transcript[:6000], 'delivery': stats})

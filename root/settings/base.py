@@ -337,6 +337,9 @@ GEOIP_CITY_DB = os.getenv('GEOIP_CITY_DB', '')
 # Guruhga taklif havolasi: https://<domen>/j/<kod>
 INVITE_BASE_URL = os.getenv('INVITE_BASE_URL', 'https://yolup.uz')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+# Uy vazifasini AI bilan oldindan baholash uchun alohida (kuchliroq) model; bo'sh bo'lsa OPENAI_MODEL ishlatiladi.
+# Boshqa AI funksiyalar (AI test, IELTS) arzon modelda qoladi.
+HOMEWORK_AI_MODEL = os.getenv('HOMEWORK_AI_MODEL', '')
 # O'quvchi AI yordamchisi (xatoni tushuntirish, mashq): bir o'quvchiga kuniga nechta so'rov
 STUDENT_AI_DAILY_LIMIT = int(os.getenv('STUDENT_AI_DAILY_LIMIT', '20'))
 OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')

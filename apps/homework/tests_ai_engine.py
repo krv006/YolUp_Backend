@@ -176,6 +176,16 @@ class EngineFlowTests(HomeworkBase):
         self.assertEqual(Submission.objects.get().ai_external_id, '')
         self.assertEqual(self.fake.payloads, [])
 
+    def test_homework_uses_its_own_model_when_set_and_the_common_one_otherwise(self):
+        self.checking()
+        services.sync_ai_results()
+        self.assertEqual(self.fake.payloads[-1]['model'], 'gpt-test')  # HOMEWORK_AI_MODEL bo'sh -> umumiy model
+        with override_settings(HOMEWORK_AI_MODEL='gpt-strong'):
+            self.checking()
+            services.sync_ai_results()
+        self.assertEqual(self.fake.payloads[-1]['model'], 'gpt-strong')
+        self.assertEqual(Submission.objects.order_by('-created_at').first().ai_result['model'], 'gpt-strong')
+
     def test_no_key_means_manual_grading(self):
         with override_settings(OPENAI_API_KEY=''):
             resp = self.submit(self.assignment(), text_pdf())
