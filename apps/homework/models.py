@@ -70,6 +70,10 @@ class Assignment(TimeStampedUUIDModel):
     # o'quvchilar yuklab oladi
     attachment = FileField(upload_to=homework_task_path, null=True, blank=True)
     attachment_name = CharField(max_length=255, blank=True)
+    # O'qituvchining ovozli izohi (mikrofondan yozilgan): alohida maydon, hujjat bilan aralashmaydi. AI buni o'qimaydi.
+    voice = FileField(upload_to=homework_task_path, null=True, blank=True)
+    voice_duration_ms = PositiveIntegerField(null=True, blank=True)
+    voice_mime = CharField(max_length=60, blank=True)
     due_at = DateTimeField(null=True, blank=True, db_index=True)
     # Qoralama (o'quvchilarga ko'rinmaydi, chatga xabar tushmaydi) yoki faol (e'lon qilingan)
     class Status(TextChoices):
