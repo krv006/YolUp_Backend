@@ -9,15 +9,15 @@
 #   3) crontab -e  ->  30 3 * * * BACKUP_HOST=deploy@<MEDIA_IP> /var/www/edu_platform/deploy/new/backup.sh >> /var/backups/edu/backup.log 2>&1
 #
 # Saqlash: kunlik 14 kun, haftalik ~6 oy, oylik ~13 oy (qarang pastda `find`).
-# TIKLASH (tekshirib ko'ring!):  cat db_YYYY-MM-DD_HHMM.dump | docker compose -f docker-compose.app.yml exec -T db \
+# TIKLASH (tekshirib ko'ring!):  cat db_YYYY-MM-DD_HHMM.dump | docker exec -i edu_platform-db-1 \
 #                                 pg_restore -U edtech -d edtech --clean --if-exists
 set -euo pipefail
-cd /var/www/edu_platform
 DIR=/var/backups/edu
 STAMP=$(date +%F_%H%M)
 mkdir -p "$DIR"
 
-docker compose -f docker-compose.app.yml exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DIR/db_$STAMP.dump"
+# `docker exec` (compose fayli joyiga bog'liq emas): papkalar qayta tuzilganda ham zaxira buzilmasin. Konteyner nomi: <loyiha>-db-1.
+docker exec -i edu_platform-db-1 sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DIR/db_$STAMP.dump"
 test -s "$DIR/db_$STAMP.dump" || { echo "XATO: bo'sh zaxira"; rm -f "$DIR/db_$STAMP.dump"; exit 1; }
 # Saqlash muddati: kunlik nusxalar 14 kun; HAFTALIK (yakshanba) ~6 oy; OYLIK (1-sana) ~13 oy. Nusxalar kichik (~2 MB), shuning uchun
 # uzoq saqlash deyarli bepul. Kunlik nom `db_YYYY-...`, haftalik `db_weekly_...`, oylik `db_monthly_...` (find shablonlari aralashmasin).

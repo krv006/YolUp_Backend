@@ -1036,7 +1036,16 @@ CPU yetmay qolsa, Linux avval LiveKit'ga beradi, yozuvni MP4 qilish esa kutadi.
 
 Nega shunday: eng katta yuk — jonli dars va yozuv. Shuning uchun kuchliroq server (RS 4000) ularga beriladi. Arxitekturaning to'liq tushuntirishi: `SERVER_ARXITEKTURA.md`.
 
-Hamma tayyor fayllar loyihada bor: `docker-compose.app.yml`, `docker-compose.media.yml`, `deploy/app/`, `deploy/media/`, `deploy/new/` (bootstrap, wireguard, backup), `.env.app.example`, `.env.media.example`.
+Hamma tayyor fayllar loyihada bor va **har serverniki o'z papkasida** turadi (2026-11-27 dan):
+
+```
+deploy/
+  app_server/     APP (RS 2000):  docker-compose.yml, .env.example, caddy/Caddyfile      (+ .env — haqiqiy, gitda yo'q)
+  media_server/   MEDIA (RS 4000): docker-compose.yml, .env.example, livekit.yaml, caddy/Caddyfile  (+ .env)
+  new/            bootstrap, wireguard, backup (ikkala server uchun umumiy skriptlar)
+```
+
+**Hamma `docker compose` buyruqlari shu serverning papkasidan ishlatiladi** (`-f` kerak emas): APP — `cd /var/www/edu_platform/deploy/app_server`, MEDIA — `cd /var/www/edu_platform/deploy/media_server`. Loyiha nomi (`edu_platform`) compose faylida qotirilgan, shuning uchun baza va boshqa volume'lar papka o'zgarganda ham o'sha-o'zida qoladi.
 **Eslatma:** bu fayllar yozilgan va sintaksisi tekshirilgan, lekin **haqiqiy serverda hali ishga tushirilmagan.** Birinchi ishga tushirishda kichik xato chiqishi mumkin — shuning uchun avval **sinov domenida** (`edu2`) ishga tushiramiz, eski serverga tegmaymiz.
 
 ---
@@ -1234,10 +1243,10 @@ Eski serverdan turib:
 scp /var/www/edu_platform/.env deploy@<APP_IP>:/var/www/edu_platform/.env.old
 ```
 (Agar `-A` ishlamasa: faylni avval o'z kompyuteringizga `scp` qiling, keyin yangi serverga. Ishlatib bo'lgach APP serverda `shred -u /var/www/edu_platform/.env.old` bilan o'chiring.)
-APP serverda `.env.app.example` asosida yangi `.env` yarating va eski `.env` dan **kalitlarni ko'chiring** (`SECRET_KEY`, `VAPID_*`, `OPENAI_*`, `LIVEKIT_*` va hokazo):
+APP serverda `deploy/app_server/.env.example` asosida yangi `.env` yarating va eski `.env` dan **kalitlarni ko'chiring** (`SECRET_KEY`, `VAPID_*`, `OPENAI_*`, `LIVEKIT_*` va hokazo):
 
 ```bash
-cd /var/www/edu_platform && cp .env.app.example .env && nano .env
+cd /var/www/edu_platform/deploy/app_server && cp .env.example .env && nano .env
 ```
 O'zgartiriladigan qiymatlar (sinov bosqichi):
 - `DOMAIN=edu2.thesofmebel.uz`, `ALLOWED_HOSTS=edu2.thesofmebel.uz`, `CSRF_TRUSTED_ORIGINS=https://edu2.thesofmebel.uz`, `CORS_ALLOWED_ORIGINS=https://edu2.thesofmebel.uz`
@@ -1250,7 +1259,7 @@ O'zgartiriladigan qiymatlar (sinov bosqichi):
 Avval bazani ko'taring:
 
 ```bash
-docker compose -f docker-compose.app.yml up -d --build db redis
+docker compose up -d --build db redis
 ```
 (Birinchi yig'ish 3–6 daqiqa.) Eski serverdagi **bazani ko'chirish** (yana eski serverda, `ssh -A` bilan kirilgan holda dump):
 
@@ -1263,20 +1272,20 @@ scp /root/edtech.dump deploy@<APP_IP>:/tmp/edtech.dump
 APP serverda tiklash:
 
 ```bash
-cat /tmp/edtech.dump | docker compose -f docker-compose.app.yml exec -T db pg_restore -U edtech -d edtech --no-owner
+cat /tmp/edtech.dump | docker compose exec -T db pg_restore -U edtech -d edtech --no-owner
 ```
 (Ba'zi "already exists" ogohlantirishlari bo'lishi mumkin — xato emas, agar oxirida jadvallar bo'lsa.) Endi hammasini ko'taring:
 
 ```bash
-docker compose -f docker-compose.app.yml up -d --build
+docker compose up -d --build
 ```
 Holat va loglar:
 
 ```bash
-docker compose -f docker-compose.app.yml ps
+docker compose ps
 ```
 ```bash
-docker compose -f docker-compose.app.yml logs --tail=50 web
+docker compose logs --tail=50 web
 ```
 Tekshirish (brauzerda): `https://edu2.thesofmebel.uz/api/docs/` ochilishi kerak (Swagger).
 
@@ -1301,36 +1310,36 @@ Bu server LiveKit va **yozuv xizmatlarini** ishga tushiradi. Yozuv xizmatlari AP
 MEDIA serverda `.env`: eng ishonchli yo'l — APP serverdagi `.env` ni shu yerga ko'chirish (kalitlar bir xil bo'lishi shart). APP serverdan:
 
 ```bash
-scp /var/www/edu_platform/.env deploy@<MEDIA_IP>:/var/www/edu_platform/.env
+scp /var/www/edu_platform/deploy/app_server/.env deploy@<MEDIA_IP>:/var/www/edu_platform/deploy/media_server/.env
 ```
-So'ng MEDIA serverda `.env.media.example` dagi "MEDIA ga xos" qatorlarni qo'shing (`LK_DOMAIN`, `REC_CPUS`, `TRANSCODER_CPUS` va h.k.):
+So'ng MEDIA serverda `deploy/media_server/.env.example` dagi "MEDIA ga xos" qatorlarni qo'shing (`LK_DOMAIN`, `REC_CPUS`, `TRANSCODER_CPUS` va h.k.):
 
 ```bash
-cd /var/www/edu_platform && nano .env
+cd /var/www/edu_platform/deploy/media_server && nano .env
 ```
 `LK_DOMAIN=lk.thesofmebel.uz`, `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` (APP bilan **aynan bir xil**). Ishga tushirish:
 
 ```bash
-docker compose -f docker-compose.media.yml up -d --build
+docker compose up -d --build
 ```
 Tekshirish:
 ```bash
-docker compose -f docker-compose.media.yml ps
+docker compose ps
 ```
 ```bash
-docker compose -f docker-compose.media.yml logs --tail=30 caddy
+docker compose logs --tail=30 caddy
 ```
 Caddy logida "certificate obtained" (sertifikat olindi) chiqishi kerak — buning uchun `lk.` DNS yozuvi ishlayotgan bo'lishi shart. Brauzerdan `https://lk.thesofmebel.uz` ni oching: LiveKit javobi chiqsa tayyor.
 Agar `manifest unknown` xatosi chiqsa: `.env` da `LIVEKIT_VERSION=1.13.4` (`v`siz) qiling.
 
 Yozuv xizmatini tekshirish (MEDIA serverda):
 ```bash
-docker compose -f docker-compose.media.yml logs --tail=30 rec
+docker compose logs --tail=30 rec
 ```
 Bazaga ulana olganini ko'rsatadi. Keyin APP serverda `.env` dagi `REC_UPSTREAM=10.10.0.2:8000` qatori yoqilganini tekshirib, Caddy'ni qayta ishga tushiring:
 
 ```bash
-docker compose -f docker-compose.app.yml up -d caddy
+docker compose up -d caddy
 ```
 
 **Dars yozuvlarini ko'chirish** (eski serverdan **MEDIA serverga**, fayllar shu yerda turadi; `tmux` ichida):
@@ -1350,7 +1359,7 @@ sudo rsync -a /tmp/recordings/ /var/lib/docker/volumes/edu_platform_recordings/_
 1. `https://edu2.thesofmebel.uz/api/docs/` ochiladi; `https://edu2.thesofmebel.uz/api/health/` — `ok`.
 2. Login qilish ishlaydi (bu yangi bazada eski foydalanuvchilar bilan).
 3. **Jonli dars sinovi:** ikki qurilmada (o'qituvchi + o'quvchi) dars — video, ovoz, doska, chat. Frontend sinov domenini bilishi uchun Vercel'da preview muhitida API manzilini `edu2` ga qo'ying yoki test akkaunt bilan sinang.
-4. **Dars yozuvi:** o'qituvchi darsni yozib tugatadi → yozuv "tayyor" bo'ladi (bo'laklar MEDIA'dagi `rec` ga boradi) → MP4 ga o'tadi: `docker compose -f docker-compose.media.yml logs --tail=30 transcoder` (MEDIA serverda). Yozuvni ko'rish ham ishlashi kerak.
+4. **Dars yozuvi:** o'qituvchi darsni yozib tugatadi → yozuv "tayyor" bo'ladi (bo'laklar MEDIA'dagi `rec` ga boradi) → MP4 ga o'tadi: `docker compose logs --tail=30 transcoder` (MEDIA serverda). Yozuvni ko'rish ham ishlashi kerak.
 5. `docker stats --no-stream` — ikkala serverda CPU/RAM me'yorida.
 6. **Zaxira nusxa** (12-bo'lim) ishlaydi va tiklash sinab ko'rilgan.
 7. **Disk ogohlantirishi:** admin panelda server holati; `check_disk` 80% dan oshsa adminlarga bildirishnoma yuboradi. `check_cpu_steal` har daqiqada hypervisor yadrolarni sekinlashtirmayotganini (steal) kuzatadi: yuk ostida doimiy 3% dan oshsa adminlarga bildirishnoma, har soatda log'ga xulosa (`docker compose logs cron | grep cpu_steal`, MEDIA'da `rec-cron`).
@@ -1389,8 +1398,8 @@ Parolni tiklash, ro'yxatdan o'tishda email tasdiqlash va email bilan kirish xatn
 
 1. Bir kun oldin DNS'da `edu.thesofmebel.uz` TTL ni 300 s ga tushiring.
 2. Eski serverda saytni vaqtincha to'xtating (yozuv to'xtasin): `docker compose -f docker-compose.prod.yml stop backend cron`.
-3. **Oxirgi** bazani qayta dump qiling va yangi APP'ga tiklang (9-bo'lim, YANGI serverdagi bazani avval tozalab: `docker compose -f docker-compose.app.yml exec -T db psql -U edtech -d edtech -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"` — **faqat yangi serverda**, hech qachon eskisida!), fayllarni (media va yozuvlar) `rsync -a` bilan yangilang.
-4. APP `.env` da `DOMAIN`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `CORS_ALLOWED_ORIGINS` ni `edu.thesofmebel.uz` ga o'zgartiring: `docker compose -f docker-compose.app.yml up -d`. **MEDIA serverdagi `.env` ga ham xuddi shu to'rt qiymatni yozing** va `docker compose -f docker-compose.media.yml up -d`.
+3. **Oxirgi** bazani qayta dump qiling va yangi APP'ga tiklang (9-bo'lim, YANGI serverdagi bazani avval tozalab: `docker compose exec -T db psql -U edtech -d edtech -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"` — **faqat yangi serverda**, hech qachon eskisida!), fayllarni (media va yozuvlar) `rsync -a` bilan yangilang.
+4. APP `.env` da `DOMAIN`, `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS`, `CORS_ALLOWED_ORIGINS` ni `edu.thesofmebel.uz` ga o'zgartiring: `docker compose up -d`. **MEDIA serverdagi `.env` ga ham xuddi shu to'rt qiymatni yozing** va `docker compose up -d`.
 5. DNS: `edu.thesofmebel.uz` → **APP IP**. Caddy sertifikatni bir necha soniyada oladi.
 6. Tekshiring: login, chat, jonli dars, yozuv. Muammo bo'lsa — DNS'ni **eski IP**ga qaytaring (eski server o'chirilmagan).
 7. 1–2 hafta eski serverni **o'chirmasdan** saqlang.
@@ -1401,14 +1410,14 @@ Parolni tiklash, ro'yxatdan o'tishda email tasdiqlash va email bilan kirish xatn
 
 | Nima | Buyruq (`/var/www/edu_platform` ichida) |
 |---|---|
-| APP yangilash (AVVAL shuni) | APP serverda: `git pull && docker compose -f docker-compose.app.yml up -d --build` |
-| MEDIA yangilash (APP'dan KEYIN) | MEDIA serverda: `git pull && docker compose -f docker-compose.media.yml up -d --build` |
-| Holat | `docker compose -f docker-compose.app.yml ps` (APP) / `docker compose -f docker-compose.media.yml ps` (MEDIA) |
+| APP yangilash (AVVAL shuni) | APP serverda: `git pull && docker compose up -d --build` |
+| MEDIA yangilash (APP'dan KEYIN) | MEDIA serverda: `git pull && docker compose up -d --build` |
+| Holat | `docker compose ps` (APP) / `docker compose ps` (MEDIA) |
 | Log | APP: `... logs --tail=100 web` (yoki `ws`, `cron`, `caddy`); MEDIA: `... logs --tail=100 rec` (yoki `transcoder`, `rec-cron`, `livekit`, `caddy`) |
 | Resurs | `docker stats --no-stream` va `htop` |
 | Disk | `df -h /` va `docker system df` |
-| Admin yaratish | `docker compose -f docker-compose.app.yml exec web python manage.py createsuperuser` |
-| Yozuv diskini tozalash (hisobot) | MEDIA: `docker compose -f docker-compose.media.yml exec rec python manage.py prune_recordings` |
+| Admin yaratish | `docker compose exec web python manage.py createsuperuser` |
+| Yozuv diskini tozalash (hisobot) | MEDIA: `docker compose exec rec python manage.py prune_recordings` |
 
 **Yangilash tartibi muhim:** migratsiyani APP serverdagi `web` bajaradi, shuning uchun har doim **avval APP, keyin MEDIA**. Deploy'ni dars bo'lmagan vaqtda qiling (`ws` qayta ishga tushganda chat qisqa uziladi; video uzilmaydi).
 
@@ -1421,10 +1430,47 @@ Parolni tiklash, ro'yxatdan o'tishda email tasdiqlash va email bilan kirish xatn
 
 ---
 
+#### 14a. Eski joydan yangi papkalarga ko'chirish (2026-11-27, bir martalik)
+
+Compose, `.env`, Caddy va LiveKit fayllari ildizdan `deploy/app_server/` va `deploy/media_server/` ga ko'chirildi. Serverlarda ishlab turgan narsa **to'xtamaydi va baza o'zgarmaydi**: loyiha nomi (`edu_platform`) faylda qotirilgan, volume'lar va konteynerlar o'sha-o'zida. Faqat buyruq joyi o'zgaradi. Ketma-ketlik: AVVAL APP, keyin MEDIA. Har qadamdan keyin natijani tekshiring.
+
+**APP serverda (RS 2000):**
+
+```bash
+cd /var/www/edu_platform
+docker compose -f docker-compose.app.yml ls          # NAME = edu_platform ekanini tekshiring (o'zgartirishdan OLDIN)
+git pull origin main                                  # yangi papkalar paydo bo'ladi, eski compose fayli yo'qoladi
+cp .env deploy/app_server/.env                        # haqiqiy .env ni yangi joyga NUSXALANG (eskisi zaxira bo'lib turadi)
+chmod 600 deploy/app_server/.env
+cd deploy/app_server
+docker compose config -q && echo "config OK"          # xatosiz bo'lishi kerak
+docker compose ps                                     # web, ws, cron, db, redis, caddy — hammasi avvalgidek "Up"
+```
+
+**Tekshirilgan** (APP serverda haqiqiy `.env` bilan, eski faylni yangisi bilan solishtirib, ishlab turgan narsaga tegmasdan): loyiha nomi, volume'lar (`pgdata`, `media`, `logs`, `caddy_data`, `caddy_config`) va tarmoq AYNAN bir xil; `web`, `ws`, `cron`, `db`, `redis` konfiguratsiyasi o'zgarmagan. Faqat `caddy` farq qiladi (Caddyfile papkasi yo'li o'zgargani uchun): keyingi `docker compose up -d` da u qayta yaratiladi (1-2 soniya uzilish, sertifikatlar volume'da saqlanadi). Shuning uchun `up -d` ni dars bo'lmagan paytda bajaring. Hammasi joyida bo'lsa, eski ildizdagi `.env` ni 1-2 kun saqlab, keyin o'chirishingiz mumkin. Zaxira skripti (`deploy/new/backup.sh`) endi `docker exec edu_platform-db-1 ...` ishlatadi (compose joyiga bog'liq emas); keyingi tunda `/var/backups/edu/` da yangi `db_*.dump` paydo bo'lganini tekshiring.
+
+**MEDIA serverda (RS 4000):**
+
+```bash
+cd /var/www/edu_platform
+docker compose -f docker-compose.media.yml ls         # NAME ni yozib oling. edu_platform BO'LMASA — deploy/media_server/docker-compose.yml dagi `name:` ni shunga o'zgartiring!
+git pull origin main
+cp .env deploy/media_server/.env && chmod 600 deploy/media_server/.env
+cd deploy/media_server
+docker compose config -q && echo "config OK"
+docker compose ps                                     # livekit, rec, transcoder, caddy... avvalgidek "Up"
+```
+
+Eski buyruqlar (`docker compose -f docker-compose.app.yml ...`) `git pull` dan keyin "no such file" deb xato beradi. Bu xavfsiz: konteynerlarga ta'sir qilmaydi. Yangi buyruqlar shu papkalardan, `-f` siz.
+
+**Serverdagi eski axlat fayllar:** MEDIA serverda ildizda eski `*.md` hujjatlar (FRONTEND_*, BACKEND_*, PROJECT.md va h.k.) qolib ketgan. Ular gitda yo'q, shu serverning o'zida qolgan eski nusxalar. Ularni o'chirishdan oldin ro'yxatni ko'rib, kerakmasligiga ishonch hosil qiling (`ls *.md`, `git status --short`); o'chirish `rm` bilan faqat ro'yxatdagi aniq fayllarga qilinadi.
+
+---
+
 #### 15. Muammo bo'lsa menga yuboring
 
 Quyidagilarni (parollarsiz!) yuboring:
-- `docker compose -f docker-compose.app.yml ps` (APP) yoki `docker compose -f docker-compose.media.yml ps` (MEDIA) natijasi
+- `docker compose ps` (APP) yoki `docker compose ps` (MEDIA) natijasi
 - `docker compose -f docker-compose.<app|media>.yml logs --tail=80 <xizmat>` natijasi
 - WireGuard muammosi bo'lsa: `sudo wg show` (maxfiy kalit ko'rsatilmaydi) va `ping -c 3 10.10.0.1` / `10.10.0.2`
 - Xato matni va qaysi qadamda chiqqani

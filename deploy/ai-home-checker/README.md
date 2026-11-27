@@ -92,7 +92,7 @@ HOMEWORK_AI_ORG_KEY=<4-qadamdagi hwck_... kaliti>
 Keyin backend va cron'ni qayta ishga tushiring:
 
 ```bash
-cd /var/www/edu_platform && docker compose -f docker-compose.app.yml up -d --force-recreate web ws cron
+cd /var/www/edu_platform/deploy/app_server && docker compose up -d --force-recreate web ws cron
 ```
 
 **Muhim:** `HOMEWORK_AI_URL` sozlangach BARCHA uy vazifalari (matn ham, audio ham) shu xizmatga ketadi va ichki OpenAI tekshiruvi o'chadi.

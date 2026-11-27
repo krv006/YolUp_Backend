@@ -1,18 +1,28 @@
 # MEDIA server (netcup RS 4000): jonli dars video/ovoz (LiveKit) + dars yozuvlari (qabul qilish, birlashtirish, MP4 ga
-# o'tkazish, fayllarni saqlash va berish). Sayt/chat/baza BU YERDA EMAS — ular APP (CORE) serverda (docker-compose.app.yml).
+# o'tkazish, fayllarni saqlash va berish). Sayt/chat/baza BU YERDA EMAS — ular APP (CORE) serverda (deploy/app_server/).
 #
 # Ustuvorlik qoidasi: jonli dars hech qachon och qolmasin. LiveKit eng yuqori CPU ulushiga ega (cpu_shares), yozuvni
 # o'tkazish (og'ir ish) eng pasti va yadro soni bilan cheklangan — dars paytida video o'tkazish darsni sekinlashtirmaydi.
 #
-# Ishga tushirish (serverda, /var/www/edu_platform ichida; AVVAL WireGuard ulangan va APP server ishlab turgan bo'lishi kerak):
-#   cp .env.media.example .env    # va qiymatlarni to'ldiring (APP serverdagi .env bilan bir xil kalitlar!)
-#   docker compose -f docker-compose.media.yml up -d --build
+# Bu papkada shu serverning HAMMA fayli: docker-compose.yml, .env (haqiqiy, gitda yo'q), .env.example, livekit.yaml, caddy/Caddyfile.
+#
+# Ishga tushirish (serverda; hamma buyruq SHU papkadan: /var/www/edu_platform/deploy/media_server;
+# AVVAL WireGuard ulangan va APP server ishlab turgan bo'lishi kerak):
+#   cp .env.example .env          # va qiymatlarni to'ldiring (APP serverdagi .env bilan bir xil kalitlar!)
+#   docker compose up -d --build
+#
+# MUHIM: loyiha nomi QOTIRILGAN (pastdagi `name:`) va serverda hozir ishlab turgan nom bilan AYNAN bir xil bo'lishi shart
+# (yozuv fayllari volume'i `<nom>_recordings`). Ko'chirishdan oldin tekshiring: `docker compose ls` (NAME ustuni).
 #
 # DNS: LK_DOMAIN (masalan lk.thesofmebel.uz) A-yozuvi SHU serverning IP'siga yo'naltirilgan bo'lishi shart
 # (Caddy sertifikatni shu orqali oladi).
 
+name: edu_platform
+
 x-backend: &backend
-  build: .
+  build:
+    context: ../..
+    dockerfile: Dockerfile
   image: edu-app:latest
   restart: unless-stopped
   env_file: .env
@@ -50,7 +60,7 @@ services:
         soft: 65535
         hard: 65535
     volumes:
-      - ./deploy/media/livekit.yaml:/etc/livekit.yaml:ro
+      - ./livekit.yaml:/etc/livekit.yaml:ro
       # TURN/TLS sertifikati: Caddy olgan fayllar (faqat o'qish). livekit.yaml dagi `turn:` bloki shu yo'lga qaraydi.
       - caddy_data:/caddy-data:ro
 
@@ -98,7 +108,7 @@ services:
     # HOST tarmog'i: LiveKit ham host'da, Caddy 127.0.0.1:7880 ga ulanadi. 80/443 (tcp+udp) ufw'da ochiq.
     network_mode: host
     volumes:
-      - ./deploy/media:/etc/caddy:ro
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
