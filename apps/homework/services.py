@@ -868,10 +868,26 @@ def remind_child(*, parent: User, assignment_id, student_id, request=None) -> di
     return {'last_reminded_at': notification.created_at if notification else None, 'sent': notification is not None}
 
 
-def list_assignments(*, user: User, course_id, status=None) -> list:
+def list_assignments(*, user: User, course_id=None, status=None) -> list:
+    """`course_id` berilsa — shu kurs vazifalari; BERILMASA — foydalanuvchi ko'ra oladigan HAMMA kurslarning vazifalari bitta
+    ro'yxatda (frontend har kurs uchun alohida so'rov yubormasin), yangisi birinchi. Admin uchun bo'sh ro'yxat (avvalgidek kurs bo'yicha ham ko'rmaydi)."""
+    if course_id in (None, ''):
+        from apps.lessons import selectors as lesson_selectors
+
+        if user.role not in (User.Role.TEACHER, User.Role.STUDENT, User.Role.PARENT):
+            return []
+        rows = []
+        for course in lesson_selectors.courses_for(user).distinct():
+            rows += _list_course_assignments(user=user, course=course, status=status)
+        rows.sort(key=lambda item: item['created_at'], reverse=True)
+        return rows
     course = _get_course(course_id)
     if not _can_view_course(user, course):
         raise PermissionDenied(_("Bu kurs vazifalarini ko'rish huquqingiz yo'q."))
+    return _list_course_assignments(user=user, course=course, status=status)
+
+
+def _list_course_assignments(*, user: User, course: Course, status=None) -> list:
     result = []
     queryset = course.assignments.select_related('lesson').all()
     if course.teacher_id != user.id:

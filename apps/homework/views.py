@@ -30,7 +30,7 @@ def _json_field(value):
 
 
 class AssignmentListCreateView(APIView):
-    """GET ?course=<id> — kurs vazifalari; POST — yangi vazifa (o'qituvchi).
+    """GET ?course=<id> — kurs vazifalari (`?course=` berilmasa — hamma kurslarniki bitta ro'yxatda); POST — yangi vazifa (o'qituvchi).
 
     POST multipart yoki JSON qabul qiladi: rich matn (body) + ixtiyoriy
     biriktirilgan fayl (attachment: Word/PDF/rasm).
