@@ -128,7 +128,7 @@ class MaterialLessonFolderTests(MaterialTests):
         BoardSheet.objects.create(lesson=self.lesson2, index=0, strokes=[{'id': 's', 'points': [[1, 1]], 'color': '#000', 'width': 2}])
         LessonRecording.objects.create(lesson=self.lesson2, status='completed')
         courses = self.api(self.student).get('/api/v1/materials/courses/').json()
-        self.assertEqual([(c['title'], c['file_count']) for c in courses], [('Algebra', 3)])
+        self.assertEqual([(c['title'], c['file_count']) for c in courses], [('Algebra', 5)])  # 3 yuklangan + video yozuv + doska
         body = self.api(self.student).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()
         self.assertEqual(body['general'], {'file_count': 1})
         rows = {r['title']: r for r in body['lessons']}
@@ -172,16 +172,16 @@ class MaterialLessonFolderTests(MaterialTests):
             rows = {c['title']: c for c in self.api(user).get('/api/v1/materials/courses/').json()}
             return rows['Algebra']['recording_count'], rows['Algebra']['board_count'], rows['Algebra']['file_count']
 
-        self.assertEqual(counts(self.teacher), (2, 1, 0))   # o'qituvchi: yozuvi bor har dars (birlashayotgani ham)
-        self.assertEqual(counts(self.student), (1, 1, 0))   # o'quvchi: faqat tayyor yozuv
-        self.assertEqual(counts(self.parent), (1, 1, 0))
+        self.assertEqual(counts(self.teacher), (2, 1, 3))   # o'qituvchi: yozuvi bor har dars (birlashayotgani ham); file_count = 2 video + 1 doska
+        self.assertEqual(counts(self.student), (1, 1, 2))   # o'quvchi: faqat tayyor yozuv
+        self.assertEqual(counts(self.parent), (1, 1, 2))
         recording_done = LessonRecording.objects.get(lesson=self.lesson2)
         recording_done.status = 'completed'
         recording_done.save()
         self.assertEqual(counts(self.student)[0], 2)
         # fayl yuklash `file_count` ni oshiradi, video/doska sonlariga ta'sir qilmaydi
         self.post(lesson=str(self.lesson1.id))
-        self.assertEqual(counts(self.student), (2, 1, 1))
+        self.assertEqual(counts(self.student), (2, 1, 4))  # 1 yuklangan + 2 video + 1 doska
         # guruh ichidagi dars ro'yxati bilan mos
         rows = self.api(self.student).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()['lessons']
         self.assertEqual((sum(r['has_recording'] for r in rows), sum(r['has_board'] for r in rows)), (2, 1))
@@ -315,3 +315,19 @@ class LessonFolderTotalTests(MaterialLessonFolderTests):
         self.assertEqual((len(body['files']), body['file_count']), (1, 3))  # 1 yuklangan + video yozuv + doska
         empty = self.api(self.teacher).get(f'/api/v1/materials/lessons/{self.empty_lesson.id}/').json()
         self.assertEqual(empty['file_count'], 0)
+
+
+class CourseCardMatchesLessonFoldersTests(MaterialLessonFolderTests):
+    def test_course_file_count_equals_general_plus_all_lesson_folders(self):
+        from apps.board.models import BoardSheet
+        from apps.lessons.models import LessonRecording
+
+        self.post()  # umumiy
+        self.post(lesson=str(self.lesson1.id))
+        LessonRecording.objects.create(lesson=self.lesson1, status='completed')
+        BoardSheet.objects.create(lesson=self.lesson2, index=0, strokes=[{'id': 's', 'points': [[1, 1]], 'color': '#000', 'width': 2}])
+        for user in (self.teacher, self.student):
+            card = {c['title']: c for c in self.api(user).get('/api/v1/materials/courses/').json()}['Algebra']['file_count']
+            body = self.api(user).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()
+            self.assertEqual(card, body['general']['file_count'] + sum(r['file_count'] for r in body['lessons']), user.username)
+            self.assertEqual(card, 4)  # 1 umumiy + 1 dars fayli + 1 video + 1 doska

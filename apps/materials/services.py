@@ -152,7 +152,7 @@ def chat_file_dict(row) -> dict:
 
 def course_folders(user: User) -> list:
     """Guruhlar va ulardagi sonlar (Workspace -> Materiallar boshlanish ekrani):
-    `file_count` (yuklangan fayllar + chatga yuborilgan fayllar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
+    `file_count` (yuklangan + chatga yuborilgan fayllar + video yozuvlar + doskalar), `recording_count` (video yozuvi bor darslar), `board_count` (doskasi bo'sh emas darslar).
     Video/doska sonlari `lesson_folders` bilan bir xil qoidada: bekor qilingan/o'chirilgan darslar sanalmaydi,
     o'quvchi/ota-ona faqat tayyor yozuvni sanaydi."""
     courses = list(visible_courses(user).annotate(file_count=Count('materials', distinct=True)).order_by('-created_at', 'title').distinct())  # yangi guruh birinchi
@@ -171,7 +171,10 @@ def course_folders(user: User) -> list:
     in_chat = chat_file_counts(user, ids)
     return [
         {
-            'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject, 'file_count': c.file_count + in_chat.get(c.id, 0),
+            # `file_count` = yuklangan + chatdagi + video yozuvlar + doskalar (dars papkalaridagi `file_count` yig'indisiga teng);
+            # video/doska sonlari alohida ham beriladi (`recording_count`, `board_count`)
+            'id': str(c.id), 'title': c.title, 'kind': c.kind, 'subject': c.subject,
+            'file_count': c.file_count + in_chat.get(c.id, 0) + recordings.get(c.id, 0) + boards.get(c.id, 0),
             'recording_count': recordings.get(c.id, 0), 'board_count': boards.get(c.id, 0),
         }
         for c in courses
