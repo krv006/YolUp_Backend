@@ -218,7 +218,10 @@ def lesson_folders(*, user: User, course_id) -> dict:
         },
         'lessons': [{
             'id': str(lesson.id), 'title': lesson.title or course.title, 'starts_at': lesson.starts_at, 'status': lesson.status,
-            'file_count': lesson.file_count, 'has_recording': lesson.has_recording, 'has_board': lesson.has_board,
+            # `file_count` — papkada ko'rinadigan HAMMA element: yuklangan fayllar + video yozuv + doska PDF'i (har biri 1 ta fayl).
+            # Faqat yuklanganlari — `upload_count`.
+            'file_count': lesson.file_count + int(bool(lesson.has_recording)) + int(bool(lesson.has_board)),
+            'upload_count': lesson.file_count, 'has_recording': lesson.has_recording, 'has_board': lesson.has_board,
         } for lesson in lessons],
     }
 
@@ -244,9 +247,11 @@ def lesson_folder(*, user: User, lesson_id) -> dict:
     ):
         recording = None
     has_board = BoardSheet.objects.filter(lesson=lesson).exclude(strokes=[]).exists()
+    files = list(Material.objects.filter(lesson=lesson).select_related('course', 'uploaded_by'))
     return {
         'lesson': {'id': str(lesson.id), 'title': lesson.title or lesson.course.title, 'starts_at': lesson.starts_at, 'status': lesson.status},
-        'files': list(Material.objects.filter(lesson=lesson).select_related('course', 'uploaded_by')),
+        'file_count': len(files) + int(recording is not None) + int(has_board),  # ro'yxatdagi `file_count` bilan bir xil qoida
+        'files': files,
         'recording': {
             'status': 'converting' if transcode.is_converting(recording) else recording.status,
             'info_url': f'/api/v1/lessons/{lesson.id}/recording/',

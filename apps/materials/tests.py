@@ -134,7 +134,8 @@ class MaterialLessonFolderTests(MaterialTests):
         rows = {r['title']: r for r in body['lessons']}
         self.assertEqual(set(rows), {'1-dars', '2-dars'})  # bo'sh dars o'quvchiga ko'rinmaydi
         self.assertEqual((rows['1-dars']['file_count'], rows['1-dars']['has_recording'], rows['1-dars']['has_board']), (2, False, False))
-        self.assertEqual((rows['2-dars']['file_count'], rows['2-dars']['has_recording'], rows['2-dars']['has_board']), (0, True, True))
+        self.assertEqual((rows['1-dars']['upload_count'], rows['2-dars']['upload_count']), (2, 0))
+        self.assertEqual((rows['2-dars']['file_count'], rows['2-dars']['has_recording'], rows['2-dars']['has_board']), (2, True, True))  # video yozuv + doska ham fayl sifatida
         # o'qituvchi hamma darsni ko'radi (yuklash uchun), ota-ona ham o'quvchi kabi
         teacher_rows = self.api(self.teacher).get(f'/api/v1/materials/courses/{self.course.id}/lessons/').json()['lessons']
         self.assertEqual({r['title'] for r in teacher_rows}, {'1-dars', '2-dars', '3-dars'})
@@ -300,3 +301,17 @@ class MaterialCourseOrderTests(MaterialTests):
         newer = Course.objects.create(teacher=self.teacher, title='Aaa yangi', subject='math')
         titles = [row['title'] for row in self.api(self.teacher).get('/api/v1/materials/courses/').json()]
         self.assertEqual(titles, [newer.title, 'Algebra'])  # nom bo'yicha emas: yangi guruh birinchi
+
+
+class LessonFolderTotalTests(MaterialLessonFolderTests):
+    def test_lesson_folder_detail_counts_recording_and_board_as_files_too(self):
+        from apps.board.models import BoardSheet
+        from apps.lessons.models import LessonRecording
+
+        self.post(lesson=str(self.lesson2.id))
+        LessonRecording.objects.create(lesson=self.lesson2, status='completed')
+        BoardSheet.objects.create(lesson=self.lesson2, index=0, strokes=[{'id': 's', 'points': [[1, 1]], 'color': '#000', 'width': 2}])
+        body = self.api(self.student).get(f'/api/v1/materials/lessons/{self.lesson2.id}/').json()
+        self.assertEqual((len(body['files']), body['file_count']), (1, 3))  # 1 yuklangan + video yozuv + doska
+        empty = self.api(self.teacher).get(f'/api/v1/materials/lessons/{self.empty_lesson.id}/').json()
+        self.assertEqual(empty['file_count'], 0)
