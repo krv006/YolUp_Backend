@@ -1,17 +1,26 @@
 # APP (CORE) server (netcup RS 2000): sayt (API), chat/doska (WebSocket), baza, Redis, fon ishlari.
 # Jonli dars video serveri (LiveKit), yozuv fayllari, yozuvni birlashtirish va MP4 ga o'tkazish BU YERDA EMAS —
-# ular MEDIA serverda (docker-compose.media.yml, netcup RS 4000). Ikki server o'rtasida yopiq WireGuard kanal bor
+# ular MEDIA serverda (deploy/media_server/, netcup RS 4000). Ikki server o'rtasida yopiq WireGuard kanal bor
 # (deploy/new/wireguard.sh): baza va Redis FAQAT shu kanal orqali MEDIA serverga ochiladi, internetga emas.
 # Yozuv bilan bog'liq so'rovlarni (/api/v1/lessons/<id>/recording*) Caddy MEDIA serverdagi `rec` xizmatiga yo'naltiradi.
 #
-# Ishga tushirish (serverda, /var/www/edu_platform ichida):
-#   cp .env.app.example .env      # va qiymatlarni to'ldiring
-#   docker compose -f docker-compose.app.yml up -d --build
+# Bu papkada shu serverning HAMMA fayli: docker-compose.yml, .env (haqiqiy, gitda yo'q), .env.example, caddy/Caddyfile.
+#
+# Ishga tushirish (serverda; hamma buyruq SHU papkadan: /var/www/edu_platform/deploy/app_server):
+#   cp .env.example .env          # va qiymatlarni to'ldiring
+#   docker compose up -d --build
+#
+# MUHIM: loyiha nomi `edu_platform` QOTIRILGAN (pastdagi `name:`). Papka nomi o'zgarsa ham baza (pgdata), media va boshqa
+# volume'lar o'sha-o'zida qoladi. Nomni o'zgartirmang: baza bo'sh bo'lib ko'rinib qoladi.
 #
 # Eski docker-compose.prod.yml (bitta server + boshqa loyihalar) o'zgarmadi — eski Contabo serverda ishlayveradi.
 
+name: edu_platform
+
 x-backend: &backend
-  build: .
+  build:
+    context: ../..
+    dockerfile: Dockerfile
   image: edu-app:latest   # bitta image hamma xizmatga (4 marta qayta yig'ilmasin)
   restart: unless-stopped
   env_file: .env
@@ -152,7 +161,7 @@ services:
       - "443:443"
       - "443:443/udp"   # HTTP/3
     volumes:
-      - ./deploy/app:/etc/caddy:ro
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
       - media:/srv/media:ro

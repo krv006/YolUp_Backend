@@ -1,6 +1,6 @@
-# LiveKit — MEDIA server (bitta tugun). Kalitlar LIVEKIT_KEYS env orqali beriladi (docker-compose.media.yml).
+# LiveKit — MEDIA server (bitta tugun). Kalitlar LIVEKIT_KEYS env orqali beriladi (deploy/media_server/docker-compose.yml).
 # Signaling (7880) tashqariga ochilmaydi — Caddy (HTTPS) proxy qiladi.
-# LiveKit `network_mode: host` da ishlaydi (docker-compose.media.yml): signaling faqat shu mashinaning ichida (Caddy 127.0.0.1:7880 ga proksi qiladi).
+# LiveKit `network_mode: host` da ishlaydi (deploy/media_server/docker-compose.yml): signaling faqat shu mashinaning ichida (Caddy 127.0.0.1:7880 ga proksi qiladi).
 port: 7880
 bind_addresses:
   - 127.0.0.1
