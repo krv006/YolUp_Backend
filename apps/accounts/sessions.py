@@ -10,6 +10,7 @@ import re
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -202,6 +203,8 @@ def revoke_all(user) -> None:
 
 class SessionTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Login: odatiy token juftligi + yangi seans (`sid`)."""
+
+    default_error_messages = {'no_active_account': _("Login yoki parol noto'g'ri.")}  # simplejwt'ning inglizcha matni o'rniga
 
     def validate(self, attrs):
         from . import services

@@ -275,7 +275,12 @@ class LoginView(TokenObtainPairView):
         from .models import User
 
         # Muvaffaqiyatli login — IP/qurilma jurnaliga yoziladi (auth.login)
-        user = User.objects.filter(username=request.data.get('username', '')).first()
+        try:  # login yoki email bilan kirilgan bo'lishi mumkin — foydalanuvchini yozilgan tokendan olamiz
+            from rest_framework_simplejwt.tokens import AccessToken
+
+            user = User.objects.filter(pk=AccessToken(response.data['access'])['user_id']).first()
+        except Exception:  # noqa: BLE001
+            user = None
         if user is not None:
             try:
                 from rest_framework_simplejwt.tokens import RefreshToken

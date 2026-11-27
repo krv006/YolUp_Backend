@@ -630,7 +630,17 @@ def resolve_login(identifier, password) -> str:
         return matches[0].username
     if len(matches) > 1:
         raise ValidationError({'detail': _("Bu email bir nechta akkauntga bog'langan. Kirish uchun login (username) ni yozing.")})
+    if not candidates and _unverified_email_owner(identifier, password):
+        # Parol TO'G'RI bo'lgani uchun bu akkaunt egasi: faqat unga sababini aytamiz (begona odam email bor-yo'qligini bilolmaydi)
+        raise ValidationError({'detail': _("Email hali tasdiqlanmagan. Login (username) bilan kiring va emailni profilda tasdiqlang.")})
     return identifier
+
+
+def _unverified_email_owner(email: str, password) -> bool:
+    users = list(User.objects.filter(email__iexact=email, email_verified=False, is_active=True))
+    if not users:
+        return False
+    return any(u.check_password(password or '') for u in users)
 
 
 def me_stats(user: User) -> dict:

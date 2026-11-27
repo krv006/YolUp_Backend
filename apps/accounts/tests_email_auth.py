@@ -145,7 +145,10 @@ class EmailLoginTests(EmailCase):
 
     def test_an_unverified_email_does_not_log_in(self):
         make('ali01', email=EMAIL, email_verified=False)
-        self.assertEqual(self.login(EMAIL).status_code, 401)
+        response = self.login(EMAIL)
+        self.assertEqual(response.status_code, 400)  # kirmaydi; parol to'g'ri bo'lgani uchun sababi aytiladi (2026-11-27)
+        self.assertNotIn('access', response.json())
+        self.assertEqual(self.login(EMAIL, 'WrongPass999!').status_code, 401)  # parol xato bo'lsa — umumiy xabar
 
     def test_a_wrong_password_looks_like_any_failed_login(self):
         make('ali01', email=EMAIL, email_verified=True)
