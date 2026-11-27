@@ -1447,7 +1447,7 @@ docker compose config -q && echo "config OK"          # xatosiz bo'lishi kerak
 docker compose ps                                     # web, ws, cron, db, redis, caddy — hammasi avvalgidek "Up"
 ```
 
-`docker compose up -d --build` faqat kod o'zgargandagina qayta yaratadi. Config o'zgarmagani uchun hozir konteynerlar qayta ishga tushmaydi. Hammasi joyida bo'lsa, eski ildizdagi `.env` ni 1-2 kun saqlab, keyin o'chirishingiz mumkin. Zaxira skripti (`deploy/new/backup.sh`) endi `docker exec edu_platform-db-1 ...` ishlatadi (compose joyiga bog'liq emas); keyingi tunda `/var/backups/edu/` da yangi `db_*.dump` paydo bo'lganini tekshiring.
+**Tekshirilgan** (APP serverda haqiqiy `.env` bilan, eski faylni yangisi bilan solishtirib, ishlab turgan narsaga tegmasdan): loyiha nomi, volume'lar (`pgdata`, `media`, `logs`, `caddy_data`, `caddy_config`) va tarmoq AYNAN bir xil; `web`, `ws`, `cron`, `db`, `redis` konfiguratsiyasi o'zgarmagan. Faqat `caddy` farq qiladi (Caddyfile papkasi yo'li o'zgargani uchun): keyingi `docker compose up -d` da u qayta yaratiladi (1-2 soniya uzilish, sertifikatlar volume'da saqlanadi). Shuning uchun `up -d` ni dars bo'lmagan paytda bajaring. Hammasi joyida bo'lsa, eski ildizdagi `.env` ni 1-2 kun saqlab, keyin o'chirishingiz mumkin. Zaxira skripti (`deploy/new/backup.sh`) endi `docker exec edu_platform-db-1 ...` ishlatadi (compose joyiga bog'liq emas); keyingi tunda `/var/backups/edu/` da yangi `db_*.dump` paydo bo'lganini tekshiring.
 
 **MEDIA serverda (RS 4000):**
 
